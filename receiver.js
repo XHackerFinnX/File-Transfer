@@ -22,10 +22,7 @@ const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 const pc = new RTCPeerConnection({
     iceServers: [
         {
-            urls: [
-                "turn:5.42.124.68:3478",
-                "turn:5.42.124.68:3478?transport=tcp",
-            ],
+            urls: "turn:5.42.124.68:3478",
             username: "turnuser",
             credential: "StrongPassword123!",
         },
@@ -37,17 +34,6 @@ pc.onicegatheringstatechange = () => {
     console.log("[ICE] Gathering state:", pc.iceGatheringState);
 };
 
-pc.onicecandidate = (e) => {
-    if (e.candidate) {
-        console.log(
-            `[ICE] Sender candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
-        );
-        ws.send(JSON.stringify({ candidate: e.candidate }));
-    } else {
-        console.log("[ICE] All candidates gathered (end of candidates)");
-    }
-};
-
 let meta,
     buf = [],
     size = 0;
@@ -57,7 +43,14 @@ const statusEl = document.getElementById("status");
 
 // ==================== ICE ====================
 pc.onicecandidate = (e) => {
-    if (e.candidate) ws.send(JSON.stringify({ candidate: e.candidate }));
+    if (e.candidate) {
+        console.log(
+            `[ICE] Sender candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
+        );
+        ws.send(JSON.stringify({ candidate: e.candidate }));
+    } else {
+        console.log("[ICE] All candidates gathered (end of candidates)");
+    }
 };
 
 pc.oniceconnectionstatechange = () => {
