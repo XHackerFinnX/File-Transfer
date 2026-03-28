@@ -21,7 +21,6 @@ const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 
 const pc = new RTCPeerConnection({
     iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
         {
             urls: [
                 "turn:5.42.124.68:3478",
@@ -33,6 +32,21 @@ const pc = new RTCPeerConnection({
     ],
     iceCandidatePoolSize: 10,
 });
+
+pc.onicegatheringstatechange = () => {
+    console.log("[ICE] Gathering state:", pc.iceGatheringState);
+};
+
+pc.onicecandidate = (e) => {
+    if (e.candidate) {
+        console.log(
+            `[ICE] Sender candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
+        );
+        ws.send(JSON.stringify({ candidate: e.candidate }));
+    } else {
+        console.log("[ICE] All candidates gathered (end of candidates)");
+    }
+};
 
 let meta,
     buf = [],

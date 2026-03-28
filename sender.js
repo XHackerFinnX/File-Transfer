@@ -80,7 +80,6 @@ async function create() {
 
     const pc = new RTCPeerConnection({
         iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
             {
                 urls: [
                     "turn:5.42.124.68:3478",
@@ -92,6 +91,21 @@ async function create() {
         ],
         iceCandidatePoolSize: 10,
     });
+
+    pc.onicegatheringstatechange = () => {
+        console.log("[ICE] Gathering state:", pc.iceGatheringState);
+    };
+
+    pc.onicecandidate = (e) => {
+        if (e.candidate) {
+            console.log(
+                `[ICE] Sender candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
+            );
+            ws.send(JSON.stringify({ candidate: e.candidate }));
+        } else {
+            console.log("[ICE] All candidates gathered (end of candidates)");
+        }
+    };
 
     const ch = pc.createDataChannel("file");
 
