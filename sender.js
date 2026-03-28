@@ -81,16 +81,13 @@ async function create() {
     const pc = new RTCPeerConnection({
         iceServers: [
             { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
             {
                 urls: [
-                    "turn:openrelay.metered.ca:80",
-                    "turn:openrelay.metered.ca:443",
-                    "turn:openrelay.metered.ca:443?transport=tcp",
+                    "turn:5.42.124.68:3478",
+                    "turn:5.42.124.68:3478?transport=tcp",
                 ],
-                username: "openrelayproject",
-                credential: "openrelayproject",
+                username: "turnuser",
+                credential: "StrongPassword123!",
             },
         ],
         iceCandidatePoolSize: 10,
