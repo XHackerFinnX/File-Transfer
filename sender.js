@@ -83,7 +83,8 @@ async function create() {
     const rawKey = await crypto.subtle.exportKey("raw", key);
     const keyBase64 = btoa(String.fromCharCode(...new Uint8Array(rawKey)));
 
-    const ws = new WebSocket(`ws://${location.host}/ws/${room_id}`);
+    const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room_id}`);
     const pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });

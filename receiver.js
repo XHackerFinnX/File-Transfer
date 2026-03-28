@@ -16,7 +16,8 @@ const keyPromise = crypto.subtle
         return k;
     });
 
-const ws = new WebSocket(`ws://${location.host}/ws/${room}`);
+const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 });

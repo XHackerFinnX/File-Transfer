@@ -7,6 +7,13 @@ from fastapi.responses import FileResponse
 
 app = FastAPI()
 
+@app.middleware("http")
+async def https_redirect_middleware(request, call_next):
+    # Для некоторых платформ помогает явно указать схему
+    if request.headers.get("x-forwarded-proto") == "https":
+        request.scope["scheme"] = "https"
+    return await call_next(request)
+
 # ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
