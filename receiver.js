@@ -18,14 +18,29 @@ const keyPromise = crypto.subtle
 
 const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
 const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
+
 const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        {
+            urls: [
+                "turn:openrelay.metered.ca:80",
+                "turn:openrelay.metered.ca:443",
+                "turn:openrelay.metered.ca:443?transport=tcp",
+            ],
+            username: "openrelayproject",
+            credential: "openrelayproject",
+        },
+    ],
+    iceCandidatePoolSize: 10,
 });
 
 let meta,
     buf = [],
     size = 0;
-let downloaded = false; // ← новая переменная
+let downloaded = false;
 const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
 
@@ -34,8 +49,18 @@ pc.onicecandidate = (e) => {
     if (e.candidate) ws.send(JSON.stringify({ candidate: e.candidate }));
 };
 
+pc.oniceconnectionstatechange = () => {
+    const state = pc.iceConnectionState;
+    console.log("[ICE] Receiver iceConnectionState:", state);
+
+    if ((state === "failed" || state === "disconnected") && !downloaded) {
+        bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
+        statusEl.innerHTML = `❌ Не удалось установить P2P-соединение.<br>Попробуйте обновить обе страницы.`;
+    }
+};
+
 pc.onconnectionstatechange = () =>
-    console.log("[PC] Receiver connection state:", pc.connectionState);
+    console.log("[PC] Receiver connectionState:", pc.connectionState);
 
 // ==================== DATA CHANNEL ====================
 pc.ondatachannel = (e) => {
@@ -45,7 +70,6 @@ pc.ondatachannel = (e) => {
         if (typeof ev.data === "string") {
             if (ev.data === "EOF") {
                 await keyPromise;
-                // ... (весь код расшифровки и скачивания остаётся без изменений)
 
                 const merged = new Uint8Array(size);
                 let offset = 0;
@@ -72,6 +96,7 @@ pc.ondatachannel = (e) => {
                 ws.close();
                 return;
             }
+
             meta = JSON.parse(ev.data);
             statusEl.innerText = `Получаем ${meta.name}...`;
             return;
@@ -94,13 +119,10 @@ ws.onmessage = async (e) => {
         ws.send(JSON.stringify({ answer: pc.localDescription }));
     } else if (m.candidate) {
         await pc.addIceCandidate(m.candidate);
-    }
-    // === НОВОЕ: обработка отключения отправителя ===
-    else if (m.type === "peer_disconnected") {
+    } else if (m.type === "peer_disconnected") {
         if (!downloaded) {
             bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
             statusEl.innerHTML = `❌ Отправитель закрыл страницу.<br>Передача отменена.`;
-            console.log("[SIGNAL] Sender disconnected");
         }
     }
 };
