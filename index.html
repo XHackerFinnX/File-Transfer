@@ -174,7 +174,6 @@
             }
 
             button {
-                margin-top: 20px;
                 padding: 14px 28px;
                 font-size: 15px;
                 font-weight: 600;
@@ -185,12 +184,10 @@
                 cursor: pointer;
                 transition: all 0.3s ease;
                 width: 100%;
-                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
             }
 
             button:hover {
                 transform: translateY(-2px);
-                box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);
             }
 
             button:active {
@@ -349,9 +346,60 @@
                 stroke: #64748b;
                 transition: stroke 0.2s ease;
             }
+            .nav-btn {
+                position: fixed;
+                top: 24px;
+                left: 24px;
+                width: 130px;
+                padding: 12px 20px;
+                font-size: 14px;
+                font-weight: 500;
+                border: 1px solid rgba(100, 116, 139, 0.3);
+                border-radius: 12px;
+                background: rgba(20, 20, 30, 0.9);
+                color: #e2e8f0;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                z-index: 10;
+                backdrop-filter: blur(10px);
+            }
+
+            .nav-btn:hover {
+                background: rgba(34, 197, 94, 0.1);
+                border-color: rgba(34, 197, 94, 0.4);
+            }
+
+            .nav-btn svg {
+                width: 18px;
+                height: 18px;
+                stroke: #22c55e;
+            }
         </style>
     </head>
     <body>
+        <button class="nav-btn" id="navBtn">
+            <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                stroke-width="2"
+                stroke="currentColor"
+            >
+                <path
+                    d="M12 11H12.01M8 11H8.01M16 11H16.01M12.2896 17.9984C18.0965 17.9343 21 15.9189 21 11C21 6 18 4 12 4C6 4 3 6 3 11C3 14.0771 4.13623 16.018 6.40868 17.0557L5 21L12.2896 17.9984Z"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                />
+            </svg>
+
+            P2P Чат
+        </button>
         <div class="container">
             <div class="logo">🔐</div>
             <h2>Передача файла</h2>
@@ -386,7 +434,7 @@
                 <option value="30">Ссылка активна 30 минут</option>
             </select>
 
-            <button onclick="create()">Создать ссылку</button>
+            <button onclick="create()" style="margin-top: 20px;">Создать ссылку</button>
 
             <p id="link"></p>
             <p class="link-hint">Нажмите на ссылку, чтобы скопировать</p>
@@ -510,6 +558,13 @@
                         }, 2000);
                     });
                 });
+        </script>
+        <script>
+            const navBtn = document.getElementById("navBtn");
+            navBtn.addEventListener("click", () => {
+                const baseUrl = window.location.origin;
+                window.open(baseUrl + "/chat", "_blank");
+            });
         </script>
     </body>
 </html>
