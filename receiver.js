@@ -9,6 +9,7 @@ if (!room || !keyBase64) {
 }
 
 const raw = Uint8Array.from(atob(keyBase64), (c) => c.charCodeAt(0));
+
 let key;
 const keyPromise = crypto.subtle
     .importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"])
@@ -43,35 +44,62 @@ let meta,
     buf = [],
     size = 0;
 let downloaded = false;
+
 const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
+
+// ==================== iOS DETECT ====================
+const isIOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+// ==================== DOWNLOAD HELPER ====================
+function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+
+    // Android / Desktop (normal flow)
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+
+    try {
+        a.click();
+    } catch (e) {
+        console.log("[DOWNLOAD] click failed:", e);
+    }
+
+    // iOS fallback (critical)
+    if (isIOS) {
+        setTimeout(() => {
+            window.open(url, "_blank");
+        }, 100);
+    }
+
+    setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+    }, 60000);
+}
 
 // ==================== ICE ====================
 pc.onicecandidate = (e) => {
     if (e.candidate) {
-        console.log(
-            `[ICE] Receiver candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
-        );
         ws.send(JSON.stringify({ candidate: e.candidate }));
-    } else {
-        console.log("[ICE] All candidates gathered (end of candidates)");
     }
 };
 
 pc.oniceconnectionstatechange = () => {
     const state = pc.iceConnectionState;
-    console.log("[ICE] Receiver iceConnectionState:", state);
 
     if ((state === "failed" || state === "disconnected") && !downloaded) {
         bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
-        statusEl.innerHTML = `❌ Не удалось установить P2P-соединение.<br>Попробуйте обновить обе страницы.`;
+        statusEl.innerHTML =
+            "❌ Не удалось установить P2P-соединение.<br>Попробуйте обновить обе страницы.";
     }
 };
 
-pc.onconnectionstatechange = () =>
-    console.log("[PC] Receiver connectionState:", pc.connectionState);
-
-// ==================== DATA CHANNEL ====================
 pc.ondatachannel = (e) => {
     const ch = e.channel;
 
@@ -82,12 +110,14 @@ pc.ondatachannel = (e) => {
 
                 const merged = new Uint8Array(size);
                 let offset = 0;
+
                 for (const b of buf) {
                     merged.set(new Uint8Array(b), offset);
                     offset += b.byteLength;
                 }
 
                 const iv = new Uint8Array(meta.iv);
+
                 const dec = await crypto.subtle.decrypt(
                     { name: "AES-GCM", iv },
                     key,
@@ -95,10 +125,8 @@ pc.ondatachannel = (e) => {
                 );
 
                 const blob = new Blob([dec]);
-                const a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = meta.name;
-                a.click();
+
+                triggerDownload(blob, meta.name);
 
                 statusEl.innerText = "✅ Скачано!";
                 downloaded = true;
@@ -113,6 +141,7 @@ pc.ondatachannel = (e) => {
 
         buf.push(ev.data);
         size += ev.data.byteLength;
+
         bar.style.width = Math.round((size / meta.size) * 100) + "%";
     };
 };
@@ -131,6 +160,7 @@ ws.onmessage = async (e) => {
 
         const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
+
         ws.send(JSON.stringify({ answer: pc.localDescription }));
     } else if (m.candidate) {
         if (pc.remoteDescription) {
@@ -141,7 +171,8 @@ ws.onmessage = async (e) => {
     } else if (m.type === "peer_disconnected") {
         if (!downloaded) {
             bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
-            statusEl.innerHTML = `❌ Отправитель закрыл страницу.<br>Передача отменена.`;
+            statusEl.innerHTML =
+                "❌ Отправитель закрыл страницу.<br>Передача отменена.";
         }
     }
 };
@@ -149,7 +180,8 @@ ws.onmessage = async (e) => {
 ws.onclose = () => {
     if (!downloaded) {
         bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
-        statusEl.innerHTML = `❌ Отправитель закрыл страницу.<br>Передача отменена.`;
+        statusEl.innerHTML =
+            "❌ Отправитель закрыл страницу.<br>Передача отменена.";
     }
 };
 
