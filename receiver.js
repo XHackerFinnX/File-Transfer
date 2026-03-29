@@ -22,6 +22,7 @@ const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 
 const pc = new RTCPeerConnection({
     iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
         {
             urls: [
                 "turn:5.42.124.68:3478?transport=udp",
@@ -31,7 +32,6 @@ const pc = new RTCPeerConnection({
             credential: "StrongPassword123!",
         },
     ],
-    iceTransportPolicy: "relay",
     iceCandidatePoolSize: 10,
 });
 

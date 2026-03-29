@@ -81,6 +81,7 @@ async function create() {
 
     const pc = new RTCPeerConnection({
         iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
             {
                 urls: [
                     "turn:5.42.124.68:3478?transport=udp",
@@ -90,7 +91,6 @@ async function create() {
                 credential: "StrongPassword123!",
             },
         ],
-        iceTransportPolicy: "relay",
         iceCandidatePoolSize: 10,
     });
 
