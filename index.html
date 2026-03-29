@@ -185,7 +185,7 @@
                 cursor: pointer;
                 transition: all 0.3s ease;
                 width: 100%;
-                box-shadow: 0 4px 16px rgba(59, 130, 246, 0.3);
+                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
             }
 
             button:hover {
@@ -316,6 +316,39 @@
                 height: 14px;
                 stroke: #3b82f6;
             }
+            .refresh-btn {
+                margin-top: 24px;
+                padding: 14px 28px;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid rgba(100, 116, 139, 0.3);
+                border-radius: 10px;
+                background: rgba(15, 15, 25, 0.6);
+                color: #94a3b8;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+            }
+
+            .refresh-btn:hover {
+                background: rgba(59, 130, 246, 0.1);
+                border-color: rgba(59, 130, 246, 0.4);
+                color: #e2e8f0;
+            }
+
+            .refresh-btn:hover svg {
+                stroke: #3b82f6;
+            }
+
+            .refresh-btn svg {
+                width: 16px;
+                height: 16px;
+                stroke: #64748b;
+                transition: stroke 0.2s ease;
+            }
         </style>
     </head>
     <body>
@@ -343,8 +376,8 @@
                 <div class="drop-text">Перетащите файл сюда</div>
                 <div class="drop-hint">или нажмите для выбора</div>
             </div>
-            
-            <input type="file" id="fileInput" style="display: none;" />
+
+            <input type="file" id="fileInput" style="display: none" />
 
             <select id="time">
                 <option value="5">Ссылка активна 5 минут</option>
@@ -431,6 +464,22 @@
                     <span>Без хранения</span>
                 </div>
             </div>
+            <button class="refresh-btn" onclick="location.reload()">
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
+                >
+                    <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+                    />
+                </svg>
+                Обновить
+            </button>
         </div>
 
         <script src="sender.js"></script>

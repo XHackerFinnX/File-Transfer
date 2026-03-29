@@ -38,13 +38,20 @@ function updateDropUI(selectedFile) {
 
     if (dropText) dropText.textContent = selectedFile.name;
     if (dropHint)
-        dropHint.innerHTML = `Файл выбран <span style="color:#22c55e">✓</span>`;
+        dropHint.innerHTML = `Файл выбран <span style="color:#22c55e"></span>`;
 
     if (dropIcon) {
         dropIcon.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="#3b82f6">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2" />
-            </svg>`;
+        <svg fill="#3b82f6" xmlns="http://www.w3.org/2000/svg" 
+            width="24" height="24" viewBox="630 796 200 200">
+        <path d="M787.116,872.255h-4.284v-23.424C782.832,819.699,759.133,796,730,796c-29.13,0-52.83,23.699-52.83,52.831v23.424h-4.287
+            c-11.133,0-20.159,9.025-20.159,20.159v62.589c0,22.642,18.354,40.997,40.996,40.997h72.559c22.642,0,40.996-18.355,40.996-40.997
+            v-62.589C807.275,881.28,798.25,872.255,787.116,872.255z M737.506,934.545v25.462c0,4.145-3.361,7.506-7.506,7.506
+            s-7.506-3.361-7.506-7.506v-25.462c-5.718-2.788-9.667-8.639-9.667-15.428c0-9.484,7.689-17.174,17.173-17.174
+            c9.485,0,17.174,7.689,17.174,17.174C747.174,925.906,743.223,931.758,737.506,934.545z M763.726,872.255h-67.448v-23.424
+            c0-18.596,15.128-33.725,33.723-33.725c18.597,0,33.725,15.129,33.725,33.725V872.255z"/>
+        </svg>                    
+    `;
         dropIcon.style.background =
             "linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.25))";
     }

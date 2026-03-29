@@ -270,9 +270,201 @@
                 stroke: #ef4444;
                 animation: none;
             }
+            .nav-btn {
+                position: fixed;
+                top: 24px;
+                left: 24px;
+                padding: 12px 20px;
+                font-size: 14px;
+                font-weight: 500;
+                border: 1px solid rgba(100, 116, 139, 0.3);
+                border-radius: 12px;
+                background: rgba(20, 20, 30, 0.9);
+                color: #e2e8f0;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                z-index: 10;
+                backdrop-filter: blur(10px);
+            }
+
+            .nav-btn:hover {
+                background: rgba(34, 197, 94, 0.1);
+                border-color: rgba(34, 197, 94, 0.4);
+            }
+
+            .nav-btn svg {
+                width: 18px;
+                height: 18px;
+                stroke: #22c55e;
+            }
+
+            .modal-overlay {
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.7);
+                backdrop-filter: blur(4px);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 100;
+                opacity: 0;
+                visibility: hidden;
+                transition: all 0.3s ease;
+            }
+
+            .modal-overlay.show {
+                opacity: 1;
+                visibility: visible;
+            }
+
+            .modal {
+                width: 100%;
+                max-width: 400px;
+                margin: 20px;
+                padding: 32px;
+                border-radius: 20px;
+                background: linear-gradient(
+                    145deg,
+                    rgba(30, 30, 45, 0.98),
+                    rgba(20, 20, 30, 0.98)
+                );
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                box-shadow:
+                    0 25px 50px -12px rgba(0, 0, 0, 0.6),
+                    0 0 60px rgba(239, 68, 68, 0.1);
+                text-align: center;
+                transform: scale(0.9) translateY(20px);
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+
+            .modal-overlay.show .modal {
+                transform: scale(1) translateY(0);
+            }
+
+            .modal-icon {
+                width: 64px;
+                height: 64px;
+                margin: 0 auto 20px;
+                background: linear-gradient(
+                    135deg,
+                    rgba(239, 68, 68, 0.2),
+                    rgba(239, 68, 68, 0.1)
+                );
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .modal-icon svg {
+                width: 28px;
+                height: 28px;
+                stroke: #ef4444;
+            }
+
+            .modal h3 {
+                font-size: 18px;
+                font-weight: 600;
+                color: #f8fafc;
+                margin-bottom: 8px;
+            }
+
+            .modal p {
+                font-size: 14px;
+                color: #94a3b8;
+                margin-bottom: 28px;
+                line-height: 1.5;
+            }
+
+            .modal-buttons {
+                display: flex;
+                gap: 12px;
+            }
+
+            .modal-btn {
+                flex: 1;
+                padding: 14px 20px;
+                font-size: 14px;
+                font-weight: 500;
+                border-radius: 12px;
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+
+            .modal-btn.stay {
+                background: linear-gradient(135deg, #22c55e, #16a34a);
+                border: none;
+                color: #fff;
+                box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+            }
+
+            .modal-btn.stay:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(34, 197, 94, 0.4);
+            }
+
+            .modal-btn.leave {
+                background: transparent;
+                border: 1px solid rgba(239, 68, 68, 0.4);
+                color: #ef4444;
+            }
+
+            .modal-btn.leave:hover {
+                background: rgba(239, 68, 68, 0.1);
+                border-color: #ef4444;
+            }
         </style>
     </head>
     <body>
+        <button class="nav-btn" id="navBtn">
+            <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="2"
+                stroke="currentColor"
+            >
+                <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"
+                />
+            </svg>
+            P2P Передача файла
+        </button>
+
+        <div class="modal-overlay" id="modalOverlay">
+            <div class="modal">
+                <div class="modal-icon">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="2"
+                        stroke="currentColor"
+                    >
+                        <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+                        />
+                    </svg>
+                </div>
+                <h3>Вы уверены, что хотите выйти?</h3>
+                <p>Если вы покинете страницу, то скачивание прервется</p>
+                <div class="modal-buttons">
+                    <button class="modal-btn leave" id="leaveBtn">
+                        Перейти
+                    </button>
+                    <button class="modal-btn stay" id="stayBtn">
+                        Остаться
+                    </button>
+                </div>
+            </div>
+        </div>
         <div class="container">
             <div class="icon-wrapper">
                 <svg
@@ -341,5 +533,29 @@
         </div>
 
         <script src="receiver.js"></script>
+        <script>
+            const navBtn = document.getElementById("navBtn");
+            const modalOverlay = document.getElementById("modalOverlay");
+            const leaveBtn = document.getElementById("leaveBtn");
+            const stayBtn = document.getElementById("stayBtn");
+
+            navBtn.addEventListener("click", () => {
+                modalOverlay.classList.add("show");
+            });
+
+            stayBtn.addEventListener("click", () => {
+                modalOverlay.classList.remove("show");
+            });
+
+            leaveBtn.addEventListener("click", () => {
+                window.location.href = "https://xhackerfinnx-file-transfer-036b.twc1.net/";
+            });
+
+            modalOverlay.addEventListener("click", (e) => {
+                if (e.target === modalOverlay) {
+                    modalOverlay.classList.remove("show");
+                }
+            });
+        </script>
     </body>
 </html>
