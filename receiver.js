@@ -1,6 +1,7 @@
 const params = new URLSearchParams(location.search);
 const room = params.get("room");
 const keyBase64 = location.hash.split("key=")[1];
+const pendingCandidates = [];
 
 if (!room || !keyBase64) {
     document.getElementById("status").innerText = "❌ Неправильная ссылка!";
@@ -22,11 +23,15 @@ const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 const pc = new RTCPeerConnection({
     iceServers: [
         {
-            urls: "turn:5.42.124.68:3478",
+            urls: [
+                "turn:5.42.124.68:3478?transport=udp",
+                "turn:5.42.124.68:3478?transport=tcp",
+            ],
             username: "turnuser",
             credential: "StrongPassword123!",
         },
     ],
+    iceTransportPolicy: "relay",
     iceCandidatePoolSize: 10,
 });
 
@@ -45,7 +50,7 @@ const statusEl = document.getElementById("status");
 pc.onicecandidate = (e) => {
     if (e.candidate) {
         console.log(
-            `[ICE] Sender candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
+            `[ICE] Receiver candidate: ${e.candidate.type} | ${e.candidate.candidate}`,
         );
         ws.send(JSON.stringify({ candidate: e.candidate }));
     } else {
@@ -118,11 +123,21 @@ ws.onmessage = async (e) => {
 
     if (m.offer) {
         await pc.setRemoteDescription(m.offer);
+
+        for (const c of pendingCandidates) {
+            await pc.addIceCandidate(c);
+        }
+        pendingCandidates.length = 0;
+
         const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
         ws.send(JSON.stringify({ answer: pc.localDescription }));
     } else if (m.candidate) {
-        await pc.addIceCandidate(m.candidate);
+        if (pc.remoteDescription) {
+            await pc.addIceCandidate(m.candidate);
+        } else {
+            pendingCandidates.push(m.candidate);
+        }
     } else if (m.type === "peer_disconnected") {
         if (!downloaded) {
             bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";

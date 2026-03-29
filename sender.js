@@ -9,6 +9,7 @@ const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
 
 const CHUNK = 64 * 1024;
+const pendingCandidates = [];
 
 // ==================== Выбор файла ====================
 drop.addEventListener("click", () => fileInput.click());
@@ -81,11 +82,15 @@ async function create() {
     const pc = new RTCPeerConnection({
         iceServers: [
             {
-                urls: "turn:5.42.124.68:3478",
+                urls: [
+                    "turn:5.42.124.68:3478?transport=udp",
+                    "turn:5.42.124.68:3478?transport=tcp",
+                ],
                 username: "turnuser",
                 credential: "StrongPassword123!",
             },
         ],
+        iceTransportPolicy: "relay",
         iceCandidatePoolSize: 10,
     });
 
@@ -128,6 +133,11 @@ async function create() {
         if (m.answer) {
             console.log("[SIGNAL] Received answer from receiver");
             await pc.setRemoteDescription(m.answer);
+
+            for (const c of pendingCandidates) {
+                await pc.addIceCandidate(c);
+            }
+            pendingCandidates.length = 0;
         } else if (m.type === "receiver_joined") {
             console.log("[SIGNAL] Receiver joined → creating offer");
             statusEl.innerText = "Подключаемся к получателю...";
@@ -136,7 +146,11 @@ async function create() {
             ws.send(JSON.stringify({ offer: pc.localDescription }));
         } else if (m.candidate) {
             console.log("[ICE] Received candidate from receiver");
-            await pc.addIceCandidate(m.candidate);
+            if (pc.remoteDescription) {
+                await pc.addIceCandidate(m.candidate);
+            } else {
+                pendingCandidates.push(m.candidate);
+            }
         }
     };
 
