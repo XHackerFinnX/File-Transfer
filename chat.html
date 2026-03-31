@@ -70,12 +70,12 @@
             /* Header */
             .header {
                 padding: 20px 24px;
-                background: rgba(20, 20, 32, 0.8);
                 border-bottom: 1px solid rgba(255, 255, 255, 0.05);
                 display: flex;
                 align-items: center;
                 gap: 16px;
                 backdrop-filter: blur(10px);
+                background: rgba(15, 15, 25, 0.5);
             }
 
             .header-logo {
@@ -138,6 +138,11 @@
                 flex-direction: column;
                 height: 100%;
                 min-height: 0;
+                background: linear-gradient(
+                    145deg,
+                    rgba(30, 30, 45, 0.9),
+                    rgba(20, 20, 30, 0.95)
+                );
             }
 
             /* Lobby Content */
@@ -146,6 +151,11 @@
                 padding: 24px;
                 overflow: hidden;
                 display: flex;
+                background: linear-gradient(
+                    145deg,
+                    rgba(30, 30, 45, 0.9),
+                    rgba(20, 20, 30, 0.95)
+                );
                 flex-direction: column;
                 min-height: 0;
             }
@@ -518,6 +528,11 @@
                 overflow-y: auto;
                 padding: 20px;
                 display: flex;
+                background: linear-gradient(
+                    145deg,
+                    rgba(30, 30, 45, 0.9),
+                    rgba(20, 20, 30, 0.95)
+                );
                 flex-direction: column;
                 gap: 8px;
             }
@@ -1154,7 +1169,6 @@
 
         <script src="chat.js"></script>
         <script>
-            // Emoji data
             const emojiData = {
                 smileys: [
                     "😀",
@@ -1482,6 +1496,7 @@
                     "🧪",
                 ],
             };
+
             let currentCat = "smileys";
             const emojiBtn = document.getElementById("emojiBtn");
             const emojiPicker = document.getElementById("emojiPicker");
@@ -1561,7 +1576,8 @@
                 sendMessage();
                 messageInput.style.height = "44px";
             });
-
+        </script>
+        <script>
             let ws,
                 myClientId = "";
             let pendingRequest = false;
