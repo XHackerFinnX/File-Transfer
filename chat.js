@@ -7,6 +7,26 @@ let pc,
     peerNickname,
     messages = [];
 
+async function getTurnServers() {
+    try {
+        const res = await fetch("/turn-credentials");
+        if (!res.ok) throw new Error("TURN недоступен");
+        const { username, credential, urls } = await res.json();
+        console.log("TURN доступен");
+        return [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls, username, credential },
+        ];
+    } catch (err) {
+        console.warn("⚠️ TURN недоступен, используем только STUN", err);
+        return [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+        ];
+    }
+}
+
 // Вызывается из chat.html при start_connection
 window.startChat = async function (data) {
     peerId = data.peer_id;
@@ -15,19 +35,12 @@ window.startChat = async function (data) {
 
     updateChatStatus("Устанавливается защищенное соединение...");
 
+    // Получаем временные учетные данные перед созданием PC
+    const iceServers = await getTurnServers();
+
     pc = new RTCPeerConnection({
-        iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            {
-                urls: [
-                    "turn:5.42.124.68:3478?transport=udp",
-                    "turn:5.42.124.68:3478?transport=tcp",
-                ],
-                username: "turnuser",
-                credential: "StrongPassword123!",
-            },
-        ],
+        iceServers,
+        iceCandidatePoolSize: 10,
     });
 
     try {

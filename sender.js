@@ -1,5 +1,7 @@
 let file;
-let downloaded = false; // для совместимости с обработчиками
+let downloaded = false;
+const CHUNK = 64 * 1024;
+const pendingCandidates = [];
 
 const drop = document.getElementById("drop");
 const fileInput = document.getElementById("fileInput");
@@ -8,8 +10,22 @@ const linkEl = document.getElementById("link");
 const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
 
-const CHUNK = 64 * 1024;
-const pendingCandidates = [];
+// ==================== TURN Credentials ====================
+async function getTurnServers() {
+    try {
+        const res = await fetch("/turn-credentials");
+        if (!res.ok) throw new Error("TURN недоступен");
+        const { username, credential, urls } = await res.json();
+        console.log("TURN доступен");
+        return [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls, username, credential },
+        ];
+    } catch (err) {
+        console.warn("⚠️ TURN недоступен, используем только STUN", err);
+        return [{ urls: "stun:stun.l.google.com:19302" }];
+    }
+}
 
 // ==================== Выбор файла ====================
 drop.addEventListener("click", () => fileInput.click());
@@ -86,18 +102,10 @@ async function create() {
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room_id}`);
 
+    // Получаем динамические учетные данные TURN
+    const iceServers = await getTurnServers();
     const pc = new RTCPeerConnection({
-        iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            {
-                urls: [
-                    "turn:5.42.124.68:3478?transport=udp",
-                    "turn:5.42.124.68:3478?transport=tcp",
-                ],
-                username: "turnuser",
-                credential: "StrongPassword123!",
-            },
-        ],
+        iceServers,
         iceCandidatePoolSize: 10,
     });
 

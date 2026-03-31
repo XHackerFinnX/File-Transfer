@@ -1,3 +1,20 @@
+// ==================== TURN Credentials ====================
+async function getTurnServers() {
+    try {
+        const res = await fetch("/turn-credentials");
+        if (!res.ok) throw new Error("TURN недоступен");
+        const { username, credential, urls } = await res.json();
+        console.log("TURN доступен");
+        return [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls, username, credential },
+        ];
+    } catch (err) {
+        console.warn("⚠️ TURN недоступен, используем только STUN", err);
+        return [{ urls: "stun:stun.l.google.com:19302" }];
+    }
+}
+
 const params = new URLSearchParams(location.search);
 const room = params.get("room");
 const keyBase64 = location.hash.split("key=")[1];
@@ -21,25 +38,40 @@ const keyPromise = crypto.subtle
 const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
 const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
 
-const pc = new RTCPeerConnection({
-    iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        {
-            urls: [
-                "turn:5.42.124.68:3478?transport=udp",
-                "turn:5.42.124.68:3478?transport=tcp",
-            ],
-            username: "turnuser",
-            credential: "StrongPassword123!",
-        },
-    ],
-    iceCandidatePoolSize: 10,
-});
+// Получаем динамические учетные данные TURN
+(async () => {
+    const iceServers = await getTurnServers();
+    pc = new RTCPeerConnection({
+        iceServers,
+        iceCandidatePoolSize: 10,
+    });
 
-pc.onicegatheringstatechange = () => {
-    console.log("[ICE] Gathering state:", pc.iceGatheringState);
-};
+    pc.onicegatheringstatechange = () => {
+        console.log("[ICE] Gathering state:", pc.iceGatheringState);
+    };
 
+    pc.onicecandidate = (e) => {
+        if (e.candidate) {
+            ws.send(JSON.stringify({ candidate: e.candidate }));
+        }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        if ((state === "failed" || state === "disconnected") && !downloaded) {
+            bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
+            statusEl.innerHTML =
+                "❌ Не удалось установить P2P-соединение.<br>Попробуйте обновить обе страницы.";
+        }
+    };
+
+    pc.ondatachannel = (e) => {
+        const ch = e.channel;
+        ch.onmessage = handleDataChannelMessage;
+    };
+})();
+
+let pc = null;
 let meta,
     buf = [],
     size = 0;
@@ -83,31 +115,11 @@ function triggerDownload(blob, filename) {
     }, 60000);
 }
 
-// ==================== ICE ====================
-pc.onicecandidate = (e) => {
-    if (e.candidate) {
-        ws.send(JSON.stringify({ candidate: e.candidate }));
-    }
-};
-
-pc.oniceconnectionstatechange = () => {
-    const state = pc.iceConnectionState;
-
-    if ((state === "failed" || state === "disconnected") && !downloaded) {
-        bar.style.background = "linear-gradient(90deg, #f87171, #ef4444)";
-        statusEl.innerHTML =
-            "❌ Не удалось установить P2P-соединение.<br>Попробуйте обновить обе страницы.";
-    }
-};
-
-pc.ondatachannel = (e) => {
-    const ch = e.channel;
-
-    ch.onmessage = async (ev) => {
-        if (typeof ev.data === "string") {
-            if (ev.data === "EOF") {
-                await keyPromise;
-
+// ==================== DATA CHANNEL ====================
+function handleDataChannelMessage(ev) {
+    if (typeof ev.data === "string") {
+        if (ev.data === "EOF") {
+            keyPromise.then(async () => {
                 const merged = new Uint8Array(size);
                 let offset = 0;
 
@@ -131,24 +143,26 @@ pc.ondatachannel = (e) => {
                 statusEl.innerText = "✅ Скачано!";
                 downloaded = true;
                 ws.close();
-                return;
-            }
-
-            meta = JSON.parse(ev.data);
-            statusEl.innerText = `Получаем ${meta.name}...`;
+            });
             return;
         }
 
-        buf.push(ev.data);
-        size += ev.data.byteLength;
+        meta = JSON.parse(ev.data);
+        statusEl.innerText = `Получаем ${meta.name}...`;
+        return;
+    }
 
-        bar.style.width = Math.round((size / meta.size) * 100) + "%";
-    };
-};
+    buf.push(ev.data);
+    size += ev.data.byteLength;
+
+    bar.style.width = Math.round((size / meta.size) * 100) + "%";
+}
 
 // ==================== SIGNALING ====================
 ws.onmessage = async (e) => {
     const m = JSON.parse(e.data);
+
+    if (!pc) return; // Ждём инициализации PC
 
     if (m.offer) {
         await pc.setRemoteDescription(m.offer);
