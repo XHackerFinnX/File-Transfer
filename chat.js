@@ -6,20 +6,32 @@ let pc,
     peerId,
     peerNickname,
     messages = [];
+let connectionTimeout = null;
 
 async function getTurnServers() {
     try {
-        const res = await fetch("/turn-credentials");
-        if (!res.ok) throw new Error("TURN недоступен");
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+        const res = await fetch("/turn-credentials", {
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) throw new Error(`TURN error ${res.status}`);
         const { username, credential, urls } = await res.json();
-        console.log("TURN доступен");
+        console.log("✅ TURN credentials получены");
         return [
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },
             { urls, username, credential },
         ];
     } catch (err) {
-        console.warn("⚠️ TURN недоступен, используем только STUN", err);
+        console.warn(
+            "⚠️ TURN недоступен (",
+            err.message || err,
+            "), используем только STUN",
+        );
         return [
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },
@@ -33,7 +45,24 @@ window.startChat = async function (data) {
     peerNickname = data.peer_nickname;
     const role = data.role;
 
-    updateChatStatus("Устанавливается защищенное соединение...");
+    updateChatStatus("Устанавливается защищённое соединение...");
+
+    // Устанавливаем таймаут на 15 секунд
+    clearTimeout(connectionTimeout);
+    connectionTimeout = setTimeout(() => {
+        if (
+            pc &&
+            pc.iceConnectionState !== "connected" &&
+            pc.iceConnectionState !== "completed"
+        ) {
+            updateChatStatus(
+                "Соединение устанавливается долго. Проверьте интернет или попробуйте перезайти.",
+            );
+            addSystemMessage(
+                "Соединение не установлено за 15 секунд. Попробуйте выйти и создать новый чат.",
+            );
+        }
+    }, 15000);
 
     // Получаем временные учетные данные перед созданием PC
     const iceServers = await getTurnServers();
@@ -42,6 +71,53 @@ window.startChat = async function (data) {
         iceServers,
         iceCandidatePoolSize: 10,
     });
+
+    // === КРИТИЧЕСКИ ВАЖНО: обрабатываем ICE состояние ===
+    pc.oniceconnectionstatechange = () => {
+        console.log("[ICE] iceConnectionState:", pc.iceConnectionState);
+        switch (pc.iceConnectionState) {
+            case "checking":
+                updateChatStatus("Поиск пути для соединения...");
+                break;
+            case "connected":
+            case "completed":
+                clearTimeout(connectionTimeout);
+                updateChatStatus("");
+                addSystemMessage("Защищённое соединение установлено");
+                // Если ключи ещё не согласованы — запросим повторно
+                if (!sharedKey && role === "peer") {
+                    console.log(
+                        "[KEY] Ключи не согласованы, запрашиваем повторно",
+                    );
+                    ws.send(
+                        JSON.stringify({
+                            type: "public_key_request",
+                            data: { to: peerId },
+                        }),
+                    );
+                }
+                break;
+            case "failed":
+                clearTimeout(connectionTimeout);
+                updateChatStatus("Не удалось установить соединение");
+                addSystemMessage(
+                    "Соединение не установлено. Попробуйте выйти и создать новый чат.",
+                );
+                break;
+            case "disconnected":
+                updateChatStatus("Соединение потеряно");
+                break;
+        }
+    };
+
+    // Для совместимости (менее надёжный)
+    pc.onconnectionstatechange = () => {
+        console.log("[PC] connectionState:", pc.connectionState);
+    };
+
+    pc.onicegatheringstatechange = () => {
+        console.log("[ICE] gatheringState:", pc.iceGatheringState);
+    };
 
     try {
         myKeyPair = await crypto.subtle.generateKey(
@@ -62,8 +138,9 @@ window.startChat = async function (data) {
                 data: { to: peerId, key: pub },
             }),
         );
+        console.log("[KEY] Публичный ключ отправлен");
     } catch (err) {
-        console.error("[v0] Error generating keys:", err);
+        console.error("[KEY] Error generating keys:", err);
         updateChatStatus("Ошибка генерации ключей шифрования");
         return;
     }
@@ -80,12 +157,14 @@ window.startChat = async function (data) {
                     data: { to: peerId, offer: pc.localDescription },
                 }),
             );
+            console.log("[SIGNAL] Offer отправлен");
         } catch (err) {
-            console.error("[v0] Error creating offer:", err);
+            console.error("[SIGNAL] Error creating offer:", err);
             updateChatStatus("Ошибка создания соединения");
         }
     } else {
         pc.ondatachannel = (e) => {
+            console.log("[DC] DataChannel получен от удалённой стороны");
             dataChannel = e.channel;
             setupDataChannel();
         };
@@ -93,35 +172,31 @@ window.startChat = async function (data) {
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
+            console.log(
+                `[ICE] Кандидат (${e.candidate.type}): ${e.candidate.candidate.substring(0, 60)}...`,
+            );
             ws.send(
                 JSON.stringify({
                     type: "candidate",
                     data: { to: peerId, candidate: e.candidate },
                 }),
             );
-        }
-    };
-
-    pc.onconnectionstatechange = () => {
-        switch (pc.connectionState) {
-            case "connected":
-                updateChatStatus("");
-                addSystemMessage("Защищенное соединение установлено");
-                break;
-            case "disconnected":
-                updateChatStatus("Соединение потеряно. Переподключение...");
-                break;
-            case "failed":
-                updateChatStatus("Не удалось установить соединение");
-                break;
+        } else {
+            console.log("[ICE] Сбор кандидатов завершён");
         }
     };
 };
 
 function setupDataChannel() {
     dataChannel.onopen = () => {
-        console.log("[DC] Data channel открыт");
+        console.log("[DC] ✅ Data channel открыт");
+        clearTimeout(connectionTimeout);
         updateChatStatus("");
+        if (!sharedKey) {
+            addSystemMessage(
+                "Ключи шифрования ещё не согласованы. Ожидаем обмен ключами...",
+            );
+        }
     };
 
     dataChannel.onclose = () => {
@@ -139,7 +214,9 @@ function setupDataChannel() {
             const data = JSON.parse(e.data);
             if (data.type === "message") {
                 if (!sharedKey) {
-                    console.warn("Получено сообщение до согласования ключей");
+                    console.warn(
+                        "[MSG] Получено сообщение до согласования ключей — игнорируем",
+                    );
                     return;
                 }
                 const iv = new Uint8Array(data.iv);
@@ -165,16 +242,35 @@ function setupDataChannel() {
                 showTypingIndicator();
             }
         } catch (err) {
-            console.error("[v0] Error decrypting message:", err);
+            console.error("[MSG] Error decrypting message:", err);
         }
     };
 }
 
 window.handleWebRTCMessage = async function (msg) {
-    if (msg.type === "offer") {
+    if (msg.type === "public_key_request" && myKeyPair) {
+        console.log(
+            "[KEY] Получен запрос на повторную отправку публичного ключа",
+        );
+        const pub = btoa(
+            String.fromCharCode(
+                ...new Uint8Array(
+                    await crypto.subtle.exportKey("raw", myKeyPair.publicKey),
+                ),
+            ),
+        );
+        ws.send(
+            JSON.stringify({
+                type: "public_key",
+                data: { to: msg.data.to, key: pub },
+            }),
+        );
+        return;
+    } else if (msg.type === "offer") {
         try {
             if (!pc) return;
             await pc.setRemoteDescription(msg.data.offer);
+            console.log("[SIGNAL] Offer принят, создаём answer");
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             ws.send(
@@ -183,27 +279,37 @@ window.handleWebRTCMessage = async function (msg) {
                     data: { to: msg.data.from, answer: pc.localDescription },
                 }),
             );
+            console.log("[SIGNAL] Answer отправлен");
         } catch (err) {
-            console.error("Error handling offer:", err);
+            console.error("[SIGNAL] Error handling offer:", err);
         }
     } else if (msg.type === "answer") {
         try {
             if (!pc) return;
             await pc.setRemoteDescription(msg.data.answer);
+            console.log("[SIGNAL] Answer принят");
         } catch (err) {
-            console.error("Error handling answer:", err);
+            console.error("[SIGNAL] Error handling answer:", err);
         }
     } else if (msg.type === "candidate") {
         try {
             if (pc && msg.data.candidate) {
                 await pc.addIceCandidate(msg.data.candidate);
+                console.log(
+                    `[ICE] Кандидат добавлен (${msg.data.candidate.type})`,
+                );
             }
         } catch (err) {
-            console.error("Error adding ICE candidate:", err);
+            console.error("[ICE] Error adding candidate:", err);
         }
     } else if (msg.type === "public_key") {
         try {
-            if (!myKeyPair) return;
+            if (!myKeyPair) {
+                console.warn(
+                    "[KEY] Получен публичный ключ до генерации своих ключей",
+                );
+                return;
+            }
             const theirPub = await crypto.subtle.importKey(
                 "raw",
                 Uint8Array.from(atob(msg.data.key), (c) => c.charCodeAt(0)),
@@ -218,9 +324,10 @@ window.handleWebRTCMessage = async function (msg) {
                 true,
                 ["encrypt", "decrypt"],
             );
+            console.log("[KEY] ✅ Ключи шифрования согласованы");
             addSystemMessage("Ключи шифрования согласованы");
         } catch (err) {
-            console.error("Error deriving shared key:", err);
+            console.error("[KEY] Error deriving shared key:", err);
         }
     } else if (msg.type === "peer_disconnected") {
         addSystemMessage("Собеседник покинул чат");
@@ -237,12 +344,12 @@ async function sendMessage() {
     if (!text) return;
 
     if (!dataChannel || dataChannel.readyState !== "open") {
-        updateChatStatus("Соединение еще не установлено");
+        updateChatStatus("Соединение ещё не установлено");
         return;
     }
 
     if (!sharedKey) {
-        updateChatStatus("Ключи шифрования еще не согласованы");
+        updateChatStatus("Ключи шифрования ещё не согласованы");
         return;
     }
 
@@ -276,7 +383,7 @@ async function sendMessage() {
         renderMessages();
         input.value = "";
     } catch (err) {
-        console.error("[v0] Error sending message:", err);
+        console.error("[MSG] Error sending message:", err);
         updateChatStatus("Ошибка отправки сообщения");
     }
 }
@@ -342,6 +449,7 @@ function showTypingIndicator() {
 }
 
 window._exitChatInternal = function () {
+    clearTimeout(connectionTimeout);
     if (dataChannel) {
         dataChannel.close();
     }
