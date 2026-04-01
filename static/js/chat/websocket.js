@@ -16,6 +16,11 @@ function connectWebSocket() {
         } else if (msg.type === "users") {
             renderUsers(msg.data);
         } else if (msg.type === "incoming_request") {
+            // Сбрасываем спиннер при получении входящего запроса (чтобы не зависал)
+            document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
+                btn.classList.remove("loading");
+                btn.querySelector(".btn-loader").style.display = "none";
+            });
             showConnectionRequestDialog(msg.data.from_nickname, msg.data.from);
         } else if (msg.type === "room_created") {
             console.log("✅ Создатель → переключаемся в чат");
@@ -28,6 +33,11 @@ function connectWebSocket() {
                 statusEl.textContent =
                     "Ожидаем подключения другого пользователя...";
         } else if (msg.type === "start_connection") {
+            // Сбрасываем спиннер при успешном подключении
+            document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
+                btn.classList.remove("loading");
+                btn.querySelector(".btn-loader").style.display = "none";
+            });
             console.log("🚀 start_connection получен! Переключаем в чат");
             document.getElementById("lobby").style.display = "none";
             document.getElementById("chat").style.display = "flex";
@@ -37,9 +47,18 @@ function connectWebSocket() {
                 window.startChat(msg.data);
             }
         } else if (msg.type === "request_rejected") {
+            // Сбрасываем спиннер при отказе
+            document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
+                btn.classList.remove("loading");
+                btn.querySelector(".btn-loader").style.display = "none";
+            });
             alert("Владелец комнаты отклонил ваш запрос.");
             pendingRequest = false;
         } else if (msg.type === "request_failed") {
+            document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
+                btn.classList.remove("loading");
+                btn.querySelector(".btn-loader").style.display = "none";
+            });
             alert(`Ошибка: ${msg.data.reason}`);
             pendingRequest = false;
         } else if (
@@ -194,16 +213,24 @@ function createRoom() {
     }
 }
 
-function connectToUser(targetId) {
+function connectToUser(targetId, buttonElement) {
     if (pendingRequest) {
         alert("Подождите, предыдущий запрос ещё обрабатывается.");
         return;
     }
+
     console.log("🔗 Клик по кнопке Войти →", targetId);
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         alert("Нет соединения с сервером. Обновите страницу.");
         return;
     }
+
+    // Показываем спиннер на кнопке
+    if (buttonElement) {
+        buttonElement.classList.add("loading");
+        buttonElement.querySelector(".btn-loader").style.display = "block";
+    }
+
     pendingRequest = true;
     ws.send(
         JSON.stringify({
@@ -211,8 +238,14 @@ function connectToUser(targetId) {
             data: { target_id: targetId },
         }),
     );
+
+    // Сбрасываем состояние через 10 секунд (таймаут)
     setTimeout(() => {
         pendingRequest = false;
+        if (buttonElement) {
+            buttonElement.classList.remove("loading");
+            buttonElement.querySelector(".btn-loader").style.display = "none";
+        }
     }, 10000);
 }
 
@@ -238,24 +271,27 @@ function renderUsers(list) {
     container.innerHTML = list
         .map(
             (u) => `
-        <div class="room-card">
-            <div class="room-avatar">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
-                </svg>
-            </div>
-            <div class="room-info">
-                <div class="room-name">${escapeHtml(u.title)}</div>
-                <div class="room-meta">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
-                    </svg>
-                    ${escapeHtml(u.nickname)}
-                </div>
-            </div>
-            <button class="btn-connect" data-target="${u.client_id}">Войти</button>
-        </div>
-    `,
+                    <div class="room-card">
+                        <div class="room-avatar">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.979 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
+                            </svg>
+                        </div>
+                        <div class="room-info">
+                            <div class="room-name">${escapeHtml(u.title)}</div>
+                            <div class="room-meta">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+                                </svg>
+                                ${escapeHtml(u.nickname)}
+                            </div>
+                        </div>
+                        <button class="btn-connect" data-target="${u.client_id}">
+                            <span>Войти</span>
+                            <div class="btn-loader" style="display:none"></div>
+                        </button>
+                    </div>
+                    `,
         )
         .join("");
 
@@ -263,7 +299,7 @@ function renderUsers(list) {
     document.querySelectorAll(".btn-connect").forEach((btn) => {
         btn.addEventListener("click", (e) => {
             const targetId = e.currentTarget.dataset.target;
-            connectToUser(targetId);
+            connectToUser(targetId, btn); // Передаём кнопку в функцию
         });
     });
 }
@@ -284,6 +320,12 @@ window.connectToUser = connectToUser;
 window.filterUsers = filterUsers;
 window.renderUsers = renderUsers;
 window.exitChat = function () {
+    // Сбрасываем все спиннеры
+    document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
+        btn.classList.remove("loading");
+        btn.querySelector(".btn-loader").style.display = "none";
+    });
+
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "peer_disconnected" }));
     }
@@ -298,7 +340,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const navBtn = document.getElementById("navBtn");
     if (navBtn) {
         navBtn.addEventListener("click", () => {
-            window.open("https://2p2p.ru/", "_blank");
+            window.open("https://2p2p.ru/file", "_blank");
         });
     }
 

@@ -910,3 +910,31 @@ body::before {
     height: 18px;
     stroke: #22c55e;
 }
+
+/* Loader Spinner */
+.btn-loader {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(59, 130, 246, 0.3);
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.btn-connect.loading {
+    padding: 10px;
+    cursor: not-allowed;
+    opacity: 0.8;
+}
+
+.btn-connect.loading span {
+    display: none;
+}
