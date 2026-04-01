@@ -38,12 +38,12 @@ async def startup_event():
 @router.get("/", response_class=HTMLResponse)
 async def file_sender(request: Request):
     """Страница отправки файлов"""
-    return templates.TemplateResponse("sender.html", {"request": request})
+    return templates.TemplateResponse(request, "sender.html")
 
 @router.get("/receiver", response_class=HTMLResponse)
 async def file_receiver(request: Request):
     """Страница получения файлов (с параметрами room и #key)"""
-    return templates.TemplateResponse("receiver.html", {"request": request})
+    return templates.TemplateResponse(request, "receiver.html")
 
 @router.post("/create")
 async def create_room(minutes: int):
