@@ -3,3 +3,5 @@ uvicorn[standard]
 websockets
 pydantic-settings
 pydantic
+python-multipart
+Jinja2

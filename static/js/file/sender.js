@@ -85,10 +85,22 @@ async function create() {
     bar.style.width = "0%";
 
     const res = await fetch(
-        `${location.origin}/create?minutes=${timeSelect.value}`,
+        `${location.origin}/file/create?minutes=${timeSelect.value}`,
         { method: "POST" },
     );
+
+    if (!res.ok) {
+        statusEl.innerText = `❌ Ошибка создания комнаты: ${res.status}`;
+        console.error("Ошибка:", await res.text());
+        return;
+    }
+
     const { room_id } = await res.json();
+
+    if (!room_id) {
+        statusEl.innerText = "❌ Не получен room_id";
+        return;
+    }
 
     // Генерация ключа шифрования
     const key = await crypto.subtle.generateKey(
@@ -100,7 +112,9 @@ async function create() {
     const keyBase64 = btoa(String.fromCharCode(...new Uint8Array(rawKey)));
 
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room_id}`);
+    const ws = new WebSocket(
+        `${wsProtocol}//${location.host}/file/ws/${room_id}`,
+    );
 
     // Получаем динамические учетные данные TURN
     const iceServers = await getTurnServers();
@@ -210,6 +224,6 @@ async function create() {
     };
 
     // Показываем ссылку
-    linkEl.innerHTML = `<strong>${location.origin}/receiver?room=${room_id}#key=${keyBase64}</strong>`;
+    linkEl.innerHTML = `<strong>${location.origin}/file/receiver?room=${room_id}#key=${keyBase64}</strong>`;
     linkEl.style.color = "#22c55e";
 }

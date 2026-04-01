@@ -36,7 +36,7 @@ const keyPromise = crypto.subtle
     });
 
 const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${room}`);
+const ws = new WebSocket(`${wsProtocol}//${location.host}/file/ws/${room}`);
 
 // Получаем динамические учетные данные TURN
 (async () => {

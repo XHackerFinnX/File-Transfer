@@ -333,6 +333,7 @@ window.handleWebRTCMessage = async function (msg) {
         addSystemMessage("Собеседник покинул чат");
         setTimeout(() => {
             window.exitChat();
+            window.location.reload();
         }, 2000);
     }
 };
@@ -408,12 +409,6 @@ function renderMessages() {
     container.scrollTop = container.scrollHeight;
 }
 
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-}
-
 function addSystemMessage(text) {
     messages.push({
         system: true,
@@ -478,6 +473,7 @@ window.exitChat = function () {
         ws.send(JSON.stringify({ type: "peer_disconnected" }));
     }
     window._exitChatInternal();
+    window.location.reload();
 };
 
 window.sendMessage = sendMessage;
