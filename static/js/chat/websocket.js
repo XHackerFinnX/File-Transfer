@@ -334,15 +334,143 @@ window.exitChat = function () {
     }
 };
 
+// P2P Services Menu
+const services = [
+    {
+        id: "file-transfer",
+        name: "P2P Передача файлов",
+        description: "Мгновенная передача файлов напрямую между устройствами",
+        icon: "file",
+        url: "/file",
+        color: "#3b82f6",
+    },
+    {
+        id: "chat",
+        name: "P2P Чат",
+        description: "Шифрованный чат с конфиденциальностью по умолчанию",
+        icon: "chat",
+        url: "/chat",
+        color: "#22c55e",
+        active: true,
+    },
+    // Примеры будущих сервисов (закомментированы для демонстрации)
+    /*
+    {
+        id: "video-call",
+        name: "P2P Видеозвонки",
+        description: "Кристально чистые видеозвонки без серверов",
+        icon: "video",
+        url: "/video",
+        color: "#ef4444"
+    },
+    {
+        id: "audio-call",
+        name: "P2P Аудиозвонки",
+        description: "Высококачественные аудиозвонки с шумоподавлением",
+        icon: "audio",
+        url: "/audio",
+        color: "#f97316"
+    }
+    */
+];
+
+function initServicesMenu() {
+    const menuBtn = document.getElementById("servicesMenuBtn");
+    const closeBtn = document.getElementById("servicesCloseBtn");
+    const dropdown = document.getElementById("servicesDropdown");
+    const overlay = document.createElement("div");
+    overlay.className = "services-overlay";
+    document.body.appendChild(overlay);
+
+    // Рендер списка сервисов
+    const servicesList = document.getElementById("servicesList");
+    servicesList.innerHTML = services
+        .map(
+            (service) => `
+        <a href="${service.url}" class="service-item ${service.active ? "active" : ""}" data-id="${service.id}">
+            <div class="service-icon ${service.icon}">
+                ${
+                    service.icon === "file"
+                        ? `
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                `
+                        : service.icon === "chat"
+                          ? `
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                `
+                          : service.icon === "video"
+                            ? `
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                `
+                            : `
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M4.72 12h.01m.01 0h.01m.01 0h.01m.01 0h.01" />
+                </svg>
+                `
+                }
+            </div>
+            <div class="service-info">
+                <h4>${service.name}</h4>
+                <p>${service.description}</p>
+            </div>
+        </a>
+    `,
+        )
+        .join("");
+
+    // Открытие меню
+    menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdown.classList.add("open");
+        overlay.classList.add("active");
+        document.body.style.overflow = "hidden"; // блокируем скролл при открытом меню
+    });
+
+    // Закрытие меню
+    const closeMenu = () => {
+        dropdown.classList.remove("open");
+        overlay.classList.remove("active");
+        document.body.style.overflow = "";
+    };
+
+    closeBtn.addEventListener("click", closeMenu);
+    overlay.addEventListener("click", closeMenu);
+
+    // Закрытие по клавише Escape
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && dropdown.classList.contains("open")) {
+            closeMenu();
+        }
+    });
+
+    // Закрытие при клике на ссылку сервиса
+    document.querySelectorAll(".service-item").forEach((item) => {
+        item.addEventListener("click", (e) => {
+            // Для активного сервиса не переходим (остаёмся на текущей странице)
+            if (item.classList.contains("active")) {
+                e.preventDefault();
+                closeMenu();
+                return;
+            }
+            // Для внешних ссылок открываем в новой вкладке
+            if (item.href.startsWith("http")) {
+                e.preventDefault();
+                window.open(item.href, "_blank");
+                closeMenu();
+            }
+        });
+    });
+}
+
 // Инициализация при загрузке DOM
 document.addEventListener("DOMContentLoaded", () => {
-    // Навигационная кнопка
-    const navBtn = document.getElementById("navBtn");
-    if (navBtn) {
-        navBtn.addEventListener("click", () => {
-            window.open("https://2p2p.ru/file", "_blank");
-        });
-    }
+    initServicesMenu();
 
     // Подключаемся к WebSocket
     connectWebSocket();

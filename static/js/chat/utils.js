@@ -8,6 +8,9 @@ function escapeHtml(str) {
 // Автоподстройка высоты textarea
 function adjustTextareaHeight(textarea) {
     textarea.style.height = "auto";
+    // textarea.style.height = "34px";
+    const btn = document.getElementById('emojiBtn');
+    btn.style.paddingBottom = '8px';
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
 }
 

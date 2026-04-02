@@ -385,7 +385,7 @@ function initEmojiPicker() {
             if (typeof window.sendMessage === "function") {
                 window.sendMessage();
             }
-            messageInput.style.height = "44px";
+            messageInput.style.height = "34px";
         }
     });
 
@@ -393,7 +393,7 @@ function initEmojiPicker() {
         if (typeof window.sendMessage === "function") {
             window.sendMessage();
         }
-        messageInput.style.height = "44px";
+        messageInput.style.height = "34px";
     });
 }
 
