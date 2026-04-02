@@ -61,7 +61,7 @@ async def create_room(minutes: int):
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """WebSocket для передачи файлов"""
     await websocket.accept()
-    
+
     if room_id not in rooms:
         await websocket.close(code=4000, reason="Комната не найдена")
         return
@@ -80,27 +80,53 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
     try:
         while True:
-            data = await websocket.receive()
+            try:
+                data = await websocket.receive()
+            except RuntimeError:
+                break
+            
+            # КРИТИЧЕСКИ ВАЖНО: проверяем тип сообщения ДО обработки
+            if data["type"] == "websocket.disconnect":
+                print(f"[FILE] Клиент отключился от комнаты {room_id}")
+                break
+
+            # TEXT (control messages / signaling)
             if "text" in data:
                 message = json.loads(data["text"])
+
                 if message.get("done"):
                     for c in room["clients"]:
-                        await c.close()
+                        try:
+                            await c.close()
+                        except:
+                            pass
                     rooms.pop(room_id, None)
                     break
+
                 # Пересылаем всем остальным клиентам в комнате
                 for c in room["clients"]:
                     if c != websocket:
-                        await c.send_text(data["text"])
+                        try:
+                            await c.send_text(data["text"])
+                        except:
+                            pass
+
+            # BINARY (для будущих улучшений)
             elif "bytes" in data:
                 for c in room["clients"]:
                     if c != websocket:
-                        await c.send_bytes(data["bytes"])
-    except WebSocketDisconnect:
-        pass
+                        try:
+                            await c.send_bytes(data["bytes"])
+                        except:
+                            pass
+
+    except Exception as e:
+        print(f"[FILE] Ошибка вебсокета: {e}")
     finally:
+        # Безопасное удаление клиента из комнаты
         if websocket in room["clients"]:
             room["clients"].remove(websocket)
+        
         # Уведомляем оставшегося участника
         if len(room["clients"]) == 1:
             remaining = room["clients"][0]
@@ -109,6 +135,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 print(f"[FILE] Участник отключился из комнаты {room_id}")
             except:
                 pass
+        
         # Удаляем пустую комнату
         if not room["clients"] and room_id in rooms:
             print(f"[FILE] Комната {room_id} удалена (пустая)")
