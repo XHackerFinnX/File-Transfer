@@ -165,7 +165,6 @@ body::before {
         rgba(15, 15, 24, 0.99)
     );
     border-left: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.5);
     z-index: 1000;
     transform: translateX(100%);
     transition: transform 0.3s cubic-bezier(0.23, 1, 0.32, 1);
@@ -177,6 +176,7 @@ body::before {
 
 .services-dropdown.open {
     transform: translateX(0);
+    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.5);
 }
 
 .services-dropdown-header {
@@ -1014,6 +1014,7 @@ body::before {
         background 0.2s ease;
     overflow-y: auto;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
 }
 
 .message-input::-webkit-scrollbar {
@@ -1036,6 +1037,16 @@ body::before {
 .message-input:focus {
     border-color: rgba(59, 130, 246, 0.5);
     background: rgba(30, 30, 45, 0.8);
+}
+
+/* Убираем скролл, когда сообщение короткое */
+.message-input:not(:focus):empty {
+    overflow-y: hidden;
+}
+
+/* При фокусе всегда показываем скролл, если нужно */
+.message-input:focus {
+    overflow-y: auto;
 }
 
 .btn-send {
@@ -1158,6 +1169,7 @@ body::before {
         max-height: 100vh;
         border-radius: 0;
         border: none;
+        padding-bottom: 56px;
     }
 
     .header {
@@ -1197,6 +1209,7 @@ body::before {
         right: 8px;
         width: calc(100% - 16px);
         max-width: 400px;
+        bottom: 60px;
     }
 
     .room-card {
@@ -1214,6 +1227,29 @@ body::before {
 
     .message {
         max-width: 85%;
+    }
+
+    .message-input:not(:focus):empty {
+        overflow-y: hidden;
+    }
+
+    .message-input {
+        min-height: 34px;
+        max-height: 120px;
+        overflow-y: auto;
+        line-height: 1.4;
+        padding: 6px 16px 12px 16px;
+    }
+
+    .message-input:focus {
+        padding: 6px 16px 12px 16px;
+    }
+
+    @supports (height: 100dvh) {
+        .container {
+            height: 100dvh;
+            max-height: 100dvh;
+        }
     }
 }
 
