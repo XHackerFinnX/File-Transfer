@@ -1169,7 +1169,7 @@ body::before {
         max-height: 100vh;
         border-radius: 0;
         border: none;
-        padding-bottom: 56px;
+        /* padding-bottom: 56px; */
     }
 
     .header {
@@ -1243,6 +1243,10 @@ body::before {
 
     .message-input:focus {
         padding: 6px 16px 12px 16px;
+    }
+
+    .chat-status {
+        padding-bottom: 56px;
     }
 
     @supports (height: 100dvh) {
@@ -1509,6 +1513,7 @@ body::before {
     .chat-status {
         font-size: 11px;
         padding: 6px;
+        padding-bottom: 56px;
     }
 
     .system-message {
