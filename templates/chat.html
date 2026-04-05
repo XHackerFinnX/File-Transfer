@@ -340,54 +340,31 @@
             });
         </script>
         <script>
-            // Обработчик для корректного позиционирования на мобильных
+            const messageInput = document.getElementById("messageInput");
+            messageInput.addEventListener("focus", () => {
+                setTimeout(() => {
+                    messageInput.scrollIntoView({
+                        behavior: "smooth",
+                        block: "center",
+                    });
+                }, 300);
+            });
+        </script>
+        <script>
+            // Автоматическая прокрутка к полю ввода при фокусе (для мобильных)
             document.addEventListener("DOMContentLoaded", () => {
-                function updateMobileLayout() {
-                    const container = document.querySelector(".container");
-                    const messageInputWrapper = document.querySelector(
-                        ".message-input-wrapper",
-                    );
+                const messageInput = document.getElementById("messageInput");
+                if (!messageInput) return;
 
-                    // Если мы на мобильном устройстве
-                    if (window.innerWidth <= 768) {
-                        // Проверяем высоту окна
-                        const windowHeight = window.innerHeight;
-                        //const bottomBarHeight = 56; // Приблизительная высота нижней панели
-
-                        // Устанавливаем отступ снизу для контейнера
-                        container.style.paddingBottom = `${bottomBarHeight}px`;
-
-                        // Пересчитываем позицию эмодзи-пикера
-                        const emojiPicker =
-                            document.querySelector(".emoji-picker");
-                        if (
-                            emojiPicker &&
-                            emojiPicker.classList.contains("show")
-                        ) {
-                            const inputRect =
-                                messageInputWrapper.getBoundingClientRect();
-                            const pickerHeight = 284;
-                            const spaceBelow =
-                                windowHeight - inputRect.bottom - 40;
-
-                            if (spaceBelow < pickerHeight) {
-                                emojiPicker.style.bottom = `${inputRect.top - 20}px`;
-                            } else {
-                                emojiPicker.style.bottom = "70px";
-                            }
-                        }
-                    }
-                }
-
-                // Обработчики событий
-                window.addEventListener("resize", updateMobileLayout);
-                window.addEventListener(
-                    "orientationchange",
-                    updateMobileLayout,
-                );
-
-                // Инициализация
-                updateMobileLayout();
+                messageInput.addEventListener("focus", () => {
+                    // Небольшая задержка, чтобы клавиатура успела появиться
+                    setTimeout(() => {
+                        messageInput.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                        });
+                    }, 300);
+                });
             });
         </script>
     </body>
