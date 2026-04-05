@@ -1577,9 +1577,15 @@ body::before {
     .emoji-item {
         font-size: 18px;
     }
+
+    .chat-status {
+        font-size: 11px;
+        padding: 6px;
+        padding-bottom: 56px;
+    }
 }
 
-@media (max-height: 500px) and (orientation: landscape) {
+/* @media (max-height: 500px) and (orientation: landscape) {
     .container {
         height: 100vh;
         max-height: 100vh;
@@ -1609,7 +1615,7 @@ body::before {
     .empty-state {
         padding: 20px;
     }
-}
+} */
 
 @media (hover: none) and (pointer: coarse) {
     button,
