@@ -43,6 +43,18 @@ function connectWebSocket() {
             document.getElementById("chat").style.display = "flex";
             document.getElementById("chatTitle").textContent =
                 msg.data.peer_nickname || "Чат";
+
+            // Добавляем padding-bottom к message-input-wrapper
+            const messageInputWrapper = document.querySelector(
+                ".message-input-wrapper",
+            );
+            if (
+                messageInputWrapper &&
+                window.matchMedia("(max-width: 768px)").matches
+            ) {
+                messageInputWrapper.style.paddingBottom = "38px";
+            }
+
             if (typeof window.startChat === "function") {
                 window.startChat(msg.data);
             }
