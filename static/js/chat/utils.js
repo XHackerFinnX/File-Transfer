@@ -5,15 +5,24 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// Экранирование для атрибутов HTML
+function escapeAttr(str) {
+    if (!str) return "";
+    return str.replace(/[&"']/g, function (m) {
+        if (m === "&") return "&amp;";
+        if (m === '"') return "&quot;";
+        if (m === "'") return "&#39;";
+        return m;
+    });
+}
+
 // Автоподстройка высоты textarea
 function adjustTextareaHeight(textarea) {
     textarea.style.height = "auto";
-    // textarea.style.height = "34px";
-    const btn = document.getElementById('emojiBtn');
-    btn.style.paddingBottom = '8px';
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
 }
 
 // Глобальный экспорт
 window.escapeHtml = escapeHtml;
+window.escapeAttr = escapeAttr;
 window.adjustTextareaHeight = adjustTextareaHeight;

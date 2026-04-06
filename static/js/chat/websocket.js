@@ -5,7 +5,7 @@ let pendingRequest = false;
 function connectWebSocket() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(`${protocol}//${location.host}/chat/ws`);
-    window.ws = ws; // для доступа из webrtc.js
+    window.ws = ws;
 
     ws.onmessage = async (e) => {
         const msg = JSON.parse(e.data);
@@ -16,7 +16,6 @@ function connectWebSocket() {
         } else if (msg.type === "users") {
             renderUsers(msg.data);
         } else if (msg.type === "incoming_request") {
-            // Сбрасываем спиннер при получении входящего запроса (чтобы не зависал)
             document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
@@ -33,7 +32,6 @@ function connectWebSocket() {
                 statusEl.textContent =
                     "Ожидаем подключения другого пользователя...";
         } else if (msg.type === "start_connection") {
-            // Сбрасываем спиннер при успешном подключении
             document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
@@ -44,22 +42,10 @@ function connectWebSocket() {
             document.getElementById("chatTitle").textContent =
                 msg.data.peer_nickname || "Чат";
 
-            // Добавляем padding-bottom к message-input-wrapper
-            const messageInputWrapper = document.querySelector(
-                ".message-input-wrapper",
-            );
-            if (
-                messageInputWrapper &&
-                window.matchMedia("(max-width: 768px)").matches
-            ) {
-                messageInputWrapper.style.paddingBottom = "38px";
-            }
-
             if (typeof window.startChat === "function") {
                 window.startChat(msg.data);
             }
         } else if (msg.type === "request_rejected") {
-            // Сбрасываем спиннер при отказе
             document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
@@ -93,7 +79,6 @@ function connectWebSocket() {
 }
 
 function showConnectionRequestDialog(fromNickname, fromId) {
-    // Создаём кастомный диалог вместо нативного confirm()
     const dialog = document.createElement("div");
     dialog.className = "custom-dialog-overlay";
     dialog.innerHTML = `
@@ -123,14 +108,12 @@ function showConnectionRequestDialog(fromNickname, fromId) {
     dialog.querySelector(".btn-dialog-reject").onclick = () =>
         sendResponse(false);
 
-    // Закрытие кликом вне диалога — НЕ отклоняем запрос
     dialog.onclick = (e) => {
         if (e.target === dialog) {
             document.body.removeChild(dialog);
         }
     };
 
-    // Стили для диалога (встраиваются один раз)
     if (!document.getElementById("dialog-styles")) {
         const style = document.createElement("style");
         style.id = "dialog-styles";
@@ -237,7 +220,6 @@ function connectToUser(targetId, buttonElement) {
         return;
     }
 
-    // Показываем спиннер на кнопке
     if (buttonElement) {
         buttonElement.classList.add("loading");
         buttonElement.querySelector(".btn-loader").style.display = "block";
@@ -251,7 +233,6 @@ function connectToUser(targetId, buttonElement) {
         }),
     );
 
-    // Сбрасываем состояние через 10 секунд (таймаут)
     setTimeout(() => {
         pendingRequest = false;
         if (buttonElement) {
@@ -307,11 +288,10 @@ function renderUsers(list) {
         )
         .join("");
 
-    // Добавляем обработчики для кнопок после рендера
     document.querySelectorAll(".btn-connect").forEach((btn) => {
         btn.addEventListener("click", (e) => {
             const targetId = e.currentTarget.dataset.target;
-            connectToUser(targetId, btn); // Передаём кнопку в функцию
+            connectToUser(targetId, btn);
         });
     });
 }
@@ -325,14 +305,13 @@ function filterUsers() {
     });
 }
 
-// Глобальные функции
 window.setNickname = setNickname;
 window.createRoom = createRoom;
 window.connectToUser = connectToUser;
 window.filterUsers = filterUsers;
 window.renderUsers = renderUsers;
+
 window.exitChat = function () {
-    // Сбрасываем все спиннеры
     document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
         btn.classList.remove("loading");
         btn.querySelector(".btn-loader").style.display = "none";
@@ -345,6 +324,26 @@ window.exitChat = function () {
         window._exitChatInternal();
     }
 };
+
+window.parseLinks = function (text) {
+    const urlRegex =
+        /(\bhttps?:\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/gi;
+    return text.replace(urlRegex, (url) => {
+        try {
+            const safeUrl = escapeHtml(url);
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>`;
+        } catch (e) {
+            return escapeHtml(url);
+        }
+    });
+};
+
+// Функция для преобразования HTML-сущностей обратно в текст (для имён файлов)
+function decodeHtmlEntities(str) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = str;
+    return textarea.value;
+}
 
 // P2P Services Menu
 const services = [
@@ -365,25 +364,6 @@ const services = [
         color: "#22c55e",
         active: true,
     },
-    // Примеры будущих сервисов (закомментированы для демонстрации)
-    /*
-    {
-        id: "video-call",
-        name: "P2P Видеозвонки",
-        description: "Кристально чистые видеозвонки без серверов",
-        icon: "video",
-        url: "/video",
-        color: "#ef4444"
-    },
-    {
-        id: "audio-call",
-        name: "P2P Аудиозвонки",
-        description: "Высококачественные аудиозвонки с шумоподавлением",
-        icon: "audio",
-        url: "/audio",
-        color: "#f97316"
-    }
-    */
 ];
 
 function initServicesMenu() {
@@ -394,7 +374,6 @@ function initServicesMenu() {
     overlay.className = "services-overlay";
     document.body.appendChild(overlay);
 
-    // Рендер списка сервисов
     const servicesList = document.getElementById("servicesList");
     servicesList.innerHTML = services
         .map(
@@ -408,21 +387,9 @@ function initServicesMenu() {
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 `
-                        : service.icon === "chat"
-                          ? `
+                        : `
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-                `
-                          : service.icon === "video"
-                            ? `
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                `
-                            : `
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M4.72 12h.01m.01 0h.01m.01 0h.01m.01 0h.01" />
                 </svg>
                 `
                 }
@@ -436,15 +403,13 @@ function initServicesMenu() {
         )
         .join("");
 
-    // Открытие меню
     menuBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         dropdown.classList.add("open");
         overlay.classList.add("active");
-        document.body.style.overflow = "hidden"; // блокируем скролл при открытом меню
+        document.body.style.overflow = "hidden";
     });
 
-    // Закрытие меню
     const closeMenu = () => {
         dropdown.classList.remove("open");
         overlay.classList.remove("active");
@@ -454,23 +419,19 @@ function initServicesMenu() {
     closeBtn.addEventListener("click", closeMenu);
     overlay.addEventListener("click", closeMenu);
 
-    // Закрытие по клавише Escape
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && dropdown.classList.contains("open")) {
             closeMenu();
         }
     });
 
-    // Закрытие при клике на ссылку сервиса
     document.querySelectorAll(".service-item").forEach((item) => {
         item.addEventListener("click", (e) => {
-            // Для активного сервиса не переходим (остаёмся на текущей странице)
             if (item.classList.contains("active")) {
                 e.preventDefault();
                 closeMenu();
                 return;
             }
-            // Для внешних ссылок открываем в новой вкладке
             if (item.href.startsWith("http")) {
                 e.preventDefault();
                 window.open(item.href, "_blank");
@@ -480,10 +441,165 @@ function initServicesMenu() {
     });
 }
 
-// Инициализация при загрузке DOM
+// ==================== ATTACHMENT BUTTON & CONTEXT MENU ====================
 document.addEventListener("DOMContentLoaded", () => {
-    initServicesMenu();
+    const attachBtn = document.getElementById("attachBtn");
+    const fileInput = document.getElementById("fileInput");
 
-    // Подключаемся к WebSocket
+    if (attachBtn && fileInput) {
+        attachBtn.addEventListener("click", () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener("change", (e) => {
+            if (e.target.files && e.target.files[0]) {
+                const file = e.target.files[0];
+                if (file.size > 1024 * 1024 * 1024) {
+                    alert("Файл слишком большой! Максимальный размер: 1 ГБ");
+                    fileInput.value = "";
+                    return;
+                }
+                if (typeof window.sendFile === "function") {
+                    window.sendFile(file);
+                } else {
+                    alert("Сначала установите соединение с собеседником");
+                }
+                fileInput.value = "";
+            }
+        });
+    }
+
+    initServicesMenu();
     connectWebSocket();
+});
+
+// Контекстное меню инициализируем после полной загрузки всех скриптов
+window.addEventListener("load", () => {
+    const contextMenu = document.createElement("div");
+    contextMenu.className = "context-menu";
+    contextMenu.innerHTML = `
+        <div class="context-menu-item" id="copyMenuItem">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18.75v-7.5m-9 7.5h7.5m-7.5 0V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18.75v-7.5m-7.5-3h7.5M15.75 15.75v-6m-7.5 6h7.5M6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+            </svg>
+            Копировать текст
+        </div>
+        <div class="context-menu-item" id="saveImageMenuItem" style="display: none;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75v-2.25m-18 0A2.25 2.25 0 015.25 15h13.5A2.25 2.25 0 0121 16.5m-18 0v-2.25A2.25 2.25 0 015.25 12h13.5A2.25 2.25 0 0121 13.5v2.25m-18 0h18" />
+            </svg>
+            Сохранить изображение
+        </div>
+        <div class="context-menu-item" id="saveFileMenuItem" style="display: none;">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75v-2.25m-18 0A2.25 2.25 0 015.25 15h13.5A2.25 2.25 0 0121 16.5m-18 0v-2.25A2.25 2.25 0 015.25 12h13.5A2.25 2.25 0 0121 13.5v2.25m-18 0h18" />
+            </svg>
+            Сохранить файл
+        </div>
+    `;
+    document.body.appendChild(contextMenu);
+
+    let selectedMessage = null;
+
+    document.addEventListener("contextmenu", (e) => {
+        const messageEl = e.target.closest(".message");
+        if (messageEl && !messageEl.classList.contains("system-message")) {
+            e.preventDefault();
+            selectedMessage = messageEl;
+
+            const saveImageMenuItem =
+                document.getElementById("saveImageMenuItem");
+            saveImageMenuItem.style.display = messageEl.classList.contains(
+                "image",
+            )
+                ? "flex"
+                : "none";
+
+            const saveFileMenuItem =
+                document.getElementById("saveFileMenuItem");
+            saveFileMenuItem.style.display = messageEl.classList.contains(
+                "file",
+            )
+                ? "flex"
+                : "none";
+
+            const copyMenuItem = document.getElementById("copyMenuItem");
+            copyMenuItem.style.display =
+                messageEl.classList.contains("file") ||
+                messageEl.classList.contains("image")
+                    ? "none"
+                    : "flex";
+
+            const rect = messageEl.getBoundingClientRect();
+            contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 200)}px`;
+            contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 150)}px`;
+            contextMenu.style.display = "flex";
+        } else {
+            contextMenu.style.display = "none";
+            selectedMessage = null;
+        }
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!contextMenu.contains(e.target)) {
+            contextMenu.style.display = "none";
+            selectedMessage = null;
+        }
+    });
+
+    document.getElementById("copyMenuItem").addEventListener("click", () => {
+        if (selectedMessage) {
+            const textEl = selectedMessage.querySelector(".message-content");
+            if (textEl) {
+                navigator.clipboard.writeText(textEl.textContent).then(() => {
+                    if (typeof addSystemMessage === "function")
+                        addSystemMessage("✅ Текст скопирован");
+                });
+            }
+        }
+        contextMenu.style.display = "none";
+    });
+
+    document
+        .getElementById("saveImageMenuItem")
+        .addEventListener("click", () => {
+            if (
+                selectedMessage &&
+                selectedMessage.classList.contains("image")
+            ) {
+                const url = selectedMessage.dataset.imageUrl;
+                let fileName =
+                    selectedMessage.dataset.originalFilename || "image";
+                fileName = decodeHtmlEntities(fileName);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                if (typeof addSystemMessage === "function")
+                    addSystemMessage("✅ Изображение сохранено");
+            }
+            contextMenu.style.display = "none";
+        });
+
+    document
+        .getElementById("saveFileMenuItem")
+        .addEventListener("click", () => {
+            if (selectedMessage && selectedMessage.classList.contains("file")) {
+                const url = selectedMessage.dataset.url;
+                let fileName =
+                    selectedMessage.dataset.originalFilename || "file";
+                fileName = decodeHtmlEntities(fileName);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                if (typeof addSystemMessage === "function")
+                    addSystemMessage("✅ Файл сохранён");
+            }
+            contextMenu.style.display = "none";
+        });
 });
