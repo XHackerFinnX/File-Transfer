@@ -317,5 +317,55 @@
         <script src="/static/js/chat/emoji.js"></script>
         <script src="/static/js/chat/websocket.js"></script>
         <script src="/static/js/chat/webrtc.js"></script>
+        <script>
+            // Обработчик для textarea для предотвращения ненужного скролла
+            document.addEventListener("DOMContentLoaded", () => {
+                const messageInput = document.getElementById("messageInput");
+
+                // Убираем скролл, когда сообщение короткое
+                function adjustTextareaHeight() {
+                    if (!messageInput.value.trim()) {
+                        messageInput.style.overflowY = "hidden";
+                    } else {
+                        messageInput.style.overflowY = "auto";
+                    }
+                }
+
+                messageInput.addEventListener("input", adjustTextareaHeight);
+                messageInput.addEventListener("focus", adjustTextareaHeight);
+                messageInput.addEventListener("blur", adjustTextareaHeight);
+
+                // Инициализация
+                adjustTextareaHeight();
+            });
+        </script>
+        <script>
+            const messageInput = document.getElementById("messageInput");
+            messageInput.addEventListener("focus", () => {
+                setTimeout(() => {
+                    messageInput.scrollIntoView({
+                        behavior: "smooth",
+                        block: "center",
+                    });
+                }, 300);
+            });
+        </script>
+        <script>
+            // Автоматическая прокрутка к полю ввода при фокусе (для мобильных)
+            document.addEventListener("DOMContentLoaded", () => {
+                const messageInput = document.getElementById("messageInput");
+                if (!messageInput) return;
+
+                messageInput.addEventListener("focus", () => {
+                    // Небольшая задержка, чтобы клавиатура успела появиться
+                    setTimeout(() => {
+                        messageInput.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                        });
+                    }, 300);
+                });
+            });
+        </script>
     </body>
 </html>
