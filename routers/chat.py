@@ -179,3 +179,8 @@ async def lobby_ws(websocket: WebSocket):
 @router.get("/", response_class=HTMLResponse)
 async def serve_chat(request: Request):
     return templates.TemplateResponse(request, "chat.html")
+
+
+@router.get("/test", response_class=HTMLResponse)
+async def serve_chat(request: Request):
+    return templates.TemplateResponse(request, "test.html")

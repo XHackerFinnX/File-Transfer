@@ -1,6 +1,7 @@
 import hmac
 import hashlib
 import time
+import base64
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse, FileResponse
 from config import config
@@ -32,11 +33,13 @@ async def get_turn_credentials():
             TURN_SECRET.encode("utf-8"),
             username.encode("utf-8"),
             hashlib.sha1
-        ).hexdigest()
+        ).digest()
+        
+        password = base64.b64encode(hmac_hash).decode("utf-8")
         
         return {
             "username": username,
-            "credential": hmac_hash,
+            "credential": password,
             "urls": TURN_SERVERS
         }
     except Exception as e:

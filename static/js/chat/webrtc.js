@@ -9,6 +9,10 @@ let pc,
     messages = [];
 let connectionTimeout = null;
 
+let connectionAttempts = 0;
+const MAX_TURN_ATTEMPTS = 3;
+let forceTurn = true;
+
 // Для бинарной передачи
 let currentFileTransfer = null;
 let fileTransferProgressElement = null;
@@ -17,24 +21,42 @@ let receivingFiles = {};
 let binaryFileSupported = false;
 let fileChannelReady = false;
 
-async function getTurnServers() {
+async function getIceServers() {
     try {
+        if (!forceTurn) {
+            console.warn("⚠️ Используем только STUN (fallback)");
+            return [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+            ];
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
+
         const res = await fetch("/turn-credentials", {
             signal: controller.signal,
         });
+
         clearTimeout(timeoutId);
+
         if (!res.ok) throw new Error(`TURN error ${res.status}`);
+
         const { username, credential, urls } = await res.json();
-        console.log("✅ TURN credentials получены");
+
+        console.log("✅ Используем TURN (приоритет)");
+
         return [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls, username, credential },
+            {
+                urls,
+                username,
+                credential,
+            },
         ];
     } catch (err) {
-        console.warn("⚠️ TURN недоступен, используем только STUN");
+        console.warn("❌ TURN недоступен → fallback на STUN");
+        forceTurn = false;
+
         return [
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },
@@ -71,8 +93,15 @@ window.startChat = async function (data) {
         }
     }, 15000);
 
-    const iceServers = await getTurnServers();
-    pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 10 });
+    const iceServers = await getIceServers();
+
+    pc = new RTCPeerConnection({
+        iceServers,
+        iceCandidatePoolSize: 10,
+        iceTransportPolicy: forceTurn ? "relay" : "all",
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require",
+    });
 
     pc.oniceconnectionstatechange = () => {
         console.log("[ICE] iceConnectionState:", pc.iceConnectionState);
@@ -96,10 +125,37 @@ window.startChat = async function (data) {
                 break;
             case "failed":
                 clearTimeout(connectionTimeout);
-                updateChatStatus("Не удалось установить соединение");
-                addSystemMessage(
-                    "Соединение не установлено. Попробуйте выйти и создать новый чат.",
-                );
+
+                connectionAttempts++;
+                console.warn(`❌ ICE failed (попытка ${connectionAttempts})`);
+
+                if (connectionAttempts < MAX_TURN_ATTEMPTS && forceTurn) {
+                    console.log("🔄 Повторная попытка через TURN...");
+
+                    setTimeout(() => {
+                        window.startChat({
+                            peer_id: peerId,
+                            peer_nickname: peerNickname,
+                            role: role,
+                        });
+                    }, 1000);
+
+                    return;
+                }
+
+                console.warn("⚠️ TURN не работает → переключаемся на STUN");
+                forceTurn = false;
+                connectionAttempts = 0;
+
+                setTimeout(() => {
+                    window.startChat({
+                        peer_id: peerId,
+                        peer_nickname: peerNickname,
+                        role: role,
+                    });
+                }, 1000);
+
+                updateChatStatus("Переключаемся на резервное соединение...");
                 break;
             case "disconnected":
                 updateChatStatus("Соединение потеряно");
@@ -999,6 +1055,8 @@ window._exitChatInternal = function () {
     dataChannel = null;
     fileChannel = null;
     binaryFileSupported = false;
+    connectionAttempts = 0;
+    forceTurn = true;
     const chatDiv = document.getElementById("chat");
     const lobbyDiv = document.getElementById("lobby");
     if (chatDiv) chatDiv.style.display = "none";

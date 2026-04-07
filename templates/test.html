@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Тест TURN-сервера</title>
+        <style>
+            body {
+                font-family: monospace;
+                margin: 2rem;
+                background: #1e1e2f;
+                color: #ddd;
+            }
+            button {
+                background: #4caf50;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                cursor: pointer;
+                font-size: 16px;
+                border-radius: 5px;
+            }
+            button:hover {
+                background: #45a049;
+            }
+            pre {
+                background: #2d2d3a;
+                padding: 15px;
+                border-radius: 8px;
+                overflow-x: auto;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            .log {
+                margin-top: 20px;
+            }
+            .error {
+                color: #ff8a8a;
+            }
+            .success {
+                color: #8aff8a;
+            }
+            .info {
+                color: #8ac4ff;
+            }
+            hr {
+                border-color: #444;
+            }
+        </style>
+    </head>
+    <body>
+        <h2>🔍 Проверка TURN-сервера (RFC 5766 / REST)</h2>
+        <p>
+            Эндпоинт учётных данных:
+            <code>/turn-credentials</code> (относительно текущего хоста)
+        </p>
+        <p>TURN-сервер: <code>5.42.124.68:3478</code> (UDP/TCP)</p>
+        <button id="testBtn">▶ Запустить тест</button>
+        <div class="log">
+            <h3>Лог выполнения:</h3>
+            <pre id="log">Нажмите кнопку для запуска...</pre>
+        </div>
+        <script>
+            const logElement = document.getElementById("log");
+
+            function log(message, type = "info") {
+                const timestamp = new Date().toLocaleTimeString();
+                const prefix = `[${timestamp}] `;
+                let color = "";
+                if (type === "error") color = "error";
+                else if (type === "success") color = "success";
+                else color = "info";
+                const formatted = `<span class="${color}">${prefix}${message}</span>`;
+                logElement.innerHTML += formatted + "\n";
+                logElement.scrollTop = logElement.scrollHeight;
+                console.log(message);
+            }
+
+            async function testTurn() {
+                log("🚀 Начинаем тестирование TURN...");
+                try {
+                    // 1. Получаем временные учётные данные с сервера
+                    log("📡 Запрос учётных данных у /turn-credentials...");
+                    const credResponse = await fetch("/turn-credentials");
+                    if (!credResponse.ok) {
+                        throw new Error(
+                            `HTTP ${credResponse.status}: ${await credResponse.text()}`,
+                        );
+                    }
+                    const turnCreds = await credResponse.json();
+                    log(
+                        `✅ Получены данные: username="${turnCreds.username}", urls=${JSON.stringify(turnCreds.urls)}`,
+                    );
+                    log(
+                        `🔐 credential (hex) = ${turnCreds.credential.substring(0, 32)}...`,
+                    );
+
+                    // 2. Настраиваем ICE серверы (TURN + опционально STUN для голосования)
+                    const iceServers = [
+                        ...turnCreds.urls.map((url) => ({
+                            urls: url,
+                            username: turnCreds.username,
+                            credential: turnCreds.credential,
+                        })),
+                    ];
+
+                    log("⚙️ Создаём RTCPeerConnection с конфигурацией:", false);
+                    log(JSON.stringify(iceServers, null, 2), "info");
+
+                    // 3. Создаём PeerConnection
+                    const pc = new RTCPeerConnection({
+                        iceServers,
+                        iceTransportPolicy: "relay",
+                    });
+
+                    // Для активации ICE-сбора создаём DataChannel (можно также добавить медиа, но dataChannel достаточно)
+                    const dc = pc.createDataChannel("test");
+                    dc.onopen = () =>
+                        log(
+                            "📡 DataChannel открыт (соединение локально установлено)",
+                            "success",
+                        );
+                    dc.onerror = (err) =>
+                        log(`DataChannel ошибка: ${err.message}`, "error");
+
+                    let hasRelayCandidate = false;
+                    let gatherTimeout;
+
+                    // 4. Обработка ICE-кандидатов
+                    pc.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            const candidateStr = event.candidate.candidate;
+                            log(`❄️ ICE кандидат: ${candidateStr}`);
+                            // Проверяем, является ли кандидат relay (тип "relay")
+                            // В строке кандидата: typ relay или typ srflx, typ host
+                            if (candidateStr.includes(" typ relay ")) {
+                                hasRelayCandidate = true;
+                                log(
+                                    "🎉 НАЙДЕН RELAY КАНДИДАТ! TURN-сервер работает.",
+                                    "success",
+                                );
+                                // Если нашли relay – можно завершить тест досрочно
+                                if (gatherTimeout) clearTimeout(gatherTimeout);
+                                finishTest(true);
+                            }
+                        } else {
+                            log("🏁 ICE gathering завершён (пустой кандидат)");
+                            finishTest(hasRelayCandidate);
+                        }
+                    };
+
+                    pc.onicegatheringstatechange = () => {
+                        log(`🔄 ICE gathering state: ${pc.iceGatheringState}`);
+                        if (pc.iceGatheringState === "complete") {
+                            // Сбор завершён – подведём итог, если ещё не подвели
+                            finishTest(hasRelayCandidate);
+                        }
+                    };
+
+                    pc.oniceconnectionstatechange = () => {
+                        log(
+                            `🔌 ICE connection state: ${pc.iceConnectionState}`,
+                        );
+                        if (pc.iceConnectionState === "failed") {
+                            log(
+                                "❌ ICE соединение не установлено (возможно, TURN не отвечает)",
+                                "error",
+                            );
+                            finishTest(false);
+                        }
+                    };
+
+                    // 5. Создаём offer, чтобы запустить ICE сбор
+                    log("📝 Создаём SDP offer...");
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    log(
+                        "✅ Local description установлен, начался сбор ICE кандидатов",
+                    );
+
+                    // 6. Таймаут на случай, если ICE gathering зависнет
+                    gatherTimeout = setTimeout(() => {
+                        log(
+                            "⚠️ Таймаут 15 секунд – сбор ICE не завершён, проверьте TURN-сервер",
+                            "error",
+                        );
+                        finishTest(hasRelayCandidate);
+                    }, 15000);
+
+                    function finishTest(success) {
+                        if (gatherTimeout) clearTimeout(gatherTimeout);
+                        if (success) {
+                            log(
+                                "✅ ИТОГ: TURN-сервер РАБОТАЕТ (найден relay кандидат)",
+                                "success",
+                            );
+                        } else {
+                            if (hasRelayCandidate === false) {
+                                log(
+                                    "❌ ИТОГ: TURN-сервер НЕ РАБОТАЕТ (relay кандидат не появился)",
+                                    "error",
+                                );
+                                log(
+                                    "💡 Возможные причины: неверный секрет, несовместимый формат пароля (hex vs base64), проблемы с сетью, TURN-сервер не запущен или фаервол блокирует порт 3478",
+                                    "error",
+                                );
+                            }
+                        }
+                        // Закрываем PeerConnection для очистки
+                        pc.close();
+                    }
+                } catch (err) {
+                    log(`❌ Ошибка: ${err.message}`, "error");
+                    console.error(err);
+                }
+            }
+
+            // Привязываем кнопку
+            document.getElementById("testBtn").addEventListener("click", () => {
+                logElement.innerHTML = ""; // очищаем лог
+                testTurn();
+            });
+        </script>
+    </body>
+</html>
