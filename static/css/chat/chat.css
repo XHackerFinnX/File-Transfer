@@ -1732,12 +1732,11 @@ body::before {
     z-index: 10000;
     display: none;
     flex-direction: column;
-    min-width: 180px;
-    padding: 8px 0;
+    padding: 2px 0;
 }
 
 .context-menu-item {
-    padding: 10px 16px;
+    padding: 6px 10px;
     color: #e2e8f0;
     font-size: 14px;
     cursor: pointer;

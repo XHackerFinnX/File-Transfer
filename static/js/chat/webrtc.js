@@ -12,6 +12,81 @@ let connectionTimeout = null;
 let connectionAttempts = 0;
 const MAX_TURN_ATTEMPTS = 3;
 let forceTurn = true;
+let pendingRemoteCandidates = [];
+let turnProbePromise = null;
+let turnProbeCachedAt = 0;
+let turnProbeCachedResult = false;
+const TURN_PROBE_CACHE_MS = 60_000;
+
+async function probeTurnRelay(iceServers, timeoutMs = 8000) {
+    let pc = null;
+    try {
+        pc = new RTCPeerConnection({
+            iceServers,
+            iceTransportPolicy: "relay",
+        });
+        pc.createDataChannel("turn-probe");
+
+        return await new Promise(async (resolve) => {
+            let finished = false;
+            const finish = (ok) => {
+                if (finished) return;
+                finished = true;
+                resolve(ok);
+            };
+
+            const timer = setTimeout(() => finish(false), timeoutMs);
+
+            pc.onicecandidate = (event) => {
+                if (!event.candidate) {
+                    clearTimeout(timer);
+                    finish(false);
+                    return;
+                }
+                const candidateText = event.candidate.candidate || "";
+                if (candidateText.includes(" typ relay ")) {
+                    clearTimeout(timer);
+                    finish(true);
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                if (pc.iceGatheringState === "complete") {
+                    clearTimeout(timer);
+                    finish(false);
+                }
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+        });
+    } catch (err) {
+        console.warn("[TURN] Ошибка проверки relay-кандидата:", err);
+        return false;
+    } finally {
+        if (pc) pc.close();
+    }
+}
+
+async function checkTurnAvailability(iceServers) {
+    const now = Date.now();
+    if (now - turnProbeCachedAt < TURN_PROBE_CACHE_MS) {
+        return turnProbeCachedResult;
+    }
+    if (turnProbePromise) {
+        return turnProbePromise;
+    }
+
+    turnProbePromise = (async () => {
+        const ok = await probeTurnRelay(iceServers);
+        turnProbeCachedResult = ok;
+        turnProbeCachedAt = Date.now();
+        turnProbePromise = null;
+        return ok;
+    })();
+
+    return turnProbePromise;
+}
 
 // Для бинарной передачи
 let currentFileTransfer = null;
@@ -43,16 +118,20 @@ async function getIceServers() {
         if (!res.ok) throw new Error(`TURN error ${res.status}`);
 
         const { username, credential, urls } = await res.json();
+        const turnIceServers = [{ urls, username, credential }];
+        const turnReady = await checkTurnAvailability(turnIceServers);
+
+        if (!turnReady) {
+            console.warn("❌ TURN не прошёл проверку relay → fallback на STUN");
+            forceTurn = false;
+            return [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+            ];
+        }
 
         console.log("✅ Используем TURN (приоритет)");
-
-        return [
-            {
-                urls,
-                username,
-                credential,
-            },
-        ];
+        return turnIceServers;
     } catch (err) {
         console.warn("❌ TURN недоступен → fallback на STUN");
         forceTurn = false;
@@ -70,10 +149,20 @@ function isImageFile(mimeType) {
 
 // ========== ЗАПУСК ЧАТА ==========
 window.startChat = async function (data) {
+    if (pc) {
+        try {
+            pc.onicecandidate = null;
+            pc.ondatachannel = null;
+            pc.close();
+        } catch (e) {
+            console.warn("[PC] Ошибка закрытия старого соединения:", e);
+        }
+    }
     peerId = data.peer_id;
     peerNickname = data.peer_nickname;
     const role = data.role;
     window.receivingFile = null;
+    pendingRemoteCandidates = [];
     messages = [];
 
     updateChatStatus("Устанавливается защищённое соединение...");
@@ -166,6 +255,19 @@ window.startChat = async function (data) {
         console.log("[PC] connectionState:", pc.connectionState);
     pc.onicegatheringstatechange = () =>
         console.log("[ICE] gatheringState:", pc.iceGatheringState);
+    pc.onicecandidate = (e) => {
+        if (e.candidate) {
+            console.log(`[ICE] Кандидат (${e.candidate.type})`);
+            ws.send(
+                JSON.stringify({
+                    type: "candidate",
+                    data: { to: peerId, candidate: e.candidate },
+                }),
+            );
+        } else {
+            console.log("[ICE] Сбор кандидатов завершён");
+        }
+    };
 
     try {
         myKeyPair = await crypto.subtle.generateKey(
@@ -225,19 +327,19 @@ window.startChat = async function (data) {
         };
     }
 
-    pc.onicecandidate = (e) => {
-        if (e.candidate) {
-            console.log(`[ICE] Кандидат (${e.candidate.type})`);
-            ws.send(
-                JSON.stringify({
-                    type: "candidate",
-                    data: { to: peerId, candidate: e.candidate },
-                }),
-            );
-        } else {
-            console.log("[ICE] Сбор кандидатов завершён");
-        }
-    };
+    // pc.onicecandidate = (e) => {
+    //     if (e.candidate) {
+    //         console.log(`[ICE] Кандидат (${e.candidate.type})`);
+    //         ws.send(
+    //             JSON.stringify({
+    //                 type: "candidate",
+    //                 data: { to: peerId, candidate: e.candidate },
+    //             }),
+    //         );
+    //     } else {
+    //         console.log("[ICE] Сбор кандидатов завершён");
+    //     }
+    // };
 };
 
 function setupDataChannel() {
@@ -972,7 +1074,7 @@ window.handleWebRTCMessage = async function (msg) {
         ws.send(
             JSON.stringify({
                 type: "public_key",
-                data: { to: msg.data.to, key: pub },
+                data: { to: msg.data.from, key: pub },
             }),
         );
         return;
@@ -980,6 +1082,10 @@ window.handleWebRTCMessage = async function (msg) {
         try {
             if (!pc) return;
             await pc.setRemoteDescription(msg.data.offer);
+            while (pendingRemoteCandidates.length) {
+                const candidate = pendingRemoteCandidates.shift();
+                await pc.addIceCandidate(candidate);
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             ws.send(
@@ -993,14 +1099,28 @@ window.handleWebRTCMessage = async function (msg) {
         }
     } else if (msg.type === "answer") {
         try {
-            if (pc) await pc.setRemoteDescription(msg.data.answer);
+            if (pc) {
+                await pc.setRemoteDescription(msg.data.answer);
+                while (pendingRemoteCandidates.length) {
+                    const candidate = pendingRemoteCandidates.shift();
+                    await pc.addIceCandidate(candidate);
+                }
+            }
         } catch (err) {
             console.error("[SIGNAL] Error handling answer:", err);
         }
     } else if (msg.type === "candidate") {
         try {
-            if (pc && msg.data.candidate)
-                await pc.addIceCandidate(msg.data.candidate);
+            if (pc && msg.data.candidate) {
+                if (pc.remoteDescription && pc.remoteDescription.type) {
+                    await pc.addIceCandidate(msg.data.candidate);
+                } else {
+                    pendingRemoteCandidates.push(msg.data.candidate);
+                    console.log(
+                        "[ICE] Кандидат поставлен в очередь до remoteDescription",
+                    );
+                }
+            }
         } catch (err) {
             console.error("[ICE] Error adding candidate:", err);
         }

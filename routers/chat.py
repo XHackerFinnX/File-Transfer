@@ -153,7 +153,7 @@ async def lobby_ws(websocket: WebSocket):
                 clients[client_id]["room_id"] = None
                 broadcast_users()
 
-            elif msg_type in ["offer", "answer", "candidate", "public_key"]:
+            elif msg_type in ["offer","answer","candidate","public_key","public_key_request"]:
                 target_id = payload.get("to")
                 if target_id in clients:
                     payload["from"] = client_id
@@ -182,5 +182,5 @@ async def serve_chat(request: Request):
 
 
 @router.get("/test", response_class=HTMLResponse)
-async def serve_chat(request: Request):
+async def test_turn(request: Request):
     return templates.TemplateResponse(request, "test.html")

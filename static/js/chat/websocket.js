@@ -65,6 +65,7 @@ function connectWebSocket() {
                 "answer",
                 "candidate",
                 "public_key",
+                "public_key_request",
                 "peer_disconnected",
             ].includes(msg.type)
         ) {
@@ -347,14 +348,14 @@ function decodeHtmlEntities(str) {
 
 // P2P Services Menu
 const services = [
-    {
-        id: "file-transfer",
-        name: "P2P Передача файлов",
-        description: "Мгновенная передача файлов напрямую между устройствами",
-        icon: "file",
-        url: "/file",
-        color: "#3b82f6",
-    },
+    // {
+    //     id: "file-transfer",
+    //     name: "P2P Передача файлов",
+    //     description: "Мгновенная передача файлов напрямую между устройствами",
+    //     icon: "file",
+    //     url: "/file",
+    //     color: "#3b82f6",
+    // },
     {
         id: "chat",
         name: "P2P Чат",
@@ -478,22 +479,41 @@ window.addEventListener("load", () => {
     const contextMenu = document.createElement("div");
     contextMenu.className = "context-menu";
     contextMenu.innerHTML = `
-        <div class="context-menu-item" id="copyMenuItem">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18.75v-7.5m-9 7.5h7.5m-7.5 0V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18.75v-7.5m-7.5-3h7.5M15.75 15.75v-6m-7.5 6h7.5M6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
-            </svg>
+        <div class="context-menu-item" id="copyMenuItem">             
+            <svg fill="none" width="16px" height="16px" viewBox="0 0 36 36" version="1.1"  preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+                <title>copy-line</title>
+                <path d="M29.5,7h-19A1.5,1.5,0,0,0,9,8.5v24A1.5,1.5,0,0,0,10.5,34h19A1.5,1.5,0,0,0,31,32.5V8.5A1.5,1.5,0,0,0,29.5,7ZM29,32H11V9H29Z" class="clr-i-outline clr-i-outline-path-1"></path><path d="M26,3.5A1.5,1.5,0,0,0,24.5,2H5.5A1.5,1.5,0,0,0,4,3.5v24A1.5,1.5,0,0,0,5.5,29H6V4H26Z" class="clr-i-outline clr-i-outline-path-2"></path>
+            </svg>         
             Копировать текст
         </div>
         <div class="context-menu-item" id="saveImageMenuItem" style="display: none;">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75v-2.25m-18 0A2.25 2.25 0 015.25 15h13.5A2.25 2.25 0 0121 16.5m-18 0v-2.25A2.25 2.25 0 015.25 12h13.5A2.25 2.25 0 0121 13.5v2.25m-18 0h18" />
+            <svg version="1.1" id="Icons" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+                width="16px" height="16px" viewBox="0 0 32 32" xml:space="preserve">
+            <style type="text/css">
+                .st0{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+                .st1{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+                .st2{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:6,6;}
+                .st3{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:4,4;}
+                .st4{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;}
+                .st5{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-dasharray:3.1081,3.1081;}
+                
+                    .st6{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;stroke-dasharray:4,3;}
+            </style>
+            <path class="st0" d="M27,16V8.8c1.2-0.4,2-1.5,2-2.8c0-1.7-1.3-3-3-3c-1.3,0-2.4,0.8-2.8,2H8.8C8.4,3.8,7.3,3,6,3C4.3,3,3,4.3,3,6
+                c0,1.3,0.8,2.4,2,2.8v14.4c-1.2,0.4-2,1.5-2,2.8c0,1.7,1.3,3,3,3c1.3,0,2.4-0.8,2.8-2H18"/>
+            <polyline class="st0" points="16,23 9,23 9,9 23,9 23,15 "/>
+            <circle class="st0" cx="13" cy="13" r="1"/>
+            <polyline class="st0" points="9,20 16,16 17,17 "/>
+            <circle class="st0" cx="23" cy="22" r="7"/>
+            <line class="st0" x1="23" y1="15" x2="23" y2="25"/>
+            <polyline class="st0" points="19,21 23,25 27,21 "/>
             </svg>
             Сохранить изображение
         </div>
-        <div class="context-menu-item" id="saveFileMenuItem" style="display: none;">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75v-2.25m-18 0A2.25 2.25 0 015.25 15h13.5A2.25 2.25 0 0121 16.5m-18 0v-2.25A2.25 2.25 0 015.25 12h13.5A2.25 2.25 0 0121 13.5v2.25m-18 0h18" />
-            </svg>
+        <div class="context-menu-item" id="saveFileMenuItem" style="display: none;">                 
+            <svg width="16px" height="16px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M21 21H3M18 11L12 17M12 17L6 11M12 17V3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>        
             Сохранить файл
         </div>
     `;
