@@ -840,7 +840,7 @@ body::before {
 
 .message.me {
     align-self: flex-end;
-    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    background: #2b5178;
     color: #fff;
     border-radius: 18px 18px 6px 18px;
     box-shadow: 0 2px 10px rgba(59, 130, 246, 0.25);
@@ -1729,7 +1729,7 @@ body::before {
 /* File Message */
 .message.file {
     max-width: 90%;
-    padding: 12px 16px;
+    padding: 12px 16px 12px 12px;
     background: rgba(45, 45, 60, 0.9);
     border-radius: 16px;
 }
@@ -1738,17 +1738,17 @@ body::before {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    background: rgba(59, 130, 246, 0.2);
-    border-radius: 6px;
+    width: 54px;
+    height: 54px;
+    background: #3b82f6;
+    border-radius: 50px;
     margin-right: 8px;
     flex-shrink: 0;
 }
 
 .file-icon svg {
-    width: 16px;
-    height: 16px;
+    width: 24px;
+    height: 24px;
     stroke: #3b82f6;
 }
 

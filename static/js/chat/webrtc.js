@@ -83,6 +83,7 @@ function resetConnectionReadiness() {
     remoteTransportState = null;
     lastLocalTransportSignature = "";
     lastRemoteTransportSignature = "";
+    planBReceivingFiles = {};
 }
 
 function buildTransportState(overrides = {}) {
@@ -108,7 +109,7 @@ function transportSignature(state) {
 
 function transportLabel(state) {
     if (!state) return "неизвестно";
-    if (state.mode === "plan_b") return "Plan B (через сервер)";
+    if (state.mode === "plan_b") return "Plan B";
     if (state.mode === "turn+stun") return "P2P TURN+STUN";
     return "P2P STUN-only";
 }
@@ -118,14 +119,14 @@ function announceTransportState(state, isLocal = true) {
     if (isLocal) {
         if (signature === lastLocalTransportSignature) return;
         lastLocalTransportSignature = signature;
-        addSystemMessage(`Вы используете: ${transportLabel(state)}`);
+        // addSystemMessage(`Вы используете: ${transportLabel(state)}`);
         return;
     }
 
     if (signature === lastRemoteTransportSignature) return;
     lastRemoteTransportSignature = signature;
     const name = peerNickname || "Собеседник";
-    addSystemMessage(`${name} использует: ${transportLabel(state)}`);
+    // addSystemMessage(`${name} использует: ${transportLabel(state)}`);
 }
 
 function syncTransportState(reason = "state_update", announce = true) {
@@ -171,7 +172,7 @@ function activatePlanB() {
     setConnectionOverlayVisible(false);
     updateChatStatus("Plan B: серверный защищённый канал активен");
     addSystemMessage(
-        "P2P не установился за 5 секунд — переключились на Plan B через сервер.",
+        "P2P не установился за 5 секунд — переключились на Plan B.",
     );
     syncTransportState("plan_b_activated");
     if (!sharedKey) {
@@ -294,6 +295,8 @@ let nextFileId = 1;
 let receivingFiles = {};
 let binaryFileSupported = false;
 let fileChannelReady = false;
+const PLAN_B_FILE_CHUNK_SIZE = 48 * 1024;
+let planBReceivingFiles = {};
 
 async function getIceServers() {
     try {
@@ -871,18 +874,16 @@ async function finalizeBinaryFileReceive(receiving) {
 }
 
 async function sendFile(file) {
+    if (!sharedKey) {
+        updateChatStatus("Ключи шифрования ещё не согласованы");
+        return;
+    }
     if (planBActive) {
-        updateChatStatus(
-            "В Plan B пока доступен только текстовый чат. Файлы требуют P2P.",
-        );
+        await sendFilePlanB(file);
         return;
     }
     if (!dataChannel || dataChannel.readyState !== "open") {
         updateChatStatus("Соединение ещё не установлено");
-        return;
-    }
-    if (!sharedKey) {
-        updateChatStatus("Ключи шифрования ещё не согласованы");
         return;
     }
 
@@ -1154,6 +1155,155 @@ async function sendFileJson(file) {
     updateChatStatus("");
 }
 
+async function sendFilePlanB(file) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        updateChatStatus("Plan B недоступен: нет подключения к серверу");
+        return;
+    }
+
+    fileTransferProgressElement = document.createElement("div");
+    fileTransferProgressElement.className = "file-progress-container";
+    fileTransferProgressElement.innerHTML = `
+        <div class="file-progress-bar"><div class="file-progress-fill" id="fileProgressFill"></div></div>
+        <div class="file-progress-info" id="fileProgressInfo">0%</div>
+        <button class="file-progress-cancel" id="cancelFileTransfer">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </button>
+    `;
+    document
+        .querySelector(".message-input-wrapper")
+        .before(fileTransferProgressElement);
+
+    const fileId = crypto.randomUUID();
+    let cancelled = false;
+    const cancelHandler = () => {
+        cancelled = true;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+                JSON.stringify({
+                    type: "relay_message",
+                    data: {
+                        to: peerId,
+                        payload: { mode: "file_cancel", fileId },
+                    },
+                }),
+            );
+        }
+        if (fileTransferProgressElement) fileTransferProgressElement.remove();
+        updateChatStatus("передача файла отменена");
+    };
+    document
+        .getElementById("cancelFileTransfer")
+        .addEventListener("click", cancelHandler);
+    currentFileTransfer = { cancel: cancelHandler };
+
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const fileData = await file.arrayBuffer();
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        sharedKey,
+        fileData,
+    );
+    const isImage = isImageFile(file.type);
+    const data = new Uint8Array(encrypted);
+
+    ws.send(
+        JSON.stringify({
+            type: "relay_message",
+            data: {
+                to: peerId,
+                payload: {
+                    mode: "file_metadata",
+                    fileId,
+                    name: file.name,
+                    size: data.length,
+                    iv: Array.from(iv),
+                    mimeType: file.type || "application/octet-stream",
+                    isImage,
+                    transport: "plan_b",
+                },
+            },
+        }),
+    );
+
+    let offset = 0;
+    while (offset < data.length && !cancelled) {
+        const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
+        const chunkBase64 = btoa(String.fromCharCode(...chunk));
+        ws.send(
+            JSON.stringify({
+                type: "relay_message",
+                data: {
+                    to: peerId,
+                    payload: {
+                        mode: "file_chunk",
+                        fileId,
+                        offset,
+                        data: chunkBase64,
+                    },
+                },
+            }),
+        );
+        offset += chunk.length;
+        const progress = Math.round((offset / data.length) * 100);
+        const progressFill = document.getElementById("fileProgressFill");
+        const progressInfo = document.getElementById("fileProgressInfo");
+        if (progressFill) progressFill.style.width = `${progress}%`;
+        if (progressInfo)
+            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB`;
+        updateChatStatus(`📤 ${progress}%`);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    if (cancelled) {
+        messages.push({
+            system: true,
+            text: "📤 Отправка файла отменена",
+            time: new Date().toLocaleTimeString("ru-RU", {
+                hour: "2-digit",
+                minute: "2-digit",
+            }),
+        });
+        renderMessages();
+    } else {
+        ws.send(
+            JSON.stringify({
+                type: "relay_message",
+                data: {
+                    to: peerId,
+                    payload: {
+                        mode: "file_end",
+                        fileId,
+                    },
+                },
+            }),
+        );
+        const originalBlob = new Blob([fileData], { type: file.type });
+        const url = URL.createObjectURL(originalBlob);
+        const messageType = isImage ? "image" : "file";
+        messages.push({
+            from: "me",
+            text: file.name,
+            size: file.size,
+            type: messageType,
+            url,
+            isImage,
+            time: new Date().toLocaleTimeString("ru-RU", {
+                hour: "2-digit",
+                minute: "2-digit",
+            }),
+        });
+        renderMessages();
+    }
+
+    if (fileTransferProgressElement) fileTransferProgressElement.remove();
+    currentFileTransfer = null;
+    updateChatStatus("");
+}
+
 // ========== ОСТАЛЬНЫЕ ФУНКЦИИ (отправка сообщений, рендер, статус) ==========
 async function sendMessage() {
     const input = document.getElementById("messageInput");
@@ -1290,25 +1440,43 @@ function renderMessages() {
                 return `
                 <div class="message ${m.from} image" data-message-id="${m.id || ""}" data-image-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
                     ${m.url ? `<img src="${m.url}" alt="${escapeHtml(m.text)}" class="chat-image" />` : ""}
-                    <div class="file-name">${escapeHtml(m.text)}</div>
-                    <div class="file-size">${formatFileSize(m.size)}</div>
-                    <span class="message-time">${m.time}</span>
+                    <div>
+                        <div class="file-name">${escapeHtml(m.text)}</div>
+                        <div class="file-size">${formatFileSize(m.size)}</div>
+                        <span class="message-time">${m.time}</span>
+                    </div>
                 </div>
             `;
             }
             if (m.type === "file") {
                 return `
-                <div class="message ${m.from} file" data-message-id="${m.id}" data-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
-                    <div class="file-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 19.5H15m-6-15h3.75M15 10.5h3.75m-3.75 3.75H9.75m3.75-3.75H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125H18.375c.621 0 1.125-.504 1.125-1.125V11.25c0-.621-.504-1.125-1.125-1.125h-3.75m-4.5-3.75h3.75M9 5.625v3.75m3.5-3.75v.75m-6 0v3.75m3.75-6H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25c0-.621-.504-1.125-1.125-1.125h-3.75m-4.5-3.75H9.75m3.75 3.75H9.75" />
-                        </svg>
+                <div class="message ${m.from} file" 
+                    data-message-id="${m.id}" 
+                    data-url="${m.url || ""}" 
+                    data-original-filename="${escapeAttr(m.text)}"
+                    style="display: flex; align-items: stretch; gap: 6px;">
+                    
+                    <!-- Иконка слева, растягивается на всю высоту -->
+                    <div class="file-icon"> 
+                        <svg width="24px" height="24px" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="none">
+                            <path fill="#ffffff" fill-rule="evenodd" d="M4 1a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V7.414A2 2 0 0017.414 6L13 1.586A2 2 0 0011.586 1H4zm6.5 2H4v14h12V9.5h-3.5a2 2 0 01-2-2V3zM16 7.5h-3.5V3.914l3.5 3.5V7.5z"/>
+                        </svg> 
                     </div>
-                    <div class="file-name">
-                        ${m.url && !m.isImage ? `<a href="#" class="file-download-link" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>` : escapeHtml(m.text)}
+                    
+                    <!-- Правый блок: имя и размер сверху, время снизу справа -->
+                    <div>
+                        <div>
+                            <div class="file-name">
+                                ${
+                                    m.url && !m.isImage
+                                        ? `<a href="#" class="file-download-link" style="color: #3b82f6; text-decoration: none;" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>`
+                                        : escapeHtml(m.text)
+                                }
+                            </div>
+                            <div class="file-size">${formatFileSize(m.size)}</div>
+                        </div>
+                        <div class="message-time" style="flex-direction: row-reverse;">${m.time}</div>
                     </div>
-                    <div class="file-size">${formatFileSize(m.size)}</div>
-                    <span class="message-time">${m.time}</span>
                 </div>
             `;
             }
@@ -1445,11 +1613,60 @@ window.handleWebRTCMessage = async function (msg) {
         try {
             activatePlanBFromRemote();
             const payload = msg.data.payload;
+            if (payload.mode === "file_metadata") {
+                planBReceivingFiles[payload.fileId] = {
+                    fileId: payload.fileId,
+                    name: payload.name,
+                    size: payload.size,
+                    iv: new Uint8Array(payload.iv),
+                    mimeType: payload.mimeType,
+                    chunks: {},
+                    received: 0,
+                    isImage: payload.isImage,
+                };
+                addSystemMessage(
+                    `📥 Получение файла через Plan B: ${payload.name}`,
+                );
+                updateChatStatus("📥 0%");
+                return;
+            }
+
+            if (payload.mode === "file_chunk") {
+                const receiving = planBReceivingFiles[payload.fileId];
+                if (!receiving || !payload.data) return;
+                const chunk = Uint8Array.from(atob(payload.data), (c) =>
+                    c.charCodeAt(0),
+                );
+                receiving.chunks[payload.offset] = chunk;
+                receiving.received += chunk.length;
+                const progress = Math.round(
+                    (receiving.received / receiving.size) * 100,
+                );
+                updateChatStatus(`📥 ${progress}%`);
+                return;
+            }
+
+            if (payload.mode === "file_end") {
+                const receiving = planBReceivingFiles[payload.fileId];
+                if (!receiving) return;
+                await finalizeJsonFileReceive(receiving);
+                delete planBReceivingFiles[payload.fileId];
+                updateChatStatus("");
+                addSystemMessage("✅ Файл получен");
+                return;
+            }
+
+            if (payload.mode === "file_cancel") {
+                delete planBReceivingFiles[payload.fileId];
+                updateChatStatus("");
+                addSystemMessage("📤 Отправка файла отменена");
+                return;
+            }
             let text = "";
 
             if (payload.mode === "plain") {
                 text = payload.text || "";
-            } else {
+            } else if (payload.mode === "encrypted") {
                 if (!sharedKey) {
                     requestPeerPublicKey("relay_message_without_key");
                     console.warn(
@@ -1468,6 +1685,12 @@ window.handleWebRTCMessage = async function (msg) {
                     encrypted,
                 );
                 text = new TextDecoder().decode(decrypted);
+            } else {
+                console.warn(
+                    "[PLAN-B] Неизвестный режим relay_message:",
+                    payload.mode,
+                );
+                return;
             }
 
             const messageId = crypto.randomUUID();
@@ -1546,6 +1769,12 @@ window._exitChatInternal = function () {
     pc = null;
     dataChannel = null;
     fileChannel = null;
+    if (fileTransferProgressElement) {
+        fileTransferProgressElement.remove();
+        fileTransferProgressElement = null;
+    }
+    currentFileTransfer = null;
+    planBReceivingFiles = {};
     binaryFileSupported = false;
     connectionAttempts = 0;
     forceTurn = true;
