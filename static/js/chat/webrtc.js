@@ -12,6 +12,11 @@ let connectionTimeout = null;
 let connectionAttempts = 0;
 const MAX_TURN_ATTEMPTS = 3;
 let forceTurn = true;
+let usingTurn = false;
+let localTransportState = null;
+let remoteTransportState = null;
+let lastLocalTransportSignature = "";
+let lastRemoteTransportSignature = "";
 let pendingRemoteCandidates = [];
 let turnProbePromise = null;
 let turnProbeCachedAt = 0;
@@ -74,20 +79,79 @@ function resetConnectionReadiness() {
         dataOpen: false,
         keyReady: false,
     };
+    localTransportState = null;
+    remoteTransportState = null;
+    lastLocalTransportSignature = "";
+    lastRemoteTransportSignature = "";
+}
+
+function buildTransportState(overrides = {}) {
+    const baseMode = planBActive
+        ? "plan_b"
+        : usingTurn
+          ? "turn+stun"
+          : "stun_only";
+    return {
+        mode: baseMode,
+        planBActive,
+        usingTurn,
+        iceState: pc?.iceConnectionState || "new",
+        dataChannelState: dataChannel?.readyState || "closed",
+        ...overrides,
+    };
+}
+
+function transportSignature(state) {
+    if (!state) return "";
+    return `${state.mode}|${state.planBActive}|${state.usingTurn}|${state.iceState}|${state.dataChannelState}`;
+}
+
+function transportLabel(state) {
+    if (!state) return "неизвестно";
+    if (state.mode === "plan_b") return "Plan B (через сервер)";
+    if (state.mode === "turn+stun") return "P2P TURN+STUN";
+    return "P2P STUN-only";
+}
+
+function announceTransportState(state, isLocal = true) {
+    const signature = transportSignature(state);
+    if (isLocal) {
+        if (signature === lastLocalTransportSignature) return;
+        lastLocalTransportSignature = signature;
+        addSystemMessage(`Вы используете: ${transportLabel(state)}`);
+        return;
+    }
+
+    if (signature === lastRemoteTransportSignature) return;
+    lastRemoteTransportSignature = signature;
+    const name = peerNickname || "Собеседник";
+    addSystemMessage(`${name} использует: ${transportLabel(state)}`);
+}
+
+function syncTransportState(reason = "state_update", announce = true) {
+    localTransportState = buildTransportState();
+    if (announce) {
+        announceTransportState(localTransportState, true);
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return;
+
+    ws.send(
+        JSON.stringify({
+            type: "transport_state",
+            data: { to: peerId, reason, state: localTransportState },
+        }),
+    );
 }
 
 function evaluateConnectionReady() {
     const fullyReady =
-        rtcState.iceConnected &&
-        rtcState.dataOpen &&
-        rtcState.keyReady &&
-        localReadySent &&
-        remoteReadyReceived;
+        rtcState.iceConnected && rtcState.dataOpen && rtcState.keyReady;
 
     if (fullyReady) {
         planBActive = false;
         setConnectionOverlayVisible(false);
         updateChatStatus("");
+        syncTransportState("p2p_ready");
         if (!connectionReadyShown) {
             addSystemMessage("Защищённое соединение установлено");
             connectionReadyShown = true;
@@ -109,6 +173,7 @@ function activatePlanB() {
     addSystemMessage(
         "P2P не установился за 5 секунд — переключились на Plan B через сервер.",
     );
+    syncTransportState("plan_b_activated");
     if (!sharedKey) {
         requestPeerPublicKey("plan_b_activated");
         clearTimeout(pendingPlanBKeyRetry);
@@ -117,6 +182,21 @@ function activatePlanB() {
                 requestPeerPublicKey("plan_b_retry");
             }
         }, 1500);
+    }
+}
+
+function activatePlanBFromRemote() {
+    if (planBActive) return;
+    planBActive = true;
+    clearTimeout(connectionTimeout);
+    setConnectionOverlayVisible(false);
+    updateChatStatus("Plan B: собеседник пишет через серверный канал");
+    addSystemMessage(
+        "Собеседник переключился на Plan B — продолжаем чат через серверный канал.",
+    );
+    syncTransportState("plan_b_detected_from_remote");
+    if (!sharedKey) {
+        requestPeerPublicKey("plan_b_from_remote");
     }
 }
 
@@ -217,6 +297,7 @@ let fileChannelReady = false;
 
 async function getIceServers() {
     try {
+        usingTurn = false;
         if (!forceTurn) {
             console.warn("⚠️ Используем только STUN (fallback)");
             return [...DEFAULT_STUN_SERVERS];
@@ -243,11 +324,15 @@ async function getIceServers() {
             return [...DEFAULT_STUN_SERVERS];
         }
 
-        console.log("✅ Используем TURN (приоритет)");
-        return turnIceServers;
+        usingTurn = true;
+        console.log("✅ TURN доступен: запускаем ICE с TURN + STUN");
+        syncTransportState("turn_and_stun_selected", false);
+        return [...turnIceServers, ...DEFAULT_STUN_SERVERS];
     } catch (err) {
         console.warn("❌ TURN недоступен → fallback на STUN");
         forceTurn = false;
+        usingTurn = false;
+        syncTransportState("stun_only_selected", false);
 
         return [...DEFAULT_STUN_SERVERS];
     }
@@ -278,14 +363,11 @@ window.startChat = async function (data) {
 
     setConnectionOverlayVisible(true, "Устанавливаем защищённое соединение...");
     updateChatStatus("Устанавливается защищённое соединение...");
+    syncTransportState("chat_started");
     clearTimeout(planBTimer);
     planBTimer = setTimeout(() => {
         const ready =
-            rtcState.iceConnected &&
-            rtcState.dataOpen &&
-            rtcState.keyReady &&
-            localReadySent &&
-            remoteReadyReceived;
+            rtcState.iceConnected && rtcState.dataOpen && rtcState.keyReady;
         if (!ready) {
             activatePlanB();
         }
@@ -316,13 +398,15 @@ window.startChat = async function (data) {
     pc = new RTCPeerConnection({
         iceServers,
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: forceTurn ? "relay" : "all",
+        iceTransportPolicy: "all",
         bundlePolicy: "max-bundle",
         rtcpMuxPolicy: "require",
+        // iceTransportPolicy: forceTurn ? "relay" : "all",
     });
 
     pc.oniceconnectionstatechange = () => {
         console.log("[ICE] iceConnectionState:", pc.iceConnectionState);
+        syncTransportState("ice_state_changed", false);
         switch (pc.iceConnectionState) {
             case "checking":
                 updateChatStatus("Поиск пути для соединения...");
@@ -356,7 +440,12 @@ window.startChat = async function (data) {
                 console.warn(`❌ ICE failed (попытка ${connectionAttempts})`);
 
                 if (connectionAttempts < MAX_TURN_ATTEMPTS && forceTurn) {
-                    console.log("🔄 Повторная попытка через TURN...");
+                    const retryMode = usingTurn
+                        ? "TURN + STUN"
+                        : "STUN-only (TURN не подтверждён)";
+                    console.log(
+                        `🔄 Повторная попытка ICE (${retryMode}, попытка ${connectionAttempts + 1})...`,
+                    );
 
                     setTimeout(() => {
                         window.startChat({
@@ -491,6 +580,7 @@ function setupDataChannel() {
         rtcState.dataOpen = true;
         trySendReady();
         evaluateConnectionReady();
+        syncTransportState("data_channel_opened");
         if (!sharedKey)
             addSystemMessage(
                 "Ключи шифрования ещё не согласованы. Ожидаем обмен ключами...",
@@ -501,6 +591,7 @@ function setupDataChannel() {
         rtcState.dataOpen = false;
         addSystemMessage("Собеседник отключился");
         setConnectionOverlayVisible(true, "Собеседник отключился");
+        syncTransportState("data_channel_closed");
     };
     dataChannel.onerror = (err) => {
         console.error("[DC] Ошибка:", err);
@@ -1352,6 +1443,7 @@ window.handleWebRTCMessage = async function (msg) {
         }
     } else if (msg.type === "relay_message") {
         try {
+            activatePlanBFromRemote();
             const payload = msg.data.payload;
             let text = "";
 
@@ -1416,9 +1508,14 @@ window.handleWebRTCMessage = async function (msg) {
             trySendReady();
             evaluateConnectionReady();
             addSystemMessage("Ключи шифрования согласованы");
+            document.getElementById("connectionOverlay").style.display = "none";
+            syncTransportState("shared_key_ready", false);
         } catch (err) {
             console.error("[KEY] Error deriving shared key:", err);
         }
+    } else if (msg.type === "transport_state") {
+        remoteTransportState = msg.data?.state || null;
+        announceTransportState(remoteTransportState, false);
     } else if (msg.type === "peer_disconnected") {
         addSystemMessage("Собеседник покинул чат");
         setTimeout(() => {
@@ -1452,6 +1549,7 @@ window._exitChatInternal = function () {
     binaryFileSupported = false;
     connectionAttempts = 0;
     forceTurn = true;
+    usingTurn = false;
     const chatDiv = document.getElementById("chat");
     const lobbyDiv = document.getElementById("lobby");
     if (chatDiv) chatDiv.style.display = "none";

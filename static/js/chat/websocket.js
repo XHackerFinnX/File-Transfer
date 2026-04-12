@@ -67,6 +67,7 @@ function connectWebSocket() {
                 "public_key",
                 "public_key_request",
                 "relay_message",
+                "transport_state",
                 "peer_disconnected",
             ].includes(msg.type)
         ) {

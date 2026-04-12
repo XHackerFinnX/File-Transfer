@@ -153,7 +153,7 @@ async def lobby_ws(websocket: WebSocket):
                 clients[client_id]["room_id"] = None
                 broadcast_users()
 
-            elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message"]:
+            elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"]:
                 target_id = payload.get("to")
                 if target_id in clients:
                     sender_room_id = clients[client_id].get("room_id")
