@@ -153,11 +153,33 @@ async def lobby_ws(websocket: WebSocket):
                 clients[client_id]["room_id"] = None
                 broadcast_users()
 
-            elif msg_type in ["offer","answer","candidate","public_key","public_key_request"]:
+            elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message"]:
                 target_id = payload.get("to")
                 if target_id in clients:
+                    sender_room_id = clients[client_id].get("room_id")
+                    target_room_id = clients[target_id].get("room_id")
+                    if (
+                        not sender_room_id
+                        or sender_room_id != target_room_id
+                        or sender_room_id not in rooms_chat
+                    ):
+                        await safe_send_json(
+                            websocket,
+                            {
+                                "type": "request_failed",
+                                "data": {
+                                    "reason": "Невозможно отправить сообщение: нет активной общей комнаты"
+                                },
+                            },
+                        )
+                        continue
                     payload["from"] = client_id
                     await safe_send_json(clients[target_id]["ws"], data)
+                else:
+                    await safe_send_json(websocket, {
+                        "type": "request_failed",
+                        "data": {"reason": "Собеседник недоступен"}
+                    })
 
     except WebSocketDisconnect:
         print(f"[CHAT] Клиент отключился: {client_id[:8]}...")

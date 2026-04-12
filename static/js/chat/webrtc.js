@@ -34,6 +34,21 @@ let rtcState = {
     keyReady: false,
 };
 
+let pendingPlanBKeyRetry = null;
+
+function requestPeerPublicKey(reason = "manual") {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!peerId) return;
+    if (!myKeyPair) return;
+    ws.send(
+        JSON.stringify({
+            type: "public_key_request",
+            data: { to: peerId },
+        }),
+    );
+    console.log(`[KEY] public_key_request отправлен (${reason})`);
+}
+
 function setConnectionOverlayVisible(visible, text) {
     const overlay = document.getElementById("connectionOverlay");
     if (!overlay) return;
@@ -48,6 +63,8 @@ function setConnectionOverlayVisible(visible, text) {
 function resetConnectionReadiness() {
     clearTimeout(planBTimer);
     planBTimer = null;
+    clearTimeout(pendingPlanBKeyRetry);
+    pendingPlanBKeyRetry = null;
     localReadySent = false;
     remoteReadyReceived = false;
     connectionReadyShown = false;
@@ -92,6 +109,15 @@ function activatePlanB() {
     addSystemMessage(
         "P2P не установился за 5 секунд — переключились на Plan B через сервер.",
     );
+    if (!sharedKey) {
+        requestPeerPublicKey("plan_b_activated");
+        clearTimeout(pendingPlanBKeyRetry);
+        pendingPlanBKeyRetry = setTimeout(() => {
+            if (!sharedKey && planBActive) {
+                requestPeerPublicKey("plan_b_retry");
+            }
+        }, 1500);
+    }
 }
 
 function trySendReady() {
@@ -317,6 +343,12 @@ window.startChat = async function (data) {
                 }
                 break;
             case "failed":
+                if (planBActive) {
+                    console.warn(
+                        "⚠️ ICE failed, но Plan B уже активен — продолжаем через сервер",
+                    );
+                    break;
+                }
                 rtcState.iceConnected = false;
                 clearTimeout(connectionTimeout);
 
@@ -352,6 +384,12 @@ window.startChat = async function (data) {
                 updateChatStatus("Переключаемся на резервное соединение...");
                 break;
             case "disconnected":
+                if (planBActive) {
+                    console.warn(
+                        "⚠️ ICE disconnected, но Plan B активен — не считаем это потерей чата",
+                    );
+                    break;
+                }
                 rtcState.iceConnected = false;
                 updateChatStatus("Соединение потеряно");
                 setConnectionOverlayVisible(true, "Соединение потеряно...");
@@ -361,8 +399,16 @@ window.startChat = async function (data) {
                 break;
         }
     };
-    pc.onconnectionstatechange = () =>
+    pc.onconnectionstatechange = () => {
         console.log("[PC] connectionState:", pc.connectionState);
+        if (planBActive && pc.connectionState === "failed") {
+            console.warn(
+                "⚠️ RTCPeerConnection failed, но Plan B активен — чат продолжает работать через WebSocket",
+            );
+            setConnectionOverlayVisible(false);
+            updateChatStatus("Plan B: серверный защищённый канал активен");
+        }
+    };
     pc.onicegatheringstatechange = () =>
         console.log("[ICE] gatheringState:", pc.iceGatheringState);
     pc.onicecandidate = (e) => {
@@ -1312,7 +1358,13 @@ window.handleWebRTCMessage = async function (msg) {
             if (payload.mode === "plain") {
                 text = payload.text || "";
             } else {
-                if (!sharedKey) return;
+                if (!sharedKey) {
+                    requestPeerPublicKey("relay_message_without_key");
+                    console.warn(
+                        "[PLAN-B] Получено encrypted relay без sharedKey, запрошен повтор public_key",
+                    );
+                    return;
+                }
                 const iv = new Uint8Array(payload.iv);
                 const encrypted = Uint8Array.from(
                     atob(payload.encrypted),
