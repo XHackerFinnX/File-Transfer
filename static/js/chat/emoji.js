@@ -561,6 +561,9 @@ function initEmojiPicker() {
 
     messageInput.addEventListener("input", () => {
         adjustTextareaHeight(messageInput);
+        if (typeof window.handleLocalTypingInput === "function") {
+            window.handleLocalTypingInput(messageInput.value);
+        }
     });
 
     messageInput.addEventListener("keydown", (e) => {
@@ -569,6 +572,9 @@ function initEmojiPicker() {
             if (typeof window.sendMessage === "function") {
                 window.sendMessage();
             }
+            if (typeof window.handleLocalTypingInput === "function") {
+                window.handleLocalTypingInput("");
+            }
             messageInput.style.height = "34px";
         }
     });
@@ -576,6 +582,9 @@ function initEmojiPicker() {
     sendBtn?.addEventListener("click", () => {
         if (typeof window.sendMessage === "function") {
             window.sendMessage();
+        }
+        if (typeof window.handleLocalTypingInput === "function") {
+            window.handleLocalTypingInput("");
         }
         messageInput.style.height = "34px";
     });

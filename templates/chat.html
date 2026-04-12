@@ -210,7 +210,7 @@
                         <div class="chat-peer-name" id="chatTitle">Чат</div>
                         <div class="chat-peer-status">
                             <span class="status-dot"></span>
-                            В сети
+                            <span id="chatPeerStatusText">В сети</span>
                         </div>
                     </div>
                     <button
@@ -333,7 +333,11 @@
                     </button>
                 </div>
 
-                <div id="statusChat" class="chat-status"></div>
+                <div
+                    id="statusChat"
+                    class="chat-status"
+                    style="display: none"
+                ></div>
             </div>
         </div>
 

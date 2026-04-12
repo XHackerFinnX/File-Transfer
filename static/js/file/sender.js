@@ -10,6 +10,11 @@ const linkEl = document.getElementById("link");
 const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
 
+function formatSpeed(startedAt, sentBytes) {
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    if (elapsedSec <= 0) return "0.00 MB/с";
+    return `${(sentBytes / 1024 / 1024 / elapsedSec).toFixed(2)} MB/с`;
+}
 // ==================== TURN Credentials ====================
 async function getTurnServers() {
     try {
@@ -206,6 +211,7 @@ async function create() {
 
         let offset = 0;
         const data = new Uint8Array(encrypted);
+        const startedAt = Date.now();
 
         while (offset < data.length) {
             while (ch.bufferedAmount > 1_000_000)
@@ -216,6 +222,7 @@ async function create() {
             offset += CHUNK;
 
             bar.style.width = Math.round((offset / data.length) * 100) + "%";
+            statusEl.innerText = `Шифруем и передаём файл... ${formatSpeed(startedAt, offset)}`;
         }
 
         ch.send("EOF");

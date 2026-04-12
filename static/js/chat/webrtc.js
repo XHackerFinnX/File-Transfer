@@ -40,6 +40,9 @@ let rtcState = {
 };
 
 let pendingPlanBKeyRetry = null;
+let typingStopTimeout = null;
+let peerActivityTimeout = null;
+const pendingReadReceipts = new Set();
 
 function requestPeerPublicKey(reason = "manual") {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -84,6 +87,9 @@ function resetConnectionReadiness() {
     lastLocalTransportSignature = "";
     lastRemoteTransportSignature = "";
     planBReceivingFiles = {};
+    clearTimeout(typingStopTimeout);
+    clearTimeout(peerActivityTimeout);
+    pendingReadReceipts.clear();
 }
 
 function buildTransportState(overrides = {}) {
@@ -345,6 +351,101 @@ function isImageFile(mimeType) {
     return mimeType.startsWith("image/");
 }
 
+function getTransferSpeedLabel(startedAt, transferredBytes) {
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    if (elapsedSec <= 0) return "0.00 MB/с";
+    const mbPerSec = transferredBytes / 1024 / 1024 / elapsedSec;
+    return `${mbPerSec.toFixed(2)} MB/с`;
+}
+
+function setPeerHeaderStatus(text) {
+    const statusEl = document.getElementById("chatPeerStatusText");
+    if (statusEl) statusEl.textContent = text || "В сети";
+}
+
+function canMarkMessagesAsRead() {
+    const chat = document.getElementById("chat");
+    return !document.hidden && chat && chat.style.display === "flex";
+}
+
+function sendRealtimeSignal(payload) {
+    if (planBActive) {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return;
+        const relayPayload =
+            payload.type === "read_receipt"
+                ? { mode: "read_receipt", messageId: payload.messageId }
+                : payload;
+        ws.send(
+            JSON.stringify({
+                type: "relay_message",
+                data: { to: peerId, payload: relayPayload },
+            }),
+        );
+        return;
+    }
+    if (!dataChannel || dataChannel.readyState !== "open") return;
+    dataChannel.send(JSON.stringify(payload));
+}
+
+function flushReadReceipts() {
+    if (!canMarkMessagesAsRead() || pendingReadReceipts.size === 0) return;
+    for (const messageId of [...pendingReadReceipts]) {
+        sendRealtimeSignal({ type: "read_receipt", messageId });
+        pendingReadReceipts.delete(messageId);
+    }
+}
+
+function queueReadReceipt(messageId) {
+    if (!messageId) return;
+    pendingReadReceipts.add(messageId);
+    flushReadReceipts();
+}
+
+function markMessageAsRead(messageId) {
+    const message = messages.find((m) => m.id === messageId && m.from === "me");
+    if (!message) return;
+    message.read = true;
+    renderMessages();
+}
+
+function showPeerActivityStatus(activity) {
+    const statusByActivity = {
+        typing: `${peerNickname || "Собеседник"} печатает...`,
+        sending_file: `${peerNickname || "Собеседник"} отправляет файл...`,
+        sending_image: `${peerNickname || "Собеседник"} отправляет изображение...`,
+    };
+    setPeerHeaderStatus(statusByActivity[activity] || "В сети");
+    clearTimeout(peerActivityTimeout);
+    peerActivityTimeout = setTimeout(() => setPeerHeaderStatus("В сети"), 2000);
+}
+
+function clearPeerActivityStatus() {
+    clearTimeout(peerActivityTimeout);
+    setPeerHeaderStatus("В сети");
+}
+
+function sendActivitySignal(activity, active = true) {
+    if (!peerId) return;
+    if (planBActive) {
+        sendRealtimeSignal({ mode: "activity", activity, active });
+        return;
+    }
+    sendRealtimeSignal({ type: "activity", activity, active });
+}
+
+window.handleLocalTypingInput = function (text) {
+    if (!peerId) return;
+    if (text && text.trim()) {
+        sendActivitySignal("typing", true);
+        clearTimeout(typingStopTimeout);
+        typingStopTimeout = setTimeout(() => {
+            sendActivitySignal("typing", false);
+        }, 1200);
+        return;
+    }
+    sendActivitySignal("typing", false);
+};
+
 // ========== ЗАПУСК ЧАТА ==========
 window.startChat = async function (data) {
     if (pc) {
@@ -363,6 +464,7 @@ window.startChat = async function (data) {
     pendingRemoteCandidates = [];
     resetConnectionReadiness();
     messages = [];
+    flushReadReceipts();
 
     setConnectionOverlayVisible(true, "Устанавливаем защищённое соединение...");
     updateChatStatus("Устанавливается защищённое соединение...");
@@ -655,6 +757,17 @@ function setupDataChannel() {
                 return;
             }
 
+            if (data.type === "activity") {
+                if (data.active) showPeerActivityStatus(data.activity);
+                else clearPeerActivityStatus();
+                return;
+            }
+
+            if (data.type === "read_receipt") {
+                markMessageAsRead(data.messageId);
+                return;
+            }
+
             if (
                 data.type === "file_chunk" &&
                 window.receivingFile &&
@@ -724,7 +837,7 @@ function setupDataChannel() {
                     encrypted,
                 );
                 const text = new TextDecoder().decode(decrypted);
-                const messageId = crypto.randomUUID();
+                const messageId = data.messageId || crypto.randomUUID();
                 messages.push({
                     id: messageId,
                     from: "other",
@@ -737,6 +850,7 @@ function setupDataChannel() {
                     senderName: peerNickname,
                 });
                 renderMessages();
+                queueReadReceipt(messageId);
             } else if (data.type === "typing") {
                 showTypingIndicator();
             }
@@ -878,36 +992,45 @@ async function sendFile(file) {
         updateChatStatus("Ключи шифрования ещё не согласованы");
         return;
     }
-    if (planBActive) {
-        await sendFilePlanB(file);
-        return;
-    }
-    if (!dataChannel || dataChannel.readyState !== "open") {
+    if (!planBActive && (!dataChannel || dataChannel.readyState !== "open")) {
         updateChatStatus("Соединение ещё не установлено");
         return;
     }
+    sendActivitySignal(
+        isImageFile(file.type) ? "sending_image" : "sending_file",
+        true,
+    );
+    try {
+        if (planBActive) {
+            await sendFilePlanB(file);
+            return;
+        }
 
-    if (
-        binaryFileSupported &&
-        fileChannel &&
-        fileChannel.readyState === "open" &&
-        fileChannelReady
-    ) {
-        try {
-            await sendFileBinary(file);
-        } catch (err) {
-            console.error(
-                "[FILE] Ошибка при бинарной отправке, переключаемся на JSON:",
-                err,
+        if (
+            binaryFileSupported &&
+            fileChannel &&
+            fileChannel.readyState === "open" &&
+            fileChannelReady
+        ) {
+            try {
+                await sendFileBinary(file);
+            } catch (err) {
+                console.error(
+                    "[FILE] Ошибка при бинарной отправке, переключаемся на JSON:",
+                    err,
+                );
+                binaryFileSupported = false;
+                await sendFileJson(file);
+            }
+        } else {
+            console.log(
+                "[FILE] Бинарный канал недоступен, используем JSON-режим (fallback)",
             );
-            binaryFileSupported = false;
             await sendFileJson(file);
         }
-    } else {
-        console.log(
-            "[FILE] Бинарный канал недоступен, используем JSON-режим (fallback)",
-        );
-        await sendFileJson(file);
+    } finally {
+        sendActivitySignal("sending_file", false);
+        sendActivitySignal("sending_image", false);
     }
 }
 
@@ -972,6 +1095,7 @@ async function sendFileBinary(file) {
 
     const data = new Uint8Array(encrypted);
     let offset = 0;
+    const startedAt = Date.now();
 
     while (offset < data.length && !cancelled) {
         // Ждём, пока буфер не переполнится
@@ -996,7 +1120,7 @@ async function sendFileBinary(file) {
         const progressInfo = document.getElementById("fileProgressInfo");
         if (progressFill) progressFill.style.width = `${progress}%`;
         if (progressInfo)
-            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB`;
+            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`;
         updateChatStatus(`📤 ${progress}%`);
     }
 
@@ -1093,6 +1217,7 @@ async function sendFileJson(file) {
     const CHUNK = 64 * 1024;
     const data = new Uint8Array(encrypted);
     let offset = 0;
+    const startedAt = Date.now();
 
     while (offset < data.length && !cancelled) {
         while (dataChannel.bufferedAmount > 1_000_000 && !cancelled) {
@@ -1115,7 +1240,7 @@ async function sendFileJson(file) {
         const progressInfo = document.getElementById("fileProgressInfo");
         if (progressFill) progressFill.style.width = `${progress}%`;
         if (progressInfo)
-            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB`;
+            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`;
         updateChatStatus(`📤 ${progress}%`);
     }
 
@@ -1229,6 +1354,7 @@ async function sendFilePlanB(file) {
     );
 
     let offset = 0;
+    const startedAt = Date.now();
     while (offset < data.length && !cancelled) {
         const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
         const chunkBase64 = btoa(String.fromCharCode(...chunk));
@@ -1252,7 +1378,7 @@ async function sendFilePlanB(file) {
         const progressInfo = document.getElementById("fileProgressInfo");
         if (progressFill) progressFill.style.width = `${progress}%`;
         if (progressInfo)
-            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB`;
+            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`;
         updateChatStatus(`📤 ${progress}%`);
 
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1313,40 +1439,13 @@ async function sendMessage() {
     const quote = document.querySelector(".message-quote");
     let replyToId = quote ? quote.dataset.replyToId : null;
 
-    // if (!dataChannel || dataChannel.readyState !== "open") {
-    //     updateChatStatus("Соединение ещё не установлено");
-    //     return;
-    // }
     if (!sharedKey && !planBActive) {
         updateChatStatus("Ключи шифрования ещё не согласованы");
         return;
     }
 
     try {
-        // const iv = crypto.getRandomValues(new Uint8Array(12));
-        // const encoded = new TextEncoder().encode(text);
-        // const encrypted = await crypto.subtle.encrypt(
-        //     { name: "AES-GCM", iv },
-        //     sharedKey,
-        //     encoded,
-        // );
-        // dataChannel.send(
-        //     JSON.stringify({
-        //         type: "message",
-        //         iv: Array.from(iv),
-        //         encrypted: btoa(
-        //             String.fromCharCode(...new Uint8Array(encrypted)),
-        //         ),
-        //         replyTo: replyToId,
-        //     }),
-        // );
-        // const messagePayload = {
-        //     type: "message",
-        //     iv: Array.from(iv),
-        //     encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-        //     replyTo: replyToId,
-        // };
-
+        const messageId = crypto.randomUUID();
         if (planBActive) {
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 updateChatStatus(
@@ -1366,6 +1465,7 @@ async function sendMessage() {
                 );
                 messagePayload = {
                     mode: "encrypted",
+                    messageId,
                     iv: Array.from(iv),
                     encrypted: btoa(
                         String.fromCharCode(...new Uint8Array(encrypted)),
@@ -1375,6 +1475,7 @@ async function sendMessage() {
             } else {
                 messagePayload = {
                     mode: "plain",
+                    messageId,
                     text,
                     replyTo: replyToId,
                 };
@@ -1400,6 +1501,7 @@ async function sendMessage() {
             );
             const messagePayload = {
                 type: "message",
+                messageId,
                 iv: Array.from(iv),
                 encrypted: btoa(
                     String.fromCharCode(...new Uint8Array(encrypted)),
@@ -1408,11 +1510,12 @@ async function sendMessage() {
             };
             dataChannel.send(JSON.stringify(messagePayload));
         }
-        const messageId = crypto.randomUUID();
+
         messages.push({
             id: messageId,
             from: "me",
             text: text,
+            read: false,
             time: new Date().toLocaleTimeString("ru-RU", {
                 hour: "2-digit",
                 minute: "2-digit",
@@ -1422,6 +1525,7 @@ async function sendMessage() {
         });
         renderMessages();
         input.value = "";
+        window.handleLocalTypingInput("");
         if (quote) quote.remove();
     } catch (err) {
         console.error("[MSG] Error sending message:", err);
@@ -1499,7 +1603,11 @@ function renderMessages() {
             const parsedText = window.parseLinks
                 ? window.parseLinks(m.text)
                 : escapeHtml(m.text);
-            return `${quoteHtml}<div class="message ${m.from}" data-message-id="${m.id}"><span class="message-content">${parsedText}</span><span class="message-time">${m.time}</span></div>`;
+            const readMark =
+                m.from === "me"
+                    ? `<span class="message-checks ${m.read ? "read" : "delivered"}">✓✓</span>`
+                    : "";
+            return `${quoteHtml}<div class="message ${m.from}" data-message-id="${m.id}"><span class="message-content">${parsedText}</span><span class="message-time">${m.time} ${readMark}</span></div>`;
         })
         .join("");
     container.scrollTop = container.scrollHeight;
@@ -1526,24 +1634,15 @@ function addSystemMessage(text) {
 }
 
 function updateChatStatus(text) {
-    const statusEl = document.getElementById("statusChat");
-    if (statusEl) {
-        statusEl.textContent = text;
-        statusEl.style.display = text ? "block" : "none";
-    }
+    setPeerHeaderStatus(text || "В сети");
 }
 
 let typingTimeout;
 function showTypingIndicator() {
-    const statusEl = document.getElementById("statusChat");
-    if (statusEl && peerNickname) {
-        statusEl.textContent = `${peerNickname} печатает...`;
-        statusEl.style.display = "block";
+    if (peerNickname) {
+        setPeerHeaderStatus(`${peerNickname} печатает...`);
         clearTimeout(typingTimeout);
-        typingTimeout = setTimeout(
-            () => (statusEl.style.display = "none"),
-            2000,
-        );
+        typingTimeout = setTimeout(() => setPeerHeaderStatus("В сети"), 2000);
     }
 }
 
@@ -1662,6 +1761,15 @@ window.handleWebRTCMessage = async function (msg) {
                 addSystemMessage("📤 Отправка файла отменена");
                 return;
             }
+            if (payload.mode === "activity") {
+                if (payload.active) showPeerActivityStatus(payload.activity);
+                else clearPeerActivityStatus();
+                return;
+            }
+            if (payload.mode === "read_receipt") {
+                markMessageAsRead(payload.messageId);
+                return;
+            }
             let text = "";
 
             if (payload.mode === "plain") {
@@ -1693,7 +1801,7 @@ window.handleWebRTCMessage = async function (msg) {
                 return;
             }
 
-            const messageId = crypto.randomUUID();
+            const messageId = payload.messageId || crypto.randomUUID();
             messages.push({
                 id: messageId,
                 from: "other",
@@ -1706,6 +1814,7 @@ window.handleWebRTCMessage = async function (msg) {
                 senderName: peerNickname,
             });
             renderMessages();
+            queueReadReceipt(messageId);
         } catch (err) {
             console.error("[PLAN-B] Ошибка relay_message:", err);
         }
@@ -1811,3 +1920,5 @@ document.addEventListener("click", (e) => {
         document.body.removeChild(a);
     }
 });
+
+document.addEventListener("visibilitychange", flushReadReceipts);

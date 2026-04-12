@@ -27,7 +27,7 @@ function connectWebSocket() {
             document.getElementById("chat").style.display = "flex";
             document.getElementById("chatTitle").textContent =
                 msg.data.title || "Мой чат";
-            const statusEl = document.getElementById("statusChat");
+            const statusEl = document.getElementById("chatPeerStatusText");
             if (statusEl)
                 statusEl.textContent =
                     "Ожидаем подключения другого пользователя...";

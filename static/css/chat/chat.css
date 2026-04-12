@@ -873,6 +873,20 @@ body::before {
     top: 3px;
 }
 
+.message-checks {
+    font-size: 11px;
+    margin-left: 4px;
+    font-weight: 600;
+}
+
+.message-checks.delivered {
+    color: #94a3b8;
+}
+
+.message-checks.read {
+    color: #38bdf8;
+}
+
 .message.me .message-time {
     color: rgba(255, 255, 255, 0.8);
 }
