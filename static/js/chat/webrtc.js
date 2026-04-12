@@ -17,6 +17,99 @@ let turnProbePromise = null;
 let turnProbeCachedAt = 0;
 let turnProbeCachedResult = false;
 const TURN_PROBE_CACHE_MS = 60_000;
+const DEFAULT_STUN_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
+];
+let localReadySent = false;
+let remoteReadyReceived = false;
+let connectionReadyShown = false;
+let planBActive = false;
+let planBTimer = null;
+let rtcState = {
+    iceConnected: false,
+    dataOpen: false,
+    keyReady: false,
+};
+
+function setConnectionOverlayVisible(visible, text) {
+    const overlay = document.getElementById("connectionOverlay");
+    if (!overlay) return;
+
+    if (text) {
+        const textEl = overlay.querySelector(".connection-overlay-text");
+        if (textEl) textEl.textContent = text;
+    }
+    overlay.classList.toggle("hidden", !visible);
+}
+
+function resetConnectionReadiness() {
+    clearTimeout(planBTimer);
+    planBTimer = null;
+    localReadySent = false;
+    remoteReadyReceived = false;
+    connectionReadyShown = false;
+    planBActive = false;
+    rtcState = {
+        iceConnected: false,
+        dataOpen: false,
+        keyReady: false,
+    };
+}
+
+function evaluateConnectionReady() {
+    const fullyReady =
+        rtcState.iceConnected &&
+        rtcState.dataOpen &&
+        rtcState.keyReady &&
+        localReadySent &&
+        remoteReadyReceived;
+
+    if (fullyReady) {
+        planBActive = false;
+        setConnectionOverlayVisible(false);
+        updateChatStatus("");
+        if (!connectionReadyShown) {
+            addSystemMessage("Защищённое соединение установлено");
+            connectionReadyShown = true;
+        }
+    } else {
+        setConnectionOverlayVisible(
+            true,
+            "Устанавливаем защищённое соединение...",
+        );
+    }
+}
+
+function activatePlanB() {
+    if (planBActive || connectionReadyShown) return;
+    planBActive = true;
+    clearTimeout(connectionTimeout);
+    setConnectionOverlayVisible(false);
+    updateChatStatus("Plan B: серверный защищённый канал активен");
+    addSystemMessage(
+        "P2P не установился за 5 секунд — переключились на Plan B через сервер.",
+    );
+}
+
+function trySendReady() {
+    if (localReadySent || !dataChannel || dataChannel.readyState !== "open") {
+        return;
+    }
+    if (!(rtcState.iceConnected && rtcState.keyReady && rtcState.dataOpen)) {
+        return;
+    }
+
+    try {
+        dataChannel.send(JSON.stringify({ type: "ready" }));
+        localReadySent = true;
+        evaluateConnectionReady();
+    } catch (err) {
+        console.warn("[READY] Не удалось отправить ready:", err);
+    }
+}
 
 async function probeTurnRelay(iceServers, timeoutMs = 8000) {
     let pc = null;
@@ -100,10 +193,7 @@ async function getIceServers() {
     try {
         if (!forceTurn) {
             console.warn("⚠️ Используем только STUN (fallback)");
-            return [
-                { urls: "stun:stun.l.google.com:19302" },
-                { urls: "stun:stun1.l.google.com:19302" },
-            ];
+            return [...DEFAULT_STUN_SERVERS];
         }
 
         const controller = new AbortController();
@@ -124,10 +214,7 @@ async function getIceServers() {
         if (!turnReady) {
             console.warn("❌ TURN не прошёл проверку relay → fallback на STUN");
             forceTurn = false;
-            return [
-                { urls: "stun:stun.l.google.com:19302" },
-                { urls: "stun:stun1.l.google.com:19302" },
-            ];
+            return [...DEFAULT_STUN_SERVERS];
         }
 
         console.log("✅ Используем TURN (приоритет)");
@@ -136,10 +223,7 @@ async function getIceServers() {
         console.warn("❌ TURN недоступен → fallback на STUN");
         forceTurn = false;
 
-        return [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-        ];
+        return [...DEFAULT_STUN_SERVERS];
     }
 }
 
@@ -163,11 +247,26 @@ window.startChat = async function (data) {
     const role = data.role;
     window.receivingFile = null;
     pendingRemoteCandidates = [];
+    resetConnectionReadiness();
     messages = [];
 
+    setConnectionOverlayVisible(true, "Устанавливаем защищённое соединение...");
     updateChatStatus("Устанавливается защищённое соединение...");
+    clearTimeout(planBTimer);
+    planBTimer = setTimeout(() => {
+        const ready =
+            rtcState.iceConnected &&
+            rtcState.dataOpen &&
+            rtcState.keyReady &&
+            localReadySent &&
+            remoteReadyReceived;
+        if (!ready) {
+            activatePlanB();
+        }
+    }, 5000);
     clearTimeout(connectionTimeout);
     connectionTimeout = setTimeout(() => {
+        if (planBActive) return;
         if (
             pc &&
             pc.iceConnectionState !== "connected" &&
@@ -175,6 +274,10 @@ window.startChat = async function (data) {
         ) {
             updateChatStatus(
                 "Соединение устанавливается долго. Проверьте интернет или попробуйте перезайти.",
+            );
+            setConnectionOverlayVisible(
+                true,
+                "Соединение устанавливается долго. Ожидаем сеть...",
             );
             addSystemMessage(
                 "Соединение не установлено за 15 секунд. Попробуйте выйти и создать новый чат.",
@@ -200,9 +303,10 @@ window.startChat = async function (data) {
                 break;
             case "connected":
             case "completed":
+                rtcState.iceConnected = true;
                 clearTimeout(connectionTimeout);
-                updateChatStatus("");
-                addSystemMessage("Защищённое соединение установлено");
+                trySendReady();
+                evaluateConnectionReady();
                 if (!sharedKey && role === "peer") {
                     ws.send(
                         JSON.stringify({
@@ -213,6 +317,7 @@ window.startChat = async function (data) {
                 }
                 break;
             case "failed":
+                rtcState.iceConnected = false;
                 clearTimeout(connectionTimeout);
 
                 connectionAttempts++;
@@ -247,7 +352,12 @@ window.startChat = async function (data) {
                 updateChatStatus("Переключаемся на резервное соединение...");
                 break;
             case "disconnected":
+                rtcState.iceConnected = false;
                 updateChatStatus("Соединение потеряно");
+                setConnectionOverlayVisible(true, "Соединение потеряно...");
+                break;
+            case "closed":
+                rtcState.iceConnected = false;
                 break;
         }
     };
@@ -326,27 +436,15 @@ window.startChat = async function (data) {
             }
         };
     }
-
-    // pc.onicecandidate = (e) => {
-    //     if (e.candidate) {
-    //         console.log(`[ICE] Кандидат (${e.candidate.type})`);
-    //         ws.send(
-    //             JSON.stringify({
-    //                 type: "candidate",
-    //                 data: { to: peerId, candidate: e.candidate },
-    //             }),
-    //         );
-    //     } else {
-    //         console.log("[ICE] Сбор кандидатов завершён");
-    //     }
-    // };
 };
 
 function setupDataChannel() {
     dataChannel.onopen = () => {
         console.log("[DC] ✅ Основной канал открыт");
         clearTimeout(connectionTimeout);
-        updateChatStatus("");
+        rtcState.dataOpen = true;
+        trySendReady();
+        evaluateConnectionReady();
         if (!sharedKey)
             addSystemMessage(
                 "Ключи шифрования ещё не согласованы. Ожидаем обмен ключами...",
@@ -354,7 +452,9 @@ function setupDataChannel() {
     };
     dataChannel.onclose = () => {
         console.log("[DC] Основной канал закрыт");
+        rtcState.dataOpen = false;
         addSystemMessage("Собеседник отключился");
+        setConnectionOverlayVisible(true, "Собеседник отключился");
     };
     dataChannel.onerror = (err) => {
         console.error("[DC] Ошибка:", err);
@@ -406,6 +506,12 @@ function setupDataChannel() {
                     addSystemMessage(`📥 Получение файла: ${data.name}`);
                     updateChatStatus(`📥 0%`);
                 }
+                return;
+            }
+
+            if (data.type === "ready") {
+                remoteReadyReceived = true;
+                evaluateConnectionReady();
                 return;
             }
 
@@ -628,6 +734,12 @@ async function finalizeBinaryFileReceive(receiving) {
 }
 
 async function sendFile(file) {
+    if (planBActive) {
+        updateChatStatus(
+            "В Plan B пока доступен только текстовый чат. Файлы требуют P2P.",
+        );
+        return;
+    }
     if (!dataChannel || dataChannel.readyState !== "open") {
         updateChatStatus("Соединение ещё не установлено");
         return;
@@ -914,33 +1026,101 @@ async function sendMessage() {
     const quote = document.querySelector(".message-quote");
     let replyToId = quote ? quote.dataset.replyToId : null;
 
-    if (!dataChannel || dataChannel.readyState !== "open") {
-        updateChatStatus("Соединение ещё не установлено");
-        return;
-    }
-    if (!sharedKey) {
+    // if (!dataChannel || dataChannel.readyState !== "open") {
+    //     updateChatStatus("Соединение ещё не установлено");
+    //     return;
+    // }
+    if (!sharedKey && !planBActive) {
         updateChatStatus("Ключи шифрования ещё не согласованы");
         return;
     }
 
     try {
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encoded = new TextEncoder().encode(text);
-        const encrypted = await crypto.subtle.encrypt(
-            { name: "AES-GCM", iv },
-            sharedKey,
-            encoded,
-        );
-        dataChannel.send(
-            JSON.stringify({
+        // const iv = crypto.getRandomValues(new Uint8Array(12));
+        // const encoded = new TextEncoder().encode(text);
+        // const encrypted = await crypto.subtle.encrypt(
+        //     { name: "AES-GCM", iv },
+        //     sharedKey,
+        //     encoded,
+        // );
+        // dataChannel.send(
+        //     JSON.stringify({
+        //         type: "message",
+        //         iv: Array.from(iv),
+        //         encrypted: btoa(
+        //             String.fromCharCode(...new Uint8Array(encrypted)),
+        //         ),
+        //         replyTo: replyToId,
+        //     }),
+        // );
+        // const messagePayload = {
+        //     type: "message",
+        //     iv: Array.from(iv),
+        //     encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+        //     replyTo: replyToId,
+        // };
+
+        if (planBActive) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                updateChatStatus(
+                    "Plan B недоступен: нет подключения к серверу сигналинга",
+                );
+                return;
+            }
+
+            let messagePayload;
+            if (sharedKey) {
+                const iv = crypto.getRandomValues(new Uint8Array(12));
+                const encoded = new TextEncoder().encode(text);
+                const encrypted = await crypto.subtle.encrypt(
+                    { name: "AES-GCM", iv },
+                    sharedKey,
+                    encoded,
+                );
+                messagePayload = {
+                    mode: "encrypted",
+                    iv: Array.from(iv),
+                    encrypted: btoa(
+                        String.fromCharCode(...new Uint8Array(encrypted)),
+                    ),
+                    replyTo: replyToId,
+                };
+            } else {
+                messagePayload = {
+                    mode: "plain",
+                    text,
+                    replyTo: replyToId,
+                };
+            }
+
+            ws.send(
+                JSON.stringify({
+                    type: "relay_message",
+                    data: { to: peerId, payload: messagePayload },
+                }),
+            );
+        } else {
+            if (!dataChannel || dataChannel.readyState !== "open") {
+                updateChatStatus("Соединение ещё не установлено");
+                return;
+            }
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const encoded = new TextEncoder().encode(text);
+            const encrypted = await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv },
+                sharedKey,
+                encoded,
+            );
+            const messagePayload = {
                 type: "message",
                 iv: Array.from(iv),
                 encrypted: btoa(
                     String.fromCharCode(...new Uint8Array(encrypted)),
                 ),
                 replyTo: replyToId,
-            }),
-        );
+            };
+            dataChannel.send(JSON.stringify(messagePayload));
+        }
         const messageId = crypto.randomUUID();
         messages.push({
             id: messageId,
@@ -1124,6 +1304,44 @@ window.handleWebRTCMessage = async function (msg) {
         } catch (err) {
             console.error("[ICE] Error adding candidate:", err);
         }
+    } else if (msg.type === "relay_message") {
+        try {
+            const payload = msg.data.payload;
+            let text = "";
+
+            if (payload.mode === "plain") {
+                text = payload.text || "";
+            } else {
+                if (!sharedKey) return;
+                const iv = new Uint8Array(payload.iv);
+                const encrypted = Uint8Array.from(
+                    atob(payload.encrypted),
+                    (c) => c.charCodeAt(0),
+                );
+                const decrypted = await crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv },
+                    sharedKey,
+                    encrypted,
+                );
+                text = new TextDecoder().decode(decrypted);
+            }
+
+            const messageId = crypto.randomUUID();
+            messages.push({
+                id: messageId,
+                from: "other",
+                text: text,
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+                replyTo: payload.replyTo,
+                senderName: peerNickname,
+            });
+            renderMessages();
+        } catch (err) {
+            console.error("[PLAN-B] Ошибка relay_message:", err);
+        }
     } else if (msg.type === "public_key") {
         try {
             if (!myKeyPair) return;
@@ -1142,6 +1360,9 @@ window.handleWebRTCMessage = async function (msg) {
                 ["encrypt", "decrypt"],
             );
             console.log("[KEY] ✅ Ключи шифрования согласованы");
+            rtcState.keyReady = true;
+            trySendReady();
+            evaluateConnectionReady();
             addSystemMessage("Ключи шифрования согласованы");
         } catch (err) {
             console.error("[KEY] Error deriving shared key:", err);
@@ -1157,6 +1378,8 @@ window.handleWebRTCMessage = async function (msg) {
 
 window._exitChatInternal = function () {
     clearTimeout(connectionTimeout);
+    resetConnectionReadiness();
+    setConnectionOverlayVisible(false);
     if (messages) {
         messages.forEach((msg) => {
             if (msg.url && msg.url.startsWith("blob:"))

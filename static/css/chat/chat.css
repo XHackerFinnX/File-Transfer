@@ -681,6 +681,48 @@ body::before {
     display: none;
     flex-direction: column;
     height: 100%;
+    position: relative;
+}
+
+.connection-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 25;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(10, 10, 15, 0.72);
+    backdrop-filter: blur(3px);
+}
+
+.connection-overlay.hidden {
+    display: none;
+}
+
+.connection-loader {
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    border: 4px solid rgba(148, 163, 184, 0.35);
+    border-top-color: #3b82f6;
+    animation: connection-spin 0.9s linear infinite;
+    box-shadow: 0 0 18px rgba(59, 130, 246, 0.25);
+}
+
+.connection-overlay-text {
+    font-size: 14px;
+    color: #dbeafe;
+    text-align: center;
+    max-width: 280px;
+    line-height: 1.5;
+}
+
+@keyframes connection-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .chat-header {
