@@ -1,14 +1,30 @@
 import asyncio
 import uuid
+import json
+import time
+from collections import defaultdict, deque
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from config import config
+from security import normalize_allowed_origins, websocket_origin_allowed
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
+allowed_origins = normalize_allowed_origins(config.ALLOWED_ORIGINS)
 
 clients = {}
 rooms_chat = {}
+connect_attempts = defaultdict(deque)
+relay_usage = defaultdict(deque)
+room_create_usage = defaultdict(deque)
+
+WS_CONNECT_WINDOW_SECONDS = 60
+WS_CONNECT_MAX_PER_IP = 40
+RELAY_WINDOW_SECONDS = 10
+RELAY_MAX_BYTES_PER_WINDOW = 2 * 1024 * 1024
+ROOM_CREATE_WINDOW_SECONDS = 60
+ROOM_CREATE_MAX_PER_WINDOW = 8
 
 async def safe_send_json(ws, message):
     try:
@@ -29,8 +45,51 @@ def broadcast_users():
     for client in clients.values():
         asyncio.create_task(safe_send_json(client["ws"], {"type": "users", "data": waiting_list}))
 
+def short_id(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    return f"{value[:8]}..."
+
+def check_connect_rate_limit(client_ip: str) -> bool:
+    now = time.time()
+    bucket = connect_attempts[client_ip]
+    while bucket and bucket[0] <= now - WS_CONNECT_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= WS_CONNECT_MAX_PER_IP:
+        return False
+    bucket.append(now)
+    return True
+
+def consume_relay_budget(client_id: str, payload_size: int) -> bool:
+    now = time.time()
+    bucket = relay_usage[client_id]
+    while bucket and bucket[0][0] <= now - RELAY_WINDOW_SECONDS:
+        bucket.popleft()
+    used = sum(size for _, size in bucket)
+    if used + payload_size > RELAY_MAX_BYTES_PER_WINDOW:
+        return False
+    bucket.append((now, payload_size))
+    return True
+
+def consume_room_create_budget(client_id: str) -> bool:
+    now = time.time()
+    bucket = room_create_usage[client_id]
+    while bucket and bucket[0] <= now - ROOM_CREATE_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= ROOM_CREATE_MAX_PER_WINDOW:
+        return False
+    bucket.append(now)
+    return True
+
 @router.websocket("/ws")
 async def lobby_ws(websocket: WebSocket):
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    if not check_connect_rate_limit(client_ip):
+        await websocket.close(code=4429, reason="Too many connection attempts")
+        return
+    if not websocket_origin_allowed(websocket.headers.get("origin"), allowed_origins):
+        await websocket.close(code=4403, reason="Origin not allowed")
+        return
     await websocket.accept()
     client_id = str(uuid.uuid4())
     clients[client_id] = {
@@ -41,7 +100,7 @@ async def lobby_ws(websocket: WebSocket):
     }
     await websocket.send_json({"type": "init", "data": {"client_id": client_id}})
     broadcast_users()
-    print(f"[CHAT] Новый клиент: {client_id[:8]}...")
+    print(f"[CHAT] Новый клиент: {short_id(client_id)} ip={client_ip}")
 
     try:
         while True:
@@ -54,6 +113,15 @@ async def lobby_ws(websocket: WebSocket):
                 broadcast_users()
 
             elif msg_type == "create_room":
+                if not consume_room_create_budget(client_id):
+                    await safe_send_json(
+                        websocket,
+                        {
+                            "type": "request_failed",
+                            "data": {"reason": "Слишком много созданий комнат. Подождите 1 минуту."},
+                        },
+                    )
+                    continue
                 title = payload.get("title", f"Чат от {clients[client_id]['nickname']}").strip() or "Без названия"
                 room_id = str(uuid.uuid4())
                 rooms_chat[room_id] = {"host": client_id, "peer": None, "title": title}
@@ -70,7 +138,7 @@ async def lobby_ws(websocket: WebSocket):
                         "type": "incoming_request",
                         "data": {"from": client_id, "from_nickname": clients[client_id]["nickname"]}
                     })
-                    print(f"[CHAT] Запрос от {client_id[:8]}... к {target_id[:8]}...")
+                    print(f"[CHAT] Запрос от {short_id(client_id)} к {short_id(target_id)}")
                 else:
                     await safe_send_json(websocket, {
                         "type": "request_failed",
@@ -96,7 +164,7 @@ async def lobby_ws(websocket: WebSocket):
 
                 room_id = clients[host_id].get("room_id")
                 if not room_id or room_id not in rooms_chat:
-                    print(f"[CHAT] Ошибка: комната не найдена для {host_id[:8]}...")
+                    print(f"[CHAT] Ошибка: комната не найдена для {short_id(host_id)}")
                     await safe_send_json(clients[guest_id]["ws"], {
                         "type": "request_failed",
                         "data": {"reason": "Комната уже не существует"}
@@ -105,7 +173,7 @@ async def lobby_ws(websocket: WebSocket):
 
                 room = rooms_chat[room_id]
                 if room.get("peer") is not None:
-                    print(f"[CHAT] Комната {room_id[:8]}... уже занята")
+                    print(f"[CHAT] Комната {short_id(room_id)} уже занята")
                     await safe_send_json(clients[guest_id]["ws"], {
                         "type": "request_failed",
                         "data": {"reason": "Комната уже занята"}
@@ -117,7 +185,7 @@ async def lobby_ws(websocket: WebSocket):
                 clients[guest_id]["status"] = "busy"
                 clients[guest_id]["room_id"] = room_id
 
-                print(f"[CHAT] Соединение установлено в комнате {room_id[:8]}...")
+                print(f"[CHAT] Соединение установлено в комнате {short_id(room_id)}")
 
                 await safe_send_json(clients[host_id]["ws"], {
                     "type": "start_connection",
@@ -140,7 +208,7 @@ async def lobby_ws(websocket: WebSocket):
                 broadcast_users()
 
             elif msg_type == "peer_disconnected":
-                print(f"[CHAT] Клиент {client_id[:8]}... покидает чат")
+                print(f"[CHAT] Клиент {short_id(client_id)} покидает чат")
                 room_id = clients[client_id].get("room_id")
                 if room_id and room_id in rooms_chat:
                     room = rooms_chat[room_id]
@@ -173,6 +241,27 @@ async def lobby_ws(websocket: WebSocket):
                             },
                         )
                         continue
+                    if msg_type == "relay_message":
+                        relay_size = len(json.dumps(payload, ensure_ascii=False))
+                        if not consume_relay_budget(client_id, relay_size):
+                            await safe_send_json(
+                                websocket,
+                                {
+                                    "type": "request_failed",
+                                    "data": {"reason": "Превышен лимит relay-трафика. Подождите несколько секунд."},
+                                },
+                            )
+                            continue
+                        relay_payload = payload.get("payload", {})
+                        if not isinstance(relay_payload, dict):
+                            await safe_send_json(websocket, {"type": "request_failed", "data": {"reason": "Некорректный relay payload"}})
+                            continue
+                        if relay_payload.get("mode") != "encrypted_payload":
+                            await safe_send_json(websocket, {"type": "request_failed", "data": {"reason": "Разрешён только зашифрованный relay payload"}})
+                            continue
+                        if not relay_payload.get("encrypted") or relay_payload.get("iv") is None:
+                            await safe_send_json(websocket, {"type": "request_failed", "data": {"reason": "В relay payload отсутствуют данные шифрования"}})
+                            continue
                     payload["from"] = client_id
                     await safe_send_json(clients[target_id]["ws"], data)
                 else:
@@ -182,7 +271,7 @@ async def lobby_ws(websocket: WebSocket):
                     })
 
     except WebSocketDisconnect:
-        print(f"[CHAT] Клиент отключился: {client_id[:8]}...")
+        print(f"[CHAT] Клиент отключился: {short_id(client_id)}")
     except Exception as e:
         print(f"[CHAT] Ошибка: {e}")
     finally:
@@ -196,6 +285,8 @@ async def lobby_ws(websocket: WebSocket):
                 if room.get("host") == client_id or not room.get("peer"):
                     rooms_chat.pop(room_id, None)
             clients.pop(client_id, None)
+            relay_usage.pop(client_id, None)
+            room_create_usage.pop(client_id, None)
             broadcast_users()
 
 @router.get("/", response_class=HTMLResponse)

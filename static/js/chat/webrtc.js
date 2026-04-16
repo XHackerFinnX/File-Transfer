@@ -4,6 +4,8 @@ let pc,
     fileChannel,
     myKeyPair,
     sharedKey,
+    myPublicKeyBase64,
+    peerPublicKeyBase64,
     peerId,
     peerNickname,
     messages = [];
@@ -43,6 +45,33 @@ let pendingPlanBKeyRetry = null;
 let typingStopTimeout = null;
 let peerActivityTimeout = null;
 const pendingReadReceipts = new Set();
+let safetyNumber = null;
+let safetyVerified = false;
+
+function updateSafetyVerificationUI() {
+    const badge = document.getElementById("safetyStatusBadge");
+    const button = document.getElementById("securityVerifyBtn");
+    if (!badge || !button) return;
+
+    if (!safetyNumber) {
+        badge.textContent = "Код не готов";
+        badge.classList.remove("verified");
+        badge.classList.add("pending");
+        button.disabled = true;
+        return;
+    }
+
+    button.disabled = false;
+    if (safetyVerified) {
+        badge.textContent = "Код подтверждён";
+        badge.classList.remove("pending");
+        badge.classList.add("verified");
+    } else {
+        badge.textContent = "Код не подтверждён";
+        badge.classList.remove("verified");
+        badge.classList.add("pending");
+    }
+}
 
 function requestPeerPublicKey(reason = "manual") {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -55,6 +84,91 @@ function requestPeerPublicKey(reason = "manual") {
         }),
     );
     console.log(`[KEY] public_key_request отправлен (${reason})`);
+}
+
+async function sha256Hex(input) {
+    const data = new TextEncoder().encode(input);
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+async function computeSafetyNumber() {
+    if (!myPublicKeyBase64 || !peerPublicKeyBase64) return null;
+    const [a, b] = [myPublicKeyBase64, peerPublicKeyBase64].sort();
+    const digestHex = await sha256Hex(`${a}:${b}`);
+    return digestHex
+        .slice(0, 24)
+        .toUpperCase()
+        .match(/.{1,4}/g)
+        .join("-");
+}
+
+function showSafetyNumberPrompt() {
+    if (!safetyNumber) {
+        addSystemMessage("Код безопасности ещё не сформирован.");
+        return;
+    }
+    const ok = window.confirm(
+        `Сверьте код безопасности с собеседником (голосом или офлайн):\n\n${safetyNumber}\n\nНажмите OK, если код совпадает.`,
+    );
+    if (ok) {
+        safetyVerified = true;
+        addSystemMessage(`Код безопасности подтверждён: ${safetyNumber}`);
+    } else {
+        safetyVerified = false;
+        addSystemMessage(
+            "Код безопасности не подтверждён. Отправка сообщений и файлов заблокирована.",
+        );
+    }
+    updateSafetyVerificationUI();
+}
+
+function canSendEncryptedPayload() {
+    if (!sharedKey) {
+        updateChatStatus("Ключи шифрования ещё не согласованы");
+        return false;
+    }
+    if (!safetyVerified) {
+        updateChatStatus("Подтвердите код безопасности перед отправкой");
+        showSafetyNumberPrompt();
+        return false;
+    }
+    return true;
+}
+
+async function encryptPlanBPayload(payload) {
+    if (!canSendEncryptedPayload()) return null;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(payload));
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        sharedKey,
+        encoded,
+    );
+    return {
+        mode: "encrypted_payload",
+        iv: Array.from(iv),
+        encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+    };
+}
+
+async function decryptPlanBPayload(payload) {
+    if (!sharedKey) {
+        requestPeerPublicKey("relay_message_without_key");
+        return null;
+    }
+    const iv = new Uint8Array(payload.iv);
+    const encrypted = Uint8Array.from(atob(payload.encrypted), (c) =>
+        c.charCodeAt(0),
+    );
+    const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        sharedKey,
+        encrypted,
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
 function setConnectionOverlayVisible(visible, text) {
@@ -87,9 +201,15 @@ function resetConnectionReadiness() {
     lastLocalTransportSignature = "";
     lastRemoteTransportSignature = "";
     planBReceivingFiles = {};
+    planBOutgoingFileTransfer = null;
     clearTimeout(typingStopTimeout);
     clearTimeout(peerActivityTimeout);
     pendingReadReceipts.clear();
+    safetyNumber = null;
+    safetyVerified = false;
+    myPublicKeyBase64 = null;
+    peerPublicKeyBase64 = null;
+    updateSafetyVerificationUI();
 }
 
 function buildTransportState(overrides = {}) {
@@ -302,7 +422,12 @@ let receivingFiles = {};
 let binaryFileSupported = false;
 let fileChannelReady = false;
 const PLAN_B_FILE_CHUNK_SIZE = 48 * 1024;
+const PLAN_B_MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+const PLAN_B_ACK_EVERY_CHUNKS = 8;
+const PLAN_B_MAX_IN_FLIGHT = 24;
+const PLAN_B_ACK_TIMEOUT_MS = 8000;
 let planBReceivingFiles = {};
+let planBOutgoingFileTransfer = null;
 
 async function getIceServers() {
     try {
@@ -368,13 +493,11 @@ function canMarkMessagesAsRead() {
     return !document.hidden && chat && chat.style.display === "flex";
 }
 
-function sendRealtimeSignal(payload) {
+async function sendRealtimeSignal(payload) {
     if (planBActive) {
         if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return;
-        const relayPayload =
-            payload.type === "read_receipt"
-                ? { mode: "read_receipt", messageId: payload.messageId }
-                : payload;
+        const relayPayload = await encryptPlanBPayload(payload);
+        if (!relayPayload) return;
         ws.send(
             JSON.stringify({
                 type: "relay_message",
@@ -390,7 +513,7 @@ function sendRealtimeSignal(payload) {
 function flushReadReceipts() {
     if (!canMarkMessagesAsRead() || pendingReadReceipts.size === 0) return;
     for (const messageId of [...pendingReadReceipts]) {
-        sendRealtimeSignal({ type: "read_receipt", messageId });
+        void sendRealtimeSignal({ type: "read_receipt", messageId });
         pendingReadReceipts.delete(messageId);
     }
 }
@@ -424,13 +547,35 @@ function clearPeerActivityStatus() {
     setPeerHeaderStatus("В сети");
 }
 
+function waitForPlanBAck(targetSeq, timeoutMs = PLAN_B_ACK_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+        const startedAt = Date.now();
+        const tick = () => {
+            if (!planBOutgoingFileTransfer) {
+                reject(new Error("Plan B transfer context missing"));
+                return;
+            }
+            if (planBOutgoingFileTransfer.cancelled) {
+                reject(new Error("Plan B transfer cancelled"));
+                return;
+            }
+            if (planBOutgoingFileTransfer.lastAckedSeq >= targetSeq) {
+                resolve();
+                return;
+            }
+            if (Date.now() - startedAt > timeoutMs) {
+                reject(new Error("Plan B ack timeout"));
+                return;
+            }
+            setTimeout(tick, 40);
+        };
+        tick();
+    });
+}
+
 function sendActivitySignal(activity, active = true) {
     if (!peerId) return;
-    if (planBActive) {
-        sendRealtimeSignal({ mode: "activity", activity, active });
-        return;
-    }
-    sendRealtimeSignal({ type: "activity", activity, active });
+    void sendRealtimeSignal({ type: "activity", activity, active });
 }
 
 window.handleLocalTypingInput = function (text) {
@@ -632,6 +777,7 @@ window.startChat = async function (data) {
                 ),
             ),
         );
+        myPublicKeyBase64 = pub;
         ws.send(
             JSON.stringify({
                 type: "public_key",
@@ -988,8 +1134,7 @@ async function finalizeBinaryFileReceive(receiving) {
 }
 
 async function sendFile(file) {
-    if (!sharedKey) {
-        updateChatStatus("Ключи шифрования ещё не согласованы");
+    if (!canSendEncryptedPayload()) {
         return;
     }
     if (!planBActive && (!dataChannel || dataChannel.readyState !== "open")) {
@@ -1028,6 +1173,10 @@ async function sendFile(file) {
             );
             await sendFileJson(file);
         }
+    } catch (err) {
+        console.error("[FILE] Ошибка отправки файла:", err);
+        addSystemMessage("❌ Ошибка отправки файла. Попробуйте ещё раз.");
+        updateChatStatus("Ошибка отправки файла");
     } finally {
         sendActivitySignal("sending_file", false);
         sendActivitySignal("sending_image", false);
@@ -1286,6 +1435,16 @@ async function sendFilePlanB(file) {
         return;
     }
 
+    if (file.size > PLAN_B_MAX_FILE_SIZE) {
+        updateChatStatus(
+            `Plan B ограничен ${Math.round(PLAN_B_MAX_FILE_SIZE / 1024 / 1024)} MB. Используйте P2P для больших файлов.`,
+        );
+        addSystemMessage(
+            `⚠️ Файл слишком большой для Plan B (${formatFileSize(file.size)}). Лимит: ${formatFileSize(PLAN_B_MAX_FILE_SIZE)}.`,
+        );
+        return;
+    }
+
     fileTransferProgressElement = document.createElement("div");
     fileTransferProgressElement.className = "file-progress-container";
     fileTransferProgressElement.innerHTML = `
@@ -1303,19 +1462,18 @@ async function sendFilePlanB(file) {
 
     const fileId = crypto.randomUUID();
     let cancelled = false;
+    planBOutgoingFileTransfer = {
+        fileId,
+        lastAckedSeq: -1,
+        sentSeq: -1,
+        cancelled: false,
+    };
     const cancelHandler = () => {
         cancelled = true;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(
-                JSON.stringify({
-                    type: "relay_message",
-                    data: {
-                        to: peerId,
-                        payload: { mode: "file_cancel", fileId },
-                    },
-                }),
-            );
+        if (planBOutgoingFileTransfer) {
+            planBOutgoingFileTransfer.cancelled = true;
         }
+        void sendRealtimeSignal({ type: "file_cancel", fileId });
         if (fileTransferProgressElement) fileTransferProgressElement.remove();
         updateChatStatus("передача файла отменена");
     };
@@ -1324,110 +1482,109 @@ async function sendFilePlanB(file) {
         .addEventListener("click", cancelHandler);
     currentFileTransfer = { cancel: cancelHandler };
 
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const fileData = await file.arrayBuffer();
-    const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        sharedKey,
-        fileData,
-    );
-    const isImage = isImageFile(file.type);
-    const data = new Uint8Array(encrypted);
-
-    ws.send(
-        JSON.stringify({
-            type: "relay_message",
-            data: {
-                to: peerId,
-                payload: {
-                    mode: "file_metadata",
-                    fileId,
-                    name: file.name,
-                    size: data.length,
-                    iv: Array.from(iv),
-                    mimeType: file.type || "application/octet-stream",
-                    isImage,
-                    transport: "plan_b",
-                },
-            },
-        }),
-    );
-
-    let offset = 0;
-    const startedAt = Date.now();
-    while (offset < data.length && !cancelled) {
-        const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
-        const chunkBase64 = btoa(String.fromCharCode(...chunk));
-        ws.send(
-            JSON.stringify({
-                type: "relay_message",
-                data: {
-                    to: peerId,
-                    payload: {
-                        mode: "file_chunk",
-                        fileId,
-                        offset,
-                        data: chunkBase64,
-                    },
-                },
-            }),
+    try {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const fileData = await file.arrayBuffer();
+        const encrypted = await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv },
+            sharedKey,
+            fileData,
         );
-        offset += chunk.length;
-        const progress = Math.round((offset / data.length) * 100);
-        const progressFill = document.getElementById("fileProgressFill");
-        const progressInfo = document.getElementById("fileProgressInfo");
-        if (progressFill) progressFill.style.width = `${progress}%`;
-        if (progressInfo)
-            progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`;
-        updateChatStatus(`📤 ${progress}%`);
+        const isImage = isImageFile(file.type);
+        const data = new Uint8Array(encrypted);
 
-        await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-
-    if (cancelled) {
-        messages.push({
-            system: true,
-            text: "📤 Отправка файла отменена",
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-        });
-        renderMessages();
-    } else {
-        ws.send(
-            JSON.stringify({
-                type: "relay_message",
-                data: {
-                    to: peerId,
-                    payload: {
-                        mode: "file_end",
-                        fileId,
-                    },
-                },
-            }),
-        );
-        const originalBlob = new Blob([fileData], { type: file.type });
-        const url = URL.createObjectURL(originalBlob);
-        const messageType = isImage ? "image" : "file";
-        messages.push({
-            from: "me",
-            text: file.name,
-            size: file.size,
-            type: messageType,
-            url,
+        await sendRealtimeSignal({
+            type: "file_metadata",
+            fileId,
+            name: file.name,
+            size: data.length,
+            iv: Array.from(iv),
+            mimeType: file.type || "application/octet-stream",
             isImage,
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
+            transport: "plan_b",
         });
-        renderMessages();
-    }
+        let offset = 0;
+        let seq = 0;
+        const startedAt = Date.now();
+        while (offset < data.length && !cancelled) {
+            while (
+                !cancelled &&
+                planBOutgoingFileTransfer &&
+                planBOutgoingFileTransfer.sentSeq -
+                    planBOutgoingFileTransfer.lastAckedSeq >=
+                    PLAN_B_MAX_IN_FLIGHT
+            ) {
+                await waitForPlanBAck(
+                    planBOutgoingFileTransfer.lastAckedSeq + 1,
+                );
+            }
+            const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
+            const chunkBase64 = btoa(String.fromCharCode(...chunk));
+            await sendRealtimeSignal({
+                type: "file_chunk",
+                fileId,
+                seq,
+                offset,
+                data: chunkBase64,
+            });
+            if (planBOutgoingFileTransfer) {
+                planBOutgoingFileTransfer.sentSeq = seq;
+            }
+            offset += chunk.length;
+            seq += 1;
+            const progress = Math.round((offset / data.length) * 100);
+            const progressFill = document.getElementById("fileProgressFill");
+            const progressInfo = document.getElementById("fileProgressInfo");
+            if (progressFill) progressFill.style.width = `${progress}%`;
+            if (progressInfo)
+                progressInfo.textContent = `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`;
+            updateChatStatus(`📤 ${progress}%`);
 
-    if (fileTransferProgressElement) fileTransferProgressElement.remove();
-    currentFileTransfer = null;
-    updateChatStatus("");
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        if (!cancelled && planBOutgoingFileTransfer?.sentSeq >= 0) {
+            await waitForPlanBAck(planBOutgoingFileTransfer.sentSeq);
+        }
+
+        if (cancelled) {
+            messages.push({
+                system: true,
+                text: "📤 Отправка файла отменена",
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        } else {
+            await sendRealtimeSignal({
+                type: "file_end",
+                fileId,
+            });
+            const originalBlob = new Blob([fileData], { type: file.type });
+            const url = URL.createObjectURL(originalBlob);
+            const messageType = isImage ? "image" : "file";
+            messages.push({
+                from: "me",
+                text: file.name,
+                size: file.size,
+                type: messageType,
+                url,
+                isImage,
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        }
+    } finally {
+        if (fileTransferProgressElement) fileTransferProgressElement.remove();
+        currentFileTransfer = null;
+        planBOutgoingFileTransfer = null;
+        updateChatStatus("");
+    }
 }
 
 // ========== ОСТАЛЬНЫЕ ФУНКЦИИ (отправка сообщений, рендер, статус) ==========
@@ -1439,8 +1596,7 @@ async function sendMessage() {
     const quote = document.querySelector(".message-quote");
     let replyToId = quote ? quote.dataset.replyToId : null;
 
-    if (!sharedKey && !planBActive) {
-        updateChatStatus("Ключи шифрования ещё не согласованы");
+    if (!canSendEncryptedPayload()) {
         return;
     }
 
@@ -1454,39 +1610,12 @@ async function sendMessage() {
                 return;
             }
 
-            let messagePayload;
-            if (sharedKey) {
-                const iv = crypto.getRandomValues(new Uint8Array(12));
-                const encoded = new TextEncoder().encode(text);
-                const encrypted = await crypto.subtle.encrypt(
-                    { name: "AES-GCM", iv },
-                    sharedKey,
-                    encoded,
-                );
-                messagePayload = {
-                    mode: "encrypted",
-                    messageId,
-                    iv: Array.from(iv),
-                    encrypted: btoa(
-                        String.fromCharCode(...new Uint8Array(encrypted)),
-                    ),
-                    replyTo: replyToId,
-                };
-            } else {
-                messagePayload = {
-                    mode: "plain",
-                    messageId,
-                    text,
-                    replyTo: replyToId,
-                };
-            }
-
-            ws.send(
-                JSON.stringify({
-                    type: "relay_message",
-                    data: { to: peerId, payload: messagePayload },
-                }),
-            );
+            await sendRealtimeSignal({
+                type: "message",
+                messageId,
+                text,
+                replyTo: replyToId,
+            });
         } else {
             if (!dataChannel || dataChannel.readyState !== "open") {
                 updateChatStatus("Соединение ещё не установлено");
@@ -1655,6 +1784,7 @@ window.handleWebRTCMessage = async function (msg) {
                 ),
             ),
         );
+        myPublicKeyBase64 = pub;
         ws.send(
             JSON.stringify({
                 type: "public_key",
@@ -1711,8 +1841,14 @@ window.handleWebRTCMessage = async function (msg) {
     } else if (msg.type === "relay_message") {
         try {
             activatePlanBFromRemote();
-            const payload = msg.data.payload;
-            if (payload.mode === "file_metadata") {
+            const envelope = msg.data.payload;
+            if (!envelope || envelope.mode !== "encrypted_payload") {
+                console.warn("[PLAN-B] Отклонён нешифрованный relay payload");
+                return;
+            }
+            const payload = await decryptPlanBPayload(envelope);
+            if (!payload) return;
+            if (payload.type === "file_metadata") {
                 planBReceivingFiles[payload.fileId] = {
                     fileId: payload.fileId,
                     name: payload.name,
@@ -1721,6 +1857,7 @@ window.handleWebRTCMessage = async function (msg) {
                     mimeType: payload.mimeType,
                     chunks: {},
                     received: 0,
+                    receivedChunks: 0,
                     isImage: payload.isImage,
                 };
                 addSystemMessage(
@@ -1730,7 +1867,7 @@ window.handleWebRTCMessage = async function (msg) {
                 return;
             }
 
-            if (payload.mode === "file_chunk") {
+            if (payload.type === "file_chunk") {
                 const receiving = planBReceivingFiles[payload.fileId];
                 if (!receiving || !payload.data) return;
                 const chunk = Uint8Array.from(atob(payload.data), (c) =>
@@ -1738,14 +1875,29 @@ window.handleWebRTCMessage = async function (msg) {
                 );
                 receiving.chunks[payload.offset] = chunk;
                 receiving.received += chunk.length;
+                receiving.receivedChunks = (receiving.receivedChunks || 0) + 1;
                 const progress = Math.round(
                     (receiving.received / receiving.size) * 100,
                 );
                 updateChatStatus(`📥 ${progress}%`);
+                const seq =
+                    typeof payload.seq === "number"
+                        ? payload.seq
+                        : receiving.receivedChunks - 1;
+                if (
+                    receiving.receivedChunks % PLAN_B_ACK_EVERY_CHUNKS === 0 ||
+                    receiving.received === receiving.size
+                ) {
+                    await sendRealtimeSignal({
+                        type: "file_ack",
+                        fileId: payload.fileId,
+                        ackSeq: seq,
+                    });
+                }
                 return;
             }
 
-            if (payload.mode === "file_end") {
+            if (payload.type === "file_end") {
                 const receiving = planBReceivingFiles[payload.fileId];
                 if (!receiving) return;
                 await finalizeJsonFileReceive(receiving);
@@ -1755,48 +1907,48 @@ window.handleWebRTCMessage = async function (msg) {
                 return;
             }
 
-            if (payload.mode === "file_cancel") {
+            if (payload.type === "file_cancel") {
                 delete planBReceivingFiles[payload.fileId];
+                if (
+                    planBOutgoingFileTransfer &&
+                    planBOutgoingFileTransfer.fileId === payload.fileId
+                ) {
+                    planBOutgoingFileTransfer.cancelled = true;
+                }
                 updateChatStatus("");
                 addSystemMessage("📤 Отправка файла отменена");
                 return;
             }
-            if (payload.mode === "activity") {
+            if (payload.type === "file_ack") {
+                if (
+                    planBOutgoingFileTransfer &&
+                    planBOutgoingFileTransfer.fileId === payload.fileId &&
+                    typeof payload.ackSeq === "number"
+                ) {
+                    planBOutgoingFileTransfer.lastAckedSeq = Math.max(
+                        planBOutgoingFileTransfer.lastAckedSeq,
+                        payload.ackSeq,
+                    );
+                }
+                return;
+            }
+            if (payload.type === "activity") {
                 if (payload.active) showPeerActivityStatus(payload.activity);
                 else clearPeerActivityStatus();
                 return;
             }
-            if (payload.mode === "read_receipt") {
+            if (payload.type === "read_receipt") {
                 markMessageAsRead(payload.messageId);
                 return;
             }
             let text = "";
 
-            if (payload.mode === "plain") {
+            if (payload.type === "message") {
                 text = payload.text || "";
-            } else if (payload.mode === "encrypted") {
-                if (!sharedKey) {
-                    requestPeerPublicKey("relay_message_without_key");
-                    console.warn(
-                        "[PLAN-B] Получено encrypted relay без sharedKey, запрошен повтор public_key",
-                    );
-                    return;
-                }
-                const iv = new Uint8Array(payload.iv);
-                const encrypted = Uint8Array.from(
-                    atob(payload.encrypted),
-                    (c) => c.charCodeAt(0),
-                );
-                const decrypted = await crypto.subtle.decrypt(
-                    { name: "AES-GCM", iv },
-                    sharedKey,
-                    encrypted,
-                );
-                text = new TextDecoder().decode(decrypted);
             } else {
                 console.warn(
-                    "[PLAN-B] Неизвестный режим relay_message:",
-                    payload.mode,
+                    "[PLAN-B] Неизвестный тип relay_message:",
+                    payload.type,
                 );
                 return;
             }
@@ -1821,6 +1973,7 @@ window.handleWebRTCMessage = async function (msg) {
     } else if (msg.type === "public_key") {
         try {
             if (!myKeyPair) return;
+            peerPublicKeyBase64 = msg.data.key;
             const theirPub = await crypto.subtle.importKey(
                 "raw",
                 Uint8Array.from(atob(msg.data.key), (c) => c.charCodeAt(0)),
@@ -1840,6 +1993,12 @@ window.handleWebRTCMessage = async function (msg) {
             trySendReady();
             evaluateConnectionReady();
             addSystemMessage("Ключи шифрования согласованы");
+            safetyNumber = await computeSafetyNumber();
+            if (safetyNumber) {
+                safetyVerified = false;
+                addSystemMessage(`Код безопасности: ${safetyNumber}`);
+                updateSafetyVerificationUI();
+            }
             document.getElementById("connectionOverlay").style.display = "none";
             syncTransportState("shared_key_ready", false);
         } catch (err) {
@@ -1884,6 +2043,7 @@ window._exitChatInternal = function () {
     }
     currentFileTransfer = null;
     planBReceivingFiles = {};
+    planBOutgoingFileTransfer = null;
     binaryFileSupported = false;
     connectionAttempts = 0;
     forceTurn = true;
@@ -1922,3 +2082,11 @@ document.addEventListener("click", (e) => {
 });
 
 document.addEventListener("visibilitychange", flushReadReceipts);
+
+const securityVerifyBtn = document.getElementById("securityVerifyBtn");
+if (securityVerifyBtn) {
+    securityVerifyBtn.addEventListener("click", () => {
+        showSafetyNumberPrompt();
+    });
+}
+updateSafetyVerificationUI();

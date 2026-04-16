@@ -87,7 +87,7 @@ function showConnectionRequestDialog(fromNickname, fromId) {
     dialog.innerHTML = `
         <div class="custom-dialog">
             <div class="dialog-title">Запрос на подключение</div>
-            <div class="dialog-text">Пользователь <strong>${escapeHtml(fromNickname)}</strong> хочет подключиться к вашему чату.</div>
+            <div class="dialog-text"><strong>${escapeHtml(fromNickname)}</strong> хочет подключиться к вашему чату.</div>
             <div class="dialog-buttons">
                 <button class="btn-dialog-reject">Отклонить</button>
                 <button class="btn-dialog-accept">Принять</button>
@@ -133,7 +133,7 @@ function showConnectionRequestDialog(fromNickname, fromId) {
             .custom-dialog {
                 background: rgba(30, 30, 45, 0.95);
                 border-radius: 16px;
-                padding: 24px;
+                padding: 16px;
                 width: 90%;
                 max-width: 400px;
                 text-align: center;
@@ -150,7 +150,7 @@ function showConnectionRequestDialog(fromNickname, fromId) {
             .dialog-text {
                 font-size: 14px;
                 color: #94a3b8;
-                margin-bottom: 24px;
+                margin-bottom: 16px;
                 line-height: 1.5;
             }
             .dialog-buttons {
