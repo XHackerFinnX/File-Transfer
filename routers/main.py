@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, FileResponse
 from config import config
+from security import get_request_client_ip
 
 router = APIRouter()
 
@@ -29,7 +30,10 @@ async def get_turn_credentials(request: Request):
     Действительны 10 минут с момента генерации.
     """
     try:
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_request_client_ip(
+            request,
+            trust_proxy_headers=config.TRUST_PROXY_HEADERS,
+        )
         now = int(time.time())
         bucket = turn_requests[client_ip]
         while bucket and bucket[0] <= now - TURN_RATE_LIMIT_WINDOW:

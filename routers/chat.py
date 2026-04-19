@@ -7,7 +7,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from config import config
-from security import normalize_allowed_origins, websocket_origin_allowed
+from security import (
+    normalize_allowed_origins,
+    websocket_origin_allowed,
+    get_websocket_client_ip,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -21,8 +25,9 @@ room_create_usage = defaultdict(deque)
 
 WS_CONNECT_WINDOW_SECONDS = 60
 WS_CONNECT_MAX_PER_IP = 40
-RELAY_WINDOW_SECONDS = 10
-RELAY_MAX_BYTES_PER_WINDOW = 2 * 1024 * 1024
+RELAY_LIMIT_ENABLED = config.RELAY_LIMIT_ENABLED
+RELAY_WINDOW_SECONDS = config.RELAY_WINDOW_SECONDS
+RELAY_MAX_BYTES_PER_WINDOW = config.RELAY_MAX_BYTES_PER_WINDOW
 ROOM_CREATE_WINDOW_SECONDS = 60
 ROOM_CREATE_MAX_PER_WINDOW = 8
 
@@ -61,6 +66,8 @@ def check_connect_rate_limit(client_ip: str) -> bool:
     return True
 
 def consume_relay_budget(client_id: str, payload_size: int) -> bool:
+    if not RELAY_LIMIT_ENABLED:
+        return True
     now = time.time()
     bucket = relay_usage[client_id]
     while bucket and bucket[0][0] <= now - RELAY_WINDOW_SECONDS:
@@ -83,7 +90,10 @@ def consume_room_create_budget(client_id: str) -> bool:
 
 @router.websocket("/ws")
 async def lobby_ws(websocket: WebSocket):
-    client_ip = websocket.client.host if websocket.client else "unknown"
+    client_ip = get_websocket_client_ip(
+        websocket,
+        trust_proxy_headers=config.TRUST_PROXY_HEADERS,
+    )
     if not check_connect_rate_limit(client_ip):
         await websocket.close(code=4429, reason="Too many connection attempts")
         return

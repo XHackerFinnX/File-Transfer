@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import time
 from urllib.parse import urlparse
+from fastapi import Request, WebSocket
 
 
 def sign_capability_token(secret: str, room_id: str, ttl_seconds: int = 600) -> str:
@@ -58,3 +59,41 @@ def request_origin_allowed(request_origin: str | None, allowed_origins: set[str]
 def extract_origin_from_url(url: str) -> str:
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def extract_client_ip_from_headers(
+    x_forwarded_for: str | None,
+    x_real_ip: str | None,
+) -> str | None:
+    if x_forwarded_for:
+        first_ip = x_forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    if x_real_ip and x_real_ip.strip():
+        return x_real_ip.strip()
+    return None
+
+
+def get_request_client_ip(request: Request, trust_proxy_headers: bool = True) -> str:
+    if trust_proxy_headers:
+        header_ip = extract_client_ip_from_headers(
+            request.headers.get("x-forwarded-for"),
+            request.headers.get("x-real-ip"),
+        )
+        if header_ip:
+            return header_ip
+    return request.client.host if request.client else "unknown"
+
+
+def get_websocket_client_ip(
+    websocket: WebSocket,
+    trust_proxy_headers: bool = True,
+) -> str:
+    if trust_proxy_headers:
+        header_ip = extract_client_ip_from_headers(
+            websocket.headers.get("x-forwarded-for"),
+            websocket.headers.get("x-real-ip"),
+        )
+        if header_ip:
+            return header_ip
+    return websocket.client.host if websocket.client else "unknown"
