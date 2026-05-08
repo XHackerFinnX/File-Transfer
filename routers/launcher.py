@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import re
 import time
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Lock
@@ -41,6 +42,12 @@ ROOMS: Dict[str, Dict[str, "PeerRecord"]] = {}
 ROOM_PASSWORDS: Dict[str, str] = {}
 ROOM_ENDPOINTS: Dict[str, dict] = {}
 ROOM_TOUCHED_AT: Dict[str, float] = {}
+
+RELAY_SESSIONS: Dict[str, dict] = {}
+RELAY_TOKEN_TTL_SECONDS = 60 * 10
+
+RELAY_PUBLIC_HOST = "5.42.124.68"
+RELAY_PUBLIC_PORT = 35000
 
 # TURN -------------------------------------------------------------------- #
 TURN_SECRET = config.TURN_SECRET.get_secret_value()
@@ -130,9 +137,34 @@ class PeerRecord(BaseModel):
     is_host: bool = False
 
 
+class RelaySessionOpenIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    minecraft_port: int = Field(ge=1, le=65535)
+
+
+class RelaySessionJoinIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+
+
+class RelaySessionCloseIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
+
+def _get_host_peer(room: str):
+    peers = ROOMS.get(room, {})
+    for peer in peers.values():
+        if peer.is_host:
+            return peer
+    return None
+
+def _relay_gc_for_room(room: str):
+    now = time.time()
+    rs = RELAY_SESSIONS.get(room)
+    if rs and rs.get("expires_at", 0) < now:
+        RELAY_SESSIONS.pop(room, None)
 
 def _touch(room: str) -> None:
     ROOM_TOUCHED_AT[room] = time.time()
@@ -152,6 +184,84 @@ def _client_ip(request: Request) -> str:
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                   #
 # --------------------------------------------------------------------------- #
+
+@router.post("/rooms/{room}/relay/session/open")
+def relay_session_open(room: str, payload: RelaySessionOpenIn):
+    room = room.strip()
+    if room not in ROOMS:
+        raise HTTPException(status_code=404, detail="room not found")
+
+    host_peer = _get_host_peer(room)
+    if not host_peer or host_peer.user_id != payload.user_id:
+        raise HTTPException(status_code=403, detail="only room host can open relay session")
+
+    now = time.time()
+    expires_at = now + RELAY_TOKEN_TTL_SECONDS
+    agent_token = secrets.token_urlsafe(32)
+
+    RELAY_SESSIONS[room] = {
+        "room": room,
+        "host_user_id": payload.user_id,
+        "minecraft_port": payload.minecraft_port,
+        "agent_token": agent_token,
+        "join_tokens": {},
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": expires_at,
+    }
+
+    return {
+        "ok": True,
+        "room_id": room,
+        "relay_host": RELAY_PUBLIC_HOST,
+        "relay_port": RELAY_PUBLIC_PORT,
+        "agent_token": agent_token,
+        "ttl": RELAY_TOKEN_TTL_SECONDS,
+        "expires_at": int(expires_at),
+    }
+    
+@router.post("/rooms/{room}/relay/session/join")
+def relay_session_join(room: str, payload: RelaySessionJoinIn):
+    room = room.strip()
+    if room not in ROOMS:
+        raise HTTPException(status_code=404, detail="room not found")
+
+    if payload.user_id not in ROOMS.get(room, {}):
+        raise HTTPException(status_code=404, detail="peer not in room")
+
+    _relay_gc_for_room(room)
+    rs = RELAY_SESSIONS.get(room)
+    if not rs:
+        raise HTTPException(status_code=404, detail="relay session not opened by host")
+
+    join_token = secrets.token_urlsafe(32)
+    rs["join_tokens"][join_token] = {
+        "user_id": payload.user_id,
+        "issued_at": time.time(),
+        "expires_at": time.time() + RELAY_TOKEN_TTL_SECONDS,
+    }
+
+    return {
+        "ok": True,
+        "room_id": room,
+        "relay_host": RELAY_PUBLIC_HOST,
+        "relay_port": RELAY_PUBLIC_PORT,
+        "join_token": join_token,
+        "ttl": RELAY_TOKEN_TTL_SECONDS,
+    }
+
+
+@router.post("/rooms/{room}/relay/session/close")
+def relay_session_close(room: str, payload: RelaySessionCloseIn):
+    room = room.strip()
+    rs = RELAY_SESSIONS.get(room)
+    if not rs:
+        return {"ok": True, "room_id": room, "closed": False}
+
+    if rs.get("host_user_id") != payload.user_id:
+        raise HTTPException(status_code=403, detail="only host can close relay session")
+
+    RELAY_SESSIONS.pop(room, None)
+    return {"ok": True, "room_id": room, "closed": True}
 
 @router.post("/rooms/create")
 def create_room(payload: RoomAuthIn, request: Request):
