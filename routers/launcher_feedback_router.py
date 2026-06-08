@@ -466,9 +466,9 @@ async def create_launcher_feedback(
 async def launcher_feedback_admin(request: Request):
     if not _is_authorized(request):
         return templates.TemplateResponse(
-            "launcher/login.html",
-            {
-                "request": request,
+            request=request,
+            name="launcher/login.html",
+            context={
                 "title": "Вход — обращения SLauncher",
             },
         )
@@ -488,9 +488,9 @@ async def launcher_feedback_admin(request: Request):
     )
 
     return templates.TemplateResponse(
-        "launcher/list.html",
-        {
-            "request": request,
+        request=request,
+        name="launcher/list.html",
+        context={
             "title": "Обращения SLauncher",
             "items": items,
             "stats": _feedback_stats(items),
@@ -559,9 +559,9 @@ async def launcher_feedback_blocked(request: Request):
         reverse=True,
     )
     return templates.TemplateResponse(
-        "launcher/blocked.html",
-        {
-            "request": request,
+        request=request,
+        name="launcher/blocked.html",
+        context={
             "title": "Блокировки SLauncher",
             "records": records,
         },
@@ -619,9 +619,9 @@ async def launcher_feedback_item(request: Request, feedback_id: str):
     item.setdefault("favorite", False)
 
     return templates.TemplateResponse(
-        "launcher/detail.html",
-        {
-            "request": request,
+        request=request,
+        name="launcher/detail.html",
+        context={
             "title": item.get("subject") or "Обращение",
             "item": item,
             "feedback_id": feedback_id,
