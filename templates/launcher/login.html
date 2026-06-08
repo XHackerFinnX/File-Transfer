@@ -1,0 +1,39 @@
+{% extends "launcher/base.html" %}
+{% set hide_shell = True %}
+{% block content %}
+<section class="login-layout">
+    <div class="login-hero">
+        <div class="brand brand-large">
+            <span class="brand-logo">S</span>
+            <span>
+                <strong>SLauncher</strong>
+                <small>Feedback center</small>
+            </span>
+        </div>
+        <h1>Панель обращений</h1>
+        <p>Просматривайте отзывы, ошибки и предложения из лаунчера в аккуратной админ-панели.</p>
+        <div class="hero-points">
+            <span>Фильтры</span>
+            <span>Статусы</span>
+            <span>Блокировки</span>
+        </div>
+    </div>
+
+    <form class="card login-card" method="post" action="/launcher_feedback/login">
+        <div class="card-head compact">
+            <span class="eyebrow">Администратор</span>
+            <h2>Вход</h2>
+            <p>Введите логин и пароль для просмотра обращений.</p>
+        </div>
+        <label class="field">
+            <span>Логин</span>
+            <input name="login" autocomplete="username" placeholder="admin" required />
+        </label>
+        <label class="field">
+            <span>Пароль</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        </label>
+        <button class="btn primary wide" type="submit">Войти в панель</button>
+    </form>
+</section>
+{% endblock %}

@@ -1,0 +1,133 @@
+{% extends "launcher/base.html" %}
+{% block content %}
+<header class="page-header">
+    <div>
+        <span class="eyebrow">Центр поддержки</span>
+        <h1>Обращения SLauncher</h1>
+        <p>Найдено {{ stats.filtered }} из {{ stats.total }} · хранилище: <code>{{ storage_root }}</code></p>
+    </div>
+    <a class="btn ghost" href="/launcher_feedback/blocked">Управление блокировками</a>
+</header>
+
+<section class="stat-grid">
+    <article class="stat-card">
+        <span>Новые</span>
+        <strong>{{ stats.new }}</strong>
+    </article>
+    <article class="stat-card">
+        <span>В работе</span>
+        <strong>{{ stats.in_progress }}</strong>
+    </article>
+    <article class="stat-card">
+        <span>Закрыто</span>
+        <strong>{{ stats.closed }}</strong>
+    </article>
+    <article class="stat-card">
+        <span>Избранные</span>
+        <strong>{{ stats.favorite }}</strong>
+    </article>
+</section>
+
+<section class="card filters-card">
+    <form class="filters" method="get" action="/launcher_feedback">
+        <label class="field search-field">
+            <span>Поиск</span>
+            <input name="q" value="{{ filters.q }}" placeholder="Тема, контакт, system id..." />
+        </label>
+        <label class="field">
+            <span>Статус</span>
+            <select name="status">
+                <option value="all" {% if filters.status == 'all' %}selected{% endif %}>Все статусы</option>
+                {% for value, label in status_labels.items() %}
+                <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="field">
+            <span>Избранное</span>
+            <select name="favorite">
+                <option value="all" {% if filters.favorite == 'all' %}selected{% endif %}>Все</option>
+                <option value="yes" {% if filters.favorite == 'yes' %}selected{% endif %}>Только избранные</option>
+                <option value="no" {% if filters.favorite == 'no' %}selected{% endif %}>Без избранного</option>
+            </select>
+        </label>
+        <label class="field">
+            <span>Дата от</span>
+            <input type="date" name="date_from" value="{{ filters.date_from }}" />
+        </label>
+        <label class="field">
+            <span>Дата до</span>
+            <input type="date" name="date_to" value="{{ filters.date_to }}" />
+        </label>
+        <button class="btn primary" type="submit">Применить</button>
+    </form>
+</section>
+
+<section class="card table-card">
+    <form method="post" action="/launcher_feedback/actions">
+        <div class="toolbar">
+            <div class="toolbar-title">
+                <strong>Список обращений</strong>
+                <span>Выберите несколько строк для массовых действий</span>
+            </div>
+            <div class="toolbar-actions">
+                <button class="btn soft" type="submit" name="action" value="favorite">В избранное</button>
+                <button class="btn soft" type="submit" name="action" value="unfavorite">Убрать</button>
+                <select name="status" class="inline-select">
+                    {% for value, label in status_labels.items() %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <button class="btn soft" type="submit" name="action" value="set_status">Сменить статус</button>
+                <button class="btn danger" type="submit" name="action" value="delete">Удалить</button>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="check-cell"></th>
+                        <th>Обращение</th>
+                        <th>Статус</th>
+                        <th>Контакт / ID</th>
+                        <th>Дата</th>
+                        <th>Фото</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items %}
+                    <tr>
+                        <td class="check-cell"><input type="checkbox" name="ids" value="{{ item.id }}" /></td>
+                        <td>
+                            <a class="ticket-title" href="/launcher_feedback/{{ item.id }}">
+                                {% if item.favorite %}<span class="star">★</span>{% endif %}{{ item.subject }}
+                            </a>
+                            <div class="ticket-meta">{{ item.category }} · {{ item.description|default('', true)|truncate(100) }}</div>
+                        </td>
+                        <td>
+                            <span class="badge {{ item.status|status_tone }}">{{ item.status|status_label }}</span>
+                        </td>
+                        <td>
+                            {% if item.contact %}<strong>{{ item.contact }}</strong>{% else %}<span class="muted">не указан</span>{% endif %}
+                            <small class="mono">{{ item.system_id }}</small>
+                        </td>
+                        <td class="muted nowrap">{{ item.created_at|datetime_short }}</td>
+                        <td><span class="photo-count">{{ item.images|length }}</span></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6">
+                            <div class="empty-state">
+                                <strong>Обращений не найдено</strong>
+                                <span>Попробуйте изменить фильтры или дату.</span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+</section>
+{% endblock %}

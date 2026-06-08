@@ -1,0 +1,76 @@
+{% extends "launcher/base.html" %}
+{% block content %}
+<header class="page-header detail-header">
+    <div>
+        <a class="back-link" href="/launcher_feedback">← Назад к списку</a>
+        <span class="eyebrow">Обращение</span>
+        <h1>{% if item.favorite %}<span class="star">★</span>{% endif %}{{ item.subject }}</h1>
+        <p>{{ item.created_at|datetime_short }} · System ID: <code>{{ item.system_id }}</code></p>
+    </div>
+</header>
+
+<section class="detail-grid">
+    <article class="card detail-main">
+        <div class="detail-badges">
+            <span class="badge gray">{{ item.category }}</span>
+            <span class="badge {{ item.status|status_tone }}">{{ item.status|status_label }}</span>
+        </div>
+
+        <h2>Описание</h2>
+        <pre class="text-box">{{ item.description }}</pre>
+
+        <h2>Изображения</h2>
+        {% if item.images %}
+        <div class="image-grid">
+            {% for image in item.images %}
+            {% set filename = image|image_filename %}
+            {% set image_url = '/launcher_feedback/' ~ feedback_id ~ '/files/' ~ filename %}
+            <a class="image-card" href="{{ image_url }}" target="_blank" rel="noreferrer">
+                <img src="{{ image_url }}" alt="image {{ loop.index }}" />
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state compact"><span>Изображений нет.</span></div>
+        {% endif %}
+
+        <h2>Техническая информация</h2>
+        <pre class="code-box">{{ item.technical_info|json_pretty }}</pre>
+    </article>
+
+    <aside class="card detail-side">
+        <h2>Действия</h2>
+        <form method="post" action="/launcher_feedback/{{ feedback_id }}/action" class="stack-form">
+            <button class="btn soft wide" type="submit" name="action" value="toggle_favorite">
+                {% if item.favorite %}Убрать из избранного{% else %}Добавить в избранное{% endif %}
+            </button>
+            <label class="field">
+                <span>Статус</span>
+                <select name="status">
+                    {% for value, label in status_labels.items() %}
+                    <option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="btn primary wide" type="submit" name="action" value="set_status">Сохранить статус</button>
+            <button class="btn warning wide" type="submit" name="action" value="block_system">Заблокировать ID на 1 час</button>
+            <button class="btn danger wide" type="submit" name="action" value="delete">Удалить обращение</button>
+        </form>
+
+        <div class="info-list">
+            <div>
+                <span>Контакт</span>
+                <strong>{% if item.contact %}{{ item.contact }}{% else %}не указан{% endif %}</strong>
+            </div>
+            <div>
+                <span>Категория</span>
+                <strong>{{ item.category }}</strong>
+            </div>
+            <div>
+                <span>System ID</span>
+                <strong class="mono break-word">{{ item.system_id }}</strong>
+            </div>
+        </div>
+    </aside>
+</section>
+{% endblock %}

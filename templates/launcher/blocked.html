@@ -1,0 +1,78 @@
+{% extends "launcher/base.html" %}
+{% block content %}
+<header class="page-header">
+    <div>
+        <a class="back-link" href="/launcher_feedback">← Назад к обращениям</a>
+        <span class="eyebrow">Безопасность</span>
+        <h1>Блокировки пользователей</h1>
+        <p>Ручная блокировка system id и список автоматических ограничений.</p>
+    </div>
+</header>
+
+<section class="card filters-card">
+    <form class="block-form" method="post" action="/launcher_feedback/blocked/action">
+        <label class="field">
+            <span>System ID</span>
+            <input name="system_id" required placeholder="ID системы пользователя" />
+        </label>
+        <label class="field small-field">
+            <span>Минут</span>
+            <input name="minutes" type="number" min="1" value="60" />
+        </label>
+        <label class="field">
+            <span>Причина</span>
+            <input name="reason" value="manual" />
+        </label>
+        <button class="btn warning" type="submit" name="action" value="block">Заблокировать</button>
+    </form>
+</section>
+
+<section class="card table-card">
+    <div class="toolbar">
+        <div class="toolbar-title">
+            <strong>История блокировок</strong>
+            <span>Активные и истекшие ограничения</span>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>System ID</th>
+                    <th>Статус</th>
+                    <th>До</th>
+                    <th>Причина</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td class="mono break-word">{{ record.system_id }}</td>
+                    <td>
+                        {% if is_block_active(record.blocked_until) %}
+                        <span class="badge red">Активна</span>
+                        {% else %}
+                        <span class="badge gray">Истекла</span>
+                        {% endif %}
+                    </td>
+                    <td class="muted nowrap">{{ record.blocked_until|datetime_short }}</td>
+                    <td>{{ record.reason }}</td>
+                    <td>
+                        <form class="row-actions" method="post" action="/launcher_feedback/blocked/action">
+                            <input type="hidden" name="system_id" value="{{ record.system_id }}" />
+                            <button class="btn soft" type="submit" name="action" value="unblock">Разблокировать</button>
+                            <button class="btn warning" type="submit" name="action" value="block">На 1 час</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5"><div class="empty-state"><strong>Блокировок нет</strong><span>Здесь появятся ручные и автоматические блокировки.</span></div></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

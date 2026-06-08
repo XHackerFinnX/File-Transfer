@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/css/launcher/launcher_feedback.css" />
+</head>
+<body>
+    <div class="bg-orb bg-orb-one"></div>
+    <div class="bg-orb bg-orb-two"></div>
+
+    {% if not hide_shell %}
+    <aside class="sidebar">
+        <a class="brand" href="/launcher_feedback" aria-label="SLauncher feedback dashboard">
+            <span class="brand-logo">S</span>
+            <span>
+                <strong>SLauncher</strong>
+                <small>Feedback center</small>
+            </span>
+        </a>
+        <nav class="side-nav">
+            <a class="side-link" href="/launcher_feedback">Обращения</a>
+            <a class="side-link" href="/launcher_feedback/blocked">Блокировки</a>
+        </nav>
+        <div class="side-note">
+            <span class="dot"></span>
+            Локальная панель администратора
+        </div>
+    </aside>
+    {% endif %}
+
+    <main class="{% if hide_shell %}auth-shell{% else %}app-shell{% endif %}">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
