@@ -153,6 +153,11 @@ class RelaySessionJoinIn(BaseModel):
 
 class RelaySessionCloseIn(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
+    
+class RelayValidateIn(BaseModel):
+    room_id: str = Field(min_length=1, max_length=64)
+    type: str = Field(min_length=1, max_length=16)
+    token: str = Field(min_length=1, max_length=256)
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
@@ -277,13 +282,17 @@ async def start_tcp_relay() -> asyncio.AbstractServer:
 # --------------------------------------------------------------------------- #
 
 @router.post("/relay/validate")
-def relay_validate(payload, request):
-    if request.headers.get("x-relay-secret") != RELAY_VALIDATE_SECRET:
+def relay_validate(payload: RelayValidateIn, request: Request):
+    secret = request.headers.get("x-relay-secret", "")
+    if not RELAY_VALIDATE_SECRET or not hmac.compare_digest(secret, RELAY_VALIDATE_SECRET):
         raise HTTPException(status_code=403, detail="forbidden")
 
     room = payload.room_id.strip()
-    token = payload.token.strip()
     kind = payload.type.strip()
+    token = payload.token.strip()
+
+    if not ROOM_ID_RE.match(room):
+        return {"ok": False, "error": "invalid_room"}
 
     _relay_gc_for_room(room)
 
@@ -297,14 +306,21 @@ def relay_validate(payload, request):
         return {"ok": False, "error": "relay_session_expired"}
 
     if kind == "agent":
-        if hmac.compare_digest(str(rs.get("agent_token") or ""), token):
-            return {"ok": True, "room_id": room, "type": "agent"}
+        expected = str(rs.get("agent_token") or "")
+        if hmac.compare_digest(expected, token):
+            return {
+                "ok": True,
+                "room_id": room,
+                "type": "agent",
+                "host_user_id": rs.get("host_user_id", ""),
+            }
         return {"ok": False, "error": "invalid_agent_token"}
 
     if kind == "client":
         join_data = rs.get("join_tokens", {}).get(token)
         if not join_data:
             return {"ok": False, "error": "invalid_join_token"}
+
         if join_data.get("expires_at", 0) < now:
             rs.get("join_tokens", {}).pop(token, None)
             return {"ok": False, "error": "join_token_expired"}
@@ -313,7 +329,7 @@ def relay_validate(payload, request):
             "ok": True,
             "room_id": room,
             "type": "client",
-            "user_id": join_data.get("user_id", "")
+            "user_id": join_data.get("user_id", ""),
         }
 
     return {"ok": False, "error": "invalid_type"}
