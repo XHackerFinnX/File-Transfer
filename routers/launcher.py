@@ -8,7 +8,6 @@ import json
 import re
 import time
 import secrets
-import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Lock
@@ -19,7 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 # Your project's config object. Keep the import path identical to room-auth-in.js
 # so you don't have to touch anything else.
-from config import config  # noqa: F401  (re-exported indirectly via TURN_SECRET below)
+from config import config
 
 # --------------------------------------------------------------------------- #
 # Constants & shared state                                                    #
