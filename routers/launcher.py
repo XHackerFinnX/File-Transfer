@@ -70,6 +70,7 @@ DEFAULT_CORS_ORIGINS = [
 ]
 
 RELAY_WAITING_AGENTS: Dict[str, asyncio.Queue] = {}
+RELAY_VALIDATE_SECRET = "TestSecret123"
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +275,48 @@ async def start_tcp_relay() -> asyncio.AbstractServer:
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                   #
 # --------------------------------------------------------------------------- #
+
+@router.post("/relay/validate")
+def relay_validate(payload, request):
+    if request.headers.get("x-relay-secret") != RELAY_VALIDATE_SECRET:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    room = payload.room_id.strip()
+    token = payload.token.strip()
+    kind = payload.type.strip()
+
+    _relay_gc_for_room(room)
+
+    rs = RELAY_SESSIONS.get(room)
+    if not rs:
+        return {"ok": False, "error": "relay_session_not_found"}
+
+    now = time.time()
+    if rs.get("expires_at", 0) < now:
+        RELAY_SESSIONS.pop(room, None)
+        return {"ok": False, "error": "relay_session_expired"}
+
+    if kind == "agent":
+        if hmac.compare_digest(str(rs.get("agent_token") or ""), token):
+            return {"ok": True, "room_id": room, "type": "agent"}
+        return {"ok": False, "error": "invalid_agent_token"}
+
+    if kind == "client":
+        join_data = rs.get("join_tokens", {}).get(token)
+        if not join_data:
+            return {"ok": False, "error": "invalid_join_token"}
+        if join_data.get("expires_at", 0) < now:
+            rs.get("join_tokens", {}).pop(token, None)
+            return {"ok": False, "error": "join_token_expired"}
+
+        return {
+            "ok": True,
+            "room_id": room,
+            "type": "client",
+            "user_id": join_data.get("user_id", "")
+        }
+
+    return {"ok": False, "error": "invalid_type"}
 
 @router.post("/rooms/{room}/relay/session/open")
 def relay_session_open(room: str, payload: RelaySessionOpenIn):
