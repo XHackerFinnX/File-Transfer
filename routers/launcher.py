@@ -4,9 +4,11 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import re
 import time
 import secrets
+import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from threading import Lock
@@ -66,6 +68,8 @@ DEFAULT_CORS_ORIGINS = [
     "http://localhost:8000",
     "null",
 ]
+
+RELAY_WAITING_AGENTS: Dict[str, asyncio.Queue] = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -180,6 +184,92 @@ def _client_ip(request: Request) -> str:
         return request.client.host
     return ""
 
+
+async def _read_json_line(reader: asyncio.StreamReader) -> dict:
+    line = await asyncio.wait_for(reader.readline(), timeout=10)
+    if not line:
+        raise ConnectionError("empty hello")
+    return json.loads(line.decode("utf-8"))
+
+async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        while not reader.at_eof():
+            data = await reader.read(65536)
+            if not data:
+                break
+            writer.write(data)
+            await writer.drain()
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+def _validate_agent(room: str, token: str) -> bool:
+    _relay_gc_for_room(room)
+    rs = RELAY_SESSIONS.get(room)
+    return bool(rs and hmac.compare_digest(str(rs.get("agent_token") or ""), token))
+
+def _validate_join(room: str, token: str) -> bool:
+    _relay_gc_for_room(room)
+    rs = RELAY_SESSIONS.get(room)
+    if not rs:
+        return False
+    jt = rs.get("join_tokens", {}).get(token)
+    if not jt or jt.get("expires_at", 0) < time.time():
+        return False
+    return True
+
+async def _handle_relay_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        hello = await _read_json_line(reader)
+        room = str(hello.get("room_id") or "").strip()
+        kind = str(hello.get("type") or "").strip()
+
+        if kind == "agent":
+            token = str(hello.get("token") or "")
+            if not _validate_agent(room, token):
+                writer.close()
+                await writer.wait_closed()
+                return
+            queue = RELAY_WAITING_AGENTS.setdefault(room, asyncio.Queue(maxsize=32))
+            await queue.put((reader, writer))
+            # Держим coroutine живой: сокет agent должен ждать клиента,
+            # а закроется он уже после pipe или при обрыве соединения.
+            await writer.wait_closed()
+            return
+
+        if kind == "client":
+            token = str(hello.get("join_token") or "")
+            if not _validate_join(room, token):
+                writer.close()
+                await writer.wait_closed()
+                return
+            queue = RELAY_WAITING_AGENTS.setdefault(room, asyncio.Queue(maxsize=32))
+            agent_reader, agent_writer = await asyncio.wait_for(queue.get(), timeout=20)
+            await asyncio.gather(
+                _pipe(reader, agent_writer),
+                _pipe(agent_reader, writer),
+            )
+            return
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+async def start_tcp_relay() -> asyncio.AbstractServer:
+    server = await asyncio.start_server(
+        _handle_relay_conn,
+        host="0.0.0.0",
+        port=RELAY_PUBLIC_PORT,
+        reuse_address=True,
+    )
+    return server
 
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                   #
@@ -531,11 +621,13 @@ async def _gc_loop() -> None:
 
 @asynccontextmanager
 async def room_lifespan(app: FastAPI):
-    """Wire this into your FastAPI lifespan so GC starts/stops with the app."""
     task = asyncio.create_task(_gc_loop())
+    relay_server = await start_tcp_relay()
     try:
         yield
     finally:
+        relay_server.close()
+        await relay_server.wait_closed()
         task.cancel()
         try:
             await task
