@@ -11,6 +11,7 @@ from security import (
     normalize_allowed_origins,
     websocket_origin_allowed,
     get_websocket_client_ip,
+    websocket_same_host_allowed,
 )
 
 router = APIRouter()
@@ -97,7 +98,12 @@ async def lobby_ws(websocket: WebSocket):
     if not check_connect_rate_limit(client_ip):
         await websocket.close(code=4429, reason="Too many connection attempts")
         return
-    if not websocket_origin_allowed(websocket.headers.get("origin"), allowed_origins):
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host")
+    if not (
+        websocket_origin_allowed(origin, allowed_origins)
+        or websocket_same_host_allowed(origin, host)
+    ):
         await websocket.close(code=4403, reason="Origin not allowed")
         return
     await websocket.accept()

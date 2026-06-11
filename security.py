@@ -50,6 +50,13 @@ def websocket_origin_allowed(origin: str | None, allowed_origins: set[str]) -> b
     return origin.rstrip("/") in allowed_origins
 
 
+def websocket_same_host_allowed(origin: str | None, host: str | None) -> bool:
+    if not origin or not host:
+        return False
+    parsed = urlparse(origin)
+    return bool(parsed.scheme in {"http", "https"} and parsed.netloc == host)
+
+
 def request_origin_allowed(request_origin: str | None, allowed_origins: set[str]) -> bool:
     if not request_origin:
         return False

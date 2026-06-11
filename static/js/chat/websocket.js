@@ -2,6 +2,22 @@ let ws,
     myClientId = "";
 let pendingRequest = false;
 
+function setChatScreen(screen, text = "") {
+    const lobby = document.getElementById("lobby");
+    const connecting = document.getElementById("connectingView");
+    const chat = document.getElementById("chat");
+    if (lobby) lobby.style.display = screen === "lobby" ? "flex" : "none";
+    if (connecting)
+        connecting.style.display = screen === "connecting" ? "flex" : "none";
+    if (chat) chat.style.display = screen === "chat" ? "flex" : "none";
+    if (text) {
+        const connectingText = document.getElementById("connectingText");
+        if (connectingText) connectingText.textContent = text;
+    }
+}
+
+window.setChatScreen = setChatScreen;
+
 function connectWebSocket() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(`${protocol}//${location.host}/chat/ws`);
@@ -22,11 +38,13 @@ function connectWebSocket() {
             });
             showConnectionRequestDialog(msg.data.from_nickname, msg.data.from);
         } else if (msg.type === "room_created") {
-            console.log("✅ Создатель → переключаемся в чат");
-            document.getElementById("lobby").style.display = "none";
-            document.getElementById("chat").style.display = "flex";
+            console.log("✅ Комната создана, переходим в чат и ожидаем собеседника");
             document.getElementById("chatTitle").textContent =
                 msg.data.title || "Мой чат";
+            setChatScreen("chat");
+            if (typeof window.prepareWaitingRoom === "function") {
+                window.prepareWaitingRoom(msg.data);
+            }
             const statusEl = document.getElementById("chatPeerStatusText");
             if (statusEl)
                 statusEl.textContent =
@@ -36,9 +54,11 @@ function connectWebSocket() {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
             });
-            console.log("🚀 start_connection получен! Переключаем в чат");
-            document.getElementById("lobby").style.display = "none";
-            document.getElementById("chat").style.display = "flex";
+            console.log("🚀 start_connection получен! Синхронизируем P2P");
+            setChatScreen(
+                "connecting",
+                "Устанавливаем соединение у обоих собеседников...",
+            );
             document.getElementById("chatTitle").textContent =
                 msg.data.peer_nickname || "Чат";
 

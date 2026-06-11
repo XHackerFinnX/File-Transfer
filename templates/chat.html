@@ -188,6 +188,15 @@
                 </div>
             </div>
 
+            <!-- CONNECTION VIEW -->
+            <div id="connectingView" class="connecting-view">
+                <div class="connection-loader"></div>
+                <div class="connecting-title">Синхронизируем подключение</div>
+                <div class="connecting-text" id="connectingText">
+                    Ждём, пока защищённое соединение будет готово у обоих собеседников...
+                </div>
+            </div>
+
             <!-- CHAT VIEW -->
             <div id="chat">
                 <div class="chat-header">
@@ -231,19 +240,6 @@
                             />
                         </svg>
                     </button>
-                    <button
-                        class="btn-security"
-                        id="securityVerifyBtn"
-                        title="Проверить код безопасности"
-                        aria-label="Проверить код безопасности"
-                    >
-                        Код
-                    </button>
-                </div>
-                <div class="security-strip">
-                    <span id="safetyStatusBadge" class="safety-badge pending">
-                        Код не подтверждён
-                    </span>
                 </div>
 
                 <div id="connectionOverlay" class="connection-overlay hidden">

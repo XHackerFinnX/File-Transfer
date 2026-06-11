@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     TRUST_PROXY_HEADERS: bool = True
     RELAY_LIMIT_ENABLED: bool = False
     RELAY_WINDOW_SECONDS: int = 10
-    RELAY_MAX_BYTES_PER_WINDOW: int = 2 * 1024 * 1024
+    RELAY_MAX_BYTES_PER_WINDOW: int = 100 * 1024 * 1024 * 1024
     
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
