@@ -230,7 +230,25 @@ function syncTransportState(reason = "state_update", announce = true) {
     );
 }
 
+function showPlanBReadyState(
+    statusText = "Plan B: серверный защищённый канал активен",
+) {
+    clearTimeout(connectionTimeout);
+    clearTimeout(planBTimer);
+    planBTimer = null;
+    setConnectionOverlayVisible(false);
+    if (typeof window.setChatScreen === "function") {
+        window.setChatScreen("chat");
+    }
+    updateChatStatus(statusText);
+}
+
 function evaluateConnectionReady() {
+    if (planBActive) {
+        showPlanBReadyState();
+        return;
+    }
+
     const localReady =
         rtcState.iceConnected && rtcState.dataOpen && rtcState.keyReady;
     const fullyReady = localReady && localReadySent && remoteReadyReceived;
@@ -261,14 +279,13 @@ function evaluateConnectionReady() {
 }
 
 function activatePlanB() {
-    if (planBActive || connectionReadyShown) return;
-    planBActive = true;
-    clearTimeout(connectionTimeout);
-    setConnectionOverlayVisible(false);
-    if (typeof window.setChatScreen === "function") {
-        window.setChatScreen("chat");
+    if (connectionReadyShown) return;
+    if (planBActive) {
+        showPlanBReadyState();
+        return;
     }
-    updateChatStatus("Plan B: серверный защищённый канал активен");
+    planBActive = true;
+    showPlanBReadyState();
     addSystemMessage(
         "P2P не установился за 5 секунд — переключились на Plan B.",
     );
@@ -285,11 +302,12 @@ function activatePlanB() {
 }
 
 function activatePlanBFromRemote() {
-    if (planBActive) return;
+    if (planBActive) {
+        showPlanBReadyState("Plan B: серверный защищённый канал активен");
+        return;
+    }
     planBActive = true;
-    clearTimeout(connectionTimeout);
-    setConnectionOverlayVisible(false);
-    updateChatStatus("Plan B: собеседник пишет через серверный канал");
+    showPlanBReadyState("Plan B: собеседник переключился на серверный канал");
     addSystemMessage(
         "Собеседник переключился на Plan B — продолжаем чат через серверный канал.",
     );
@@ -436,14 +454,22 @@ function createFileTransferProgressElement(cancelHandler) {
 
 function updateFileTransferProgress(fillPercent, infoText) {
     if (!fileTransferProgressElement) return;
-    const progressFill = fileTransferProgressElement.querySelector(".file-progress-fill");
-    const progressInfo = fileTransferProgressElement.querySelector(".file-progress-info");
-    if (progressFill) progressFill.style.width = `${Math.min(100, Math.max(0, fillPercent))}%`;
+    const progressFill = fileTransferProgressElement.querySelector(
+        ".file-progress-fill",
+    );
+    const progressInfo = fileTransferProgressElement.querySelector(
+        ".file-progress-info",
+    );
+    if (progressFill)
+        progressFill.style.width = `${Math.min(100, Math.max(0, fillPercent))}%`;
     if (progressInfo) progressInfo.textContent = infoText;
 }
 
 function cancelActiveFileTransfer() {
-    if (currentFileTransfer && typeof currentFileTransfer.cancel === "function") {
+    if (
+        currentFileTransfer &&
+        typeof currentFileTransfer.cancel === "function"
+    ) {
         currentFileTransfer.cancel();
         return true;
     }
@@ -473,7 +499,9 @@ window.prepareWaitingRoom = function (roomData = {}) {
     updateChatStatus("Ожидаем подключения другого пользователя...");
     const messagesDiv = document.getElementById("messages");
     if (messagesDiv) messagesDiv.innerHTML = "";
-    addSystemMessage(`Комната «${roomData.title || "Мой чат"}» создана. Ожидаем собеседника...`);
+    addSystemMessage(
+        `Комната «${roomData.title || "Мой чат"}» создана. Ожидаем собеседника...`,
+    );
 };
 
 async function getIceServers() {
@@ -650,7 +678,9 @@ function waitForBufferedAmountLow(channel, highWatermark) {
         };
 
         channel.bufferedAmountLowThreshold = highWatermark;
-        channel.addEventListener("bufferedamountlow", handleLow, { once: true });
+        channel.addEventListener("bufferedamountlow", handleLow, {
+            once: true,
+        });
         channel.addEventListener("close", handleClose, { once: true });
         channel.addEventListener("error", handleError, { once: true });
     });
@@ -681,7 +711,6 @@ function waitForBinaryTransferProgress(predicate, timeoutMs = 120000) {
         tick();
     });
 }
-
 
 function sendActivitySignal(activity, active = true) {
     if (!peerId) return;
@@ -951,6 +980,11 @@ function setupDataChannel() {
     dataChannel.onclose = () => {
         console.log("[DC] Основной канал закрыт");
         rtcState.dataOpen = false;
+        if (planBActive) {
+            showPlanBReadyState();
+            syncTransportState("data_channel_closed_during_plan_b", false);
+            return;
+        }
         addSystemMessage("Собеседник отключился");
         setConnectionOverlayVisible(true, "Собеседник отключился");
         syncTransportState("data_channel_closed");
@@ -1322,7 +1356,9 @@ async function finalizeBinaryFileReceive(receiving) {
 
 async function sendFile(file) {
     if (currentFileTransfer) {
-        updateChatStatus("Дождитесь завершения текущей передачи или отмените её");
+        updateChatStatus(
+            "Дождитесь завершения текущей передачи или отмените её",
+        );
         return;
     }
     if (!canSendEncryptedPayload()) {
@@ -1358,7 +1394,9 @@ async function sendFile(file) {
                 await sendFileBinary(file);
             } catch (err) {
                 if (isTransferCancellationError(err)) {
-                    console.log("[FILE] Бинарная отправка отменена пользователем");
+                    console.log(
+                        "[FILE] Бинарная отправка отменена пользователем",
+                    );
                     return;
                 }
                 console.error(
@@ -1440,18 +1478,22 @@ async function sendFileBinary(file) {
 
         while (
             currentFileTransfer &&
-            offset - currentFileTransfer.confirmedBytes > BINARY_MAX_UNACKED_BYTES &&
+            offset - currentFileTransfer.confirmedBytes >
+                BINARY_MAX_UNACKED_BYTES &&
             !cancelled
         ) {
             await waitForBinaryTransferProgress(
                 (transfer) =>
-                    offset - transfer.confirmedBytes <= BINARY_MAX_UNACKED_BYTES,
+                    offset - transfer.confirmedBytes <=
+                    BINARY_MAX_UNACKED_BYTES,
             );
         }
         if (cancelled) break;
 
         const plainChunk = new Uint8Array(
-            await file.slice(offset, offset + BINARY_FILE_CHUNK_SIZE).arrayBuffer(),
+            await file
+                .slice(offset, offset + BINARY_FILE_CHUNK_SIZE)
+                .arrayBuffer(),
         );
         const chunkIv = crypto.getRandomValues(new Uint8Array(12));
         const encryptedChunk = new Uint8Array(
@@ -1940,7 +1982,10 @@ function formatFileSize(bytes) {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
     const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+    const i = Math.min(
+        Math.floor(Math.log(bytes) / Math.log(k)),
+        sizes.length - 1,
+    );
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
@@ -2200,6 +2245,12 @@ window.handleWebRTCMessage = async function (msg) {
     } else if (msg.type === "transport_state") {
         remoteTransportState = msg.data?.state || null;
         announceTransportState(remoteTransportState, false);
+        if (
+            remoteTransportState?.planBActive ||
+            remoteTransportState?.mode === "plan_b"
+        ) {
+            activatePlanBFromRemote();
+        }
     } else if (msg.type === "peer_disconnected") {
         addSystemMessage("Собеседник покинул чат");
         setTimeout(() => {
@@ -2228,7 +2279,8 @@ window._exitChatInternal = function () {
     peerId = null;
     peerNickname = null;
     window.currentChatPeer = null;
-    if (typeof window.cleanupActiveCall === "function") window.cleanupActiveCall(false);
+    if (typeof window.cleanupActiveCall === "function")
+        window.cleanupActiveCall(false);
     pc = null;
     dataChannel = null;
     fileChannel = null;
