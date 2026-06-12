@@ -714,6 +714,7 @@ window.startChat = async function (data) {
     }
     peerId = data.peer_id;
     peerNickname = data.peer_nickname;
+    window.currentChatPeer = { id: peerId, nickname: peerNickname };
     const role = data.role;
     window.receivingFile = null;
     pendingRemoteCandidates = [];
@@ -2226,6 +2227,8 @@ window._exitChatInternal = function () {
     myKeyPair = null;
     peerId = null;
     peerNickname = null;
+    window.currentChatPeer = null;
+    if (typeof window.cleanupActiveCall === "function") window.cleanupActiveCall(false);
     pc = null;
     dataChannel = null;
     fileChannel = null;

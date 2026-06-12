@@ -38,7 +38,9 @@ function connectWebSocket() {
             });
             showConnectionRequestDialog(msg.data.from_nickname, msg.data.from);
         } else if (msg.type === "room_created") {
-            console.log("✅ Комната создана, переходим в чат и ожидаем собеседника");
+            console.log(
+                "✅ Комната создана, переходим в чат и ожидаем собеседника",
+            );
             document.getElementById("chatTitle").textContent =
                 msg.data.title || "Мой чат";
             setChatScreen("chat");
@@ -93,6 +95,18 @@ function connectWebSocket() {
         ) {
             if (typeof window.handleWebRTCMessage === "function") {
                 window.handleWebRTCMessage(msg);
+            }
+        } else if (
+            [
+                "call_request",
+                "call_response",
+                "call_signal",
+                "call_ended",
+                "call_state",
+            ].includes(msg.type)
+        ) {
+            if (typeof window.handleCallMessage === "function") {
+                window.handleCallMessage(msg);
             }
         }
     };

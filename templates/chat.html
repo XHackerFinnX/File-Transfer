@@ -13,6 +13,7 @@
             content="black-translucent"
         />
         <link rel="stylesheet" href="/static/css/chat/chat.css" />
+        <link rel="stylesheet" href="/static/css/chat/calls.css" />
         <link rel="stylesheet" href="/static/css/no_blue.css" />
         <title>P2P Чат</title>
     </head>
@@ -193,7 +194,8 @@
                 <div class="connection-loader"></div>
                 <div class="connecting-title">Синхронизируем подключение</div>
                 <div class="connecting-text" id="connectingText">
-                    Ждём, пока защищённое соединение будет готово у обоих собеседников...
+                    Ждём, пока защищённое соединение будет готово у обоих
+                    собеседников...
                 </div>
             </div>
 
@@ -224,7 +226,12 @@
                     </div>
                     <button
                         class="btn-call"
-                        onclick="alert('Звонки скоро будут доступны!')"
+                        type="button"
+                        onclick="
+                            window.startOutgoingCall &&
+                                window.startOutgoingCall()
+                        "
+                        title="Начать звонок"
                     >
                         <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -353,6 +360,7 @@
         <script src="/static/js/chat/utils.js"></script>
         <script src="/static/js/chat/emoji.js"></script>
         <script src="/static/js/chat/webrtc.js"></script>
+        <script src="/static/js/chat/calls.js"></script>
         <script src="/static/js/chat/websocket.js"></script>
     </body>
 </html>

@@ -7,6 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from config import config
+from routers.call_signaling import is_call_signal_type
 from security import (
     normalize_allowed_origins,
     websocket_origin_allowed,
@@ -237,7 +238,7 @@ async def lobby_ws(websocket: WebSocket):
                 clients[client_id]["room_id"] = None
                 broadcast_users()
 
-            elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"]:
+            elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"] or is_call_signal_type(msg_type):
                 target_id = payload.get("to")
                 if target_id in clients:
                     sender_room_id = clients[client_id].get("room_id")
@@ -279,6 +280,8 @@ async def lobby_ws(websocket: WebSocket):
                             await safe_send_json(websocket, {"type": "request_failed", "data": {"reason": "В relay payload отсутствуют данные шифрования"}})
                             continue
                     payload["from"] = client_id
+                    if msg_type == "call_request":
+                        payload["from_nickname"] = clients[client_id]["nickname"]
                     await safe_send_json(clients[target_id]["ws"], data)
                 else:
                     await safe_send_json(websocket, {
