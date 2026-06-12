@@ -423,3 +423,12 @@
         min-height: 300px;
     }
 }
+.call-device-hint {
+    margin-top: 6px;
+    color: #93c5fd;
+    font-size: 12px;
+    line-height: 1.35;
+}
+.call-device-hint.danger {
+    color: #fca5a5;
+}
