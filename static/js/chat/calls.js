@@ -1,12 +1,10 @@
 // Online voice/video calls for the encrypted chat.
 (() => {
-    const rtcConfig = {
-        iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun.cloudflare.com:3478" },
-        ],
-    };
+    const defaultIceServers = [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" },
+    ];
 
     const icons = {
         phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.11 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.63 2.61a2 2 0 0 1-.45 2.11L8.09 9.64a16 16 0 0 0 6.27 6.27l1.2-1.2a2 2 0 0 1 2.11-.45c.84.3 1.71.51 2.61.63A2 2 0 0 1 22 16.92z"/></svg>',
@@ -23,6 +21,8 @@
         pc: null,
         localStream: null,
         remoteStream: null,
+        remoteAudioStream: null,
+        remoteVideoStream: null,
         screenStream: null,
         micContext: null,
         micGain: null,
@@ -45,6 +45,7 @@
         audioSender: null,
         videoSender: null,
         deviceChangeHandler: null,
+        remoteMeterStarted: false,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -180,6 +181,7 @@
     function tileHtml(kind, name, muted) {
         return `<article class="call-tile" id="${kind}CallTile">
             <video id="${kind}CallVideo" ${muted ? "muted" : ""} autoplay playsinline class="is-hidden"></video>
+            ${kind === "remote" ? '<audio id="remoteCallAudio" autoplay playsinline></audio>' : ""}
             <div class="call-empty-camera" id="${kind}CallEmpty"><div><div class="call-avatar">${initial(name)}</div><p>Камера выключена</p></div></div>
             <div class="call-tile-footer"><div><div class="call-person-name">${safe(name)}</div><div class="call-person-state" id="${kind}CallState">${kind === "local" ? "Готов к разговору" : "Ожидаем видео"}</div></div><span>●</span></div>
         </article>`;
@@ -193,7 +195,7 @@
         await loadDevices();
         await requestCallMediaPermissions();
         await loadDevices();
-        createPeerConnection();
+        await createPeerConnection();
         subscribeDeviceChanges();
         if (isInitiator) await createOffer();
         toast("Звонок начался", `Вы в звонке с ${state.peerName}`);
@@ -209,7 +211,10 @@
             await requestCameraPermission({ keepTrack: false });
             await loadDevices();
         } catch (error) {
-            console.warn("[CALL] Initial media permission request failed", error);
+            console.warn(
+                "[CALL] Initial media permission request failed",
+                error,
+            );
         }
     }
 
@@ -357,20 +362,57 @@
         node.classList.toggle("danger", isError);
     }
 
-    function createPeerConnection() {
-        state.pc = new RTCPeerConnection(rtcConfig);
+    async function getCallIceServers() {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+            const res = await fetch("/turn-credentials", {
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (!res.ok) throw new Error(`TURN error ${res.status}`);
+            const { username, credential, urls } = await res.json();
+            if (!urls || !username || !credential) {
+                throw new Error("TURN credentials response is incomplete");
+            }
+            return [{ urls, username, credential }, ...defaultIceServers];
+        } catch (error) {
+            console.warn("[CALL] TURN unavailable, using STUN only", error);
+            return [...defaultIceServers];
+        }
+    }
+
+    async function createPeerConnection() {
+        const iceServers = await getCallIceServers();
+        state.pc = new RTCPeerConnection({
+            iceServers,
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: "all",
+            bundlePolicy: "max-bundle",
+            rtcpMuxPolicy: "require",
+        });
         state.remoteStream = new MediaStream();
+        state.remoteAudioStream = new MediaStream();
+        state.remoteVideoStream = new MediaStream();
+        state.remoteMeterStarted = false;
         const remoteVideo = $("remoteCallVideo");
-        remoteVideo.srcObject = state.remoteStream;
-        remoteVideo.volume = state.speakerVolume;
-        setSpeakerSink();
+        if (remoteVideo) {
+            remoteVideo.srcObject = state.remoteVideoStream;
+            remoteVideo.muted = true;
+        }
+        const remoteAudio = $("remoteCallAudio");
+        if (remoteAudio) {
+            remoteAudio.srcObject = state.remoteAudioStream;
+            remoteAudio.volume = state.speakerVolume;
+        }
+        await setSpeakerSink();
 
         const audioTransceiver = state.pc.addTransceiver("audio", {
             direction: "sendrecv",
         });
         state.audioSender = audioTransceiver.sender;
         const audioTrack = state.localStream.getAudioTracks()[0];
-        if (audioTrack) state.audioSender.replaceTrack(audioTrack);
+        if (audioTrack) await state.audioSender.replaceTrack(audioTrack);
 
         const videoTransceiver = state.pc.addTransceiver("video", {
             direction: "sendrecv",
@@ -380,20 +422,13 @@
             const tracks = event.streams?.[0]?.getTracks?.().length
                 ? event.streams[0].getTracks()
                 : [event.track];
-            tracks.forEach((track) => {
-                if (!state.remoteStream.getTracks().some((t) => t.id === track.id)) {
-                    state.remoteStream.addTrack(track);
-                }
-                track.onunmute = updateRemotePreview;
-                track.onmute = updateRemotePreview;
-                track.onended = () => {
-                    state.remoteStream.removeTrack(track);
-                    updateRemotePreview();
-                };
-            });
-            setVideo("remoteCallVideo", state.remoteStream, false);
+            tracks.forEach((track) => addRemoteTrack(track));
+            playRemoteMedia();
             updateRemotePreview();
-            startVolumeMeter(state.remoteStream, "remoteCallTile");
+            if (!state.remoteMeterStarted && state.remoteStream.getAudioTracks().length) {
+                state.remoteMeterStarted = true;
+                startVolumeMeter(state.remoteStream, "remoteCallTile");
+            }
         };
         state.pc.onicecandidate = (event) => {
             if (event.candidate)
@@ -472,7 +507,7 @@
         };
         $("callSpeakerVolume").oninput = (e) => {
             state.speakerVolume = Number(e.target.value) / 100;
-            const remote = $("remoteCallVideo");
+            const remote = $("remoteCallAudio");
             if (remote) remote.volume = state.speakerVolume;
             $("callSpeakerVolumeText").textContent = `${e.target.value}%`;
         };
@@ -610,10 +645,14 @@
             return;
         }
         if (track) {
-            const stream = kind === "video" && state.screenEnabled
-                ? state.screenStream
-                : state.localStream;
-            const newSender = state.pc.addTrack(track, stream || state.localStream);
+            const stream =
+                kind === "video" && state.screenEnabled
+                    ? state.screenStream
+                    : state.localStream;
+            const newSender = state.pc.addTrack(
+                track,
+                stream || state.localStream,
+            );
             if (kind === "audio") state.audioSender = newSender;
             if (kind === "video") state.videoSender = newSender;
         }
@@ -626,14 +665,59 @@
         setTileVideoState("local", Boolean(videoTrack));
     }
 
+    function addRemoteTrack(track) {
+        const targetStream =
+            track.kind === "audio" ? state.remoteAudioStream : state.remoteVideoStream;
+        [state.remoteStream, targetStream].forEach((stream) => {
+            if (stream && !stream.getTracks().some((t) => t.id === track.id)) {
+                stream.addTrack(track);
+            }
+        });
+        track.onunmute = () => {
+            playRemoteMedia();
+            updateRemotePreview();
+        };
+        track.onmute = updateRemotePreview;
+        track.onended = () => {
+            state.remoteStream?.removeTrack(track);
+            state.remoteAudioStream?.removeTrack(track);
+            state.remoteVideoStream?.removeTrack(track);
+            updateRemotePreview();
+        };
+    }
+
+    function playRemoteMedia() {
+        const remoteAudio = $("remoteCallAudio");
+        if (remoteAudio) {
+            remoteAudio.srcObject = state.remoteAudioStream;
+            remoteAudio.volume = state.speakerVolume;
+            remoteAudio.play?.().catch((error) =>
+                console.warn("[CALL] remote audio autoplay blocked", error),
+            );
+        }
+        const remoteVideo = $("remoteCallVideo");
+        if (remoteVideo) {
+            remoteVideo.srcObject = state.remoteVideoStream;
+            remoteVideo.muted = true;
+            remoteVideo.play?.().catch(() => {});
+        }
+    }
+
     function updateRemotePreview() {
-        const hasLiveVideo = state.remoteStream
+        const hasLiveVideo = state.remoteVideoStream
             ?.getVideoTracks()
-            .some((track) => track.readyState === "live" && !track.muted);
+            .some((track) => track.readyState === "live" && track.enabled);
+        const hasLiveAudio = state.remoteAudioStream
+            ?.getAudioTracks()
+            .some((track) => track.readyState === "live" && track.enabled);
         setTileVideoState("remote", Boolean(hasLiveVideo));
-        $("remoteCallState").textContent = hasLiveVideo
-            ? "Видео подключено"
-            : "Аудио подключено";
+        if ($("remoteCallState")) {
+            $("remoteCallState").textContent = hasLiveVideo
+                ? "Видео подключено"
+                : hasLiveAudio
+                  ? "Аудио подключено"
+                  : "Ожидаем медиа";
+        }
     }
 
     function setVideo(id, stream, muted) {
@@ -700,7 +784,7 @@
     }
 
     async function setSpeakerSink() {
-        const remote = $("remoteCallVideo");
+        const remote = $("remoteCallAudio");
         const deviceId = $("callSpeakerSelect")?.value || "";
         if (!remote?.setSinkId) {
             if ($("callSpeakerSelect")) $("callSpeakerSelect").disabled = true;
@@ -855,6 +939,8 @@
             pc: null,
             localStream: null,
             remoteStream: null,
+            remoteAudioStream: null,
+            remoteVideoStream: null,
             screenStream: null,
             micContext: null,
             micGain: null,
@@ -867,6 +953,7 @@
             meters: [],
             audioSender: null,
             videoSender: null,
+            remoteMeterStarted: false,
         });
         if (showMessage)
             addChatSystemMessage("Звонок завершён. Вы вернулись в чат.");
