@@ -60,7 +60,9 @@ function updateSafetyVerificationUI() {
 
 function formatElapsedTime(ms) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+    const minutes = Math.floor(totalSeconds / 60)
+        .toString()
+        .padStart(2, "0");
     const seconds = (totalSeconds % 60).toString().padStart(2, "0");
     return `${minutes}:${seconds}`;
 }
@@ -76,7 +78,9 @@ function buildConnectionTimerText(baseText) {
     return `${baseText}\nТаймер соединения: ${connectionElapsed} • Обмен ключами: ${keyElapsed}`;
 }
 
-function updateConnectionTimerText(baseText = "Устанавливаем защищённое соединение...") {
+function updateConnectionTimerText(
+    baseText = "Устанавливаем защищённое соединение...",
+) {
     const text = buildConnectionTimerText(baseText);
     const connectingText = document.getElementById("connectingText");
     if (connectingText) connectingText.textContent = text;
@@ -87,7 +91,9 @@ function updateConnectionTimerText(baseText = "Устанавливаем защ
     }
 }
 
-function startConnectionTimers(baseText = "Устанавливаем защищённое соединение...") {
+function startConnectionTimers(
+    baseText = "Устанавливаем защищённое соединение...",
+) {
     connectionStartedAt = Date.now();
     keyExchangeStartedAt = Date.now();
     clearInterval(connectionTimerInterval);
@@ -358,9 +364,7 @@ function activatePlanB() {
     }
     planBActive = true;
     showPlanBReadyState();
-    addSystemMessage(
-        "P2P не установился вовремя — переключились на Plan B.",
-    );
+    addSystemMessage("P2P не установился вовремя — переключились на Plan B.");
     syncTransportState("plan_b_activated");
     if (!sharedKey) {
         requestPeerPublicKey("plan_b_activated");
@@ -492,7 +496,8 @@ const PLAN_B_FILE_CHUNK_SIZE = 256 * 1024;
 const PLAN_B_MAX_FILE_SIZE = MAX_TRANSFER_FILE_SIZE;
 const PLAN_B_ACK_EVERY_CHUNKS = 32;
 const PLAN_B_MAX_IN_FLIGHT = 256;
-const PLAN_B_ACK_TIMEOUT_MS = 8000;
+const PLAN_B_ACK_TIMEOUT_MS = 15000;
+const FILE_STALL_CHECK_INTERVAL_MS = 5000;
 let planBReceivingFiles = {};
 let planBOutgoingFileTransfer = null;
 
@@ -600,7 +605,9 @@ async function getIceServers() {
         const turnReady = await checkTurnAvailability(turnIceServers);
 
         if (!turnReady) {
-            console.warn("⚠️ TURN relay не подтвердился быстро, но оставляем TURN в ICE для медленных/VPN сетей");
+            console.warn(
+                "⚠️ TURN relay не подтвердился быстро, но оставляем TURN в ICE для медленных/VPN сетей",
+            );
             usingTurn = true;
             return [...turnIceServers, ...DEFAULT_STUN_SERVERS];
         }
@@ -691,6 +698,38 @@ function showPeerActivityStatus(activity) {
 function clearPeerActivityStatus() {
     clearTimeout(peerActivityTimeout);
     setPeerHeaderStatus("В сети");
+}
+
+function markTransferProgress(bytes) {
+    if (!currentFileTransfer) return;
+    currentFileTransfer.lastProgressAt = Date.now();
+    currentFileTransfer.lastProgressBytes = bytes;
+}
+
+function startTransferWatchdog(
+    getBytes,
+    onStall,
+    intervalMs = FILE_STALL_CHECK_INTERVAL_MS,
+) {
+    let lastBytes = getBytes();
+    let lastProgressAt = Date.now();
+    return setInterval(() => {
+        const currentBytes = getBytes();
+        if (currentBytes > lastBytes) {
+            lastBytes = currentBytes;
+            lastProgressAt = Date.now();
+            return;
+        }
+        if (Date.now() - lastProgressAt >= intervalMs * 2) {
+            onStall();
+        }
+    }, intervalMs);
+}
+
+function cleanupCurrentTransferState() {
+    removeFileTransferProgressElement();
+    currentFileTransfer = null;
+    planBOutgoingFileTransfer = null;
 }
 
 function waitForPlanBAck(targetSeq, timeoutMs = PLAN_B_ACK_TIMEOUT_MS) {
@@ -823,7 +862,10 @@ window.startChat = async function (data) {
     flushReadReceipts();
 
     startConnectionTimers("Устанавливаем защищённое соединение...");
-    setConnectionOverlayVisible(true, buildConnectionTimerText("Устанавливаем защищённое соединение..."));
+    setConnectionOverlayVisible(
+        true,
+        buildConnectionTimerText("Устанавливаем защищённое соединение..."),
+    );
     updateChatStatus("Устанавливается защищённое соединение...");
     syncTransportState("chat_started");
     clearTimeout(planBTimer);
@@ -1478,6 +1520,20 @@ async function sendFile(file) {
             return;
         }
         console.error("[FILE] Ошибка отправки файла:", err);
+        if (
+            !planBActive &&
+            ws &&
+            ws.readyState === WebSocket.OPEN &&
+            sharedKey
+        ) {
+            addSystemMessage(
+                "⚠️ P2P-передача остановилась. Переключаемся на защищённый серверный канал и отправляем файл заново.",
+            );
+            cleanupCurrentTransferState();
+            activatePlanB();
+            await sendFilePlanB(file);
+            return;
+        }
         addSystemMessage("❌ Ошибка отправки файла. Попробуйте ещё раз.");
         updateChatStatus("Ошибка отправки файла");
     } finally {
@@ -1528,98 +1584,120 @@ async function sendFileBinary(file) {
 
     let offset = 0;
     const startedAt = Date.now();
+    let watchdogTriggered = false;
+    const watchdog = startTransferWatchdog(
+        () => currentFileTransfer?.confirmedBytes || 0,
+        () => {
+            watchdogTriggered = true;
+            if (fileChannel) fileChannel.close();
+        },
+    );
 
-    while (offset < file.size && !cancelled) {
-        await waitForBufferedAmountLow(
-            fileChannel,
-            FILE_CHANNEL_BUFFER_HIGH_WATERMARK,
-        );
-        if (cancelled) break;
-
-        while (
-            currentFileTransfer &&
-            offset - currentFileTransfer.confirmedBytes >
-                BINARY_MAX_UNACKED_BYTES &&
-            !cancelled
-        ) {
-            await waitForBinaryTransferProgress(
-                (transfer) =>
-                    offset - transfer.confirmedBytes <=
-                    BINARY_MAX_UNACKED_BYTES,
+    try {
+        while (offset < file.size && !cancelled) {
+            await waitForBufferedAmountLow(
+                fileChannel,
+                FILE_CHANNEL_BUFFER_HIGH_WATERMARK,
             );
+            if (cancelled) break;
+
+            while (
+                currentFileTransfer &&
+                offset - currentFileTransfer.confirmedBytes >
+                    BINARY_MAX_UNACKED_BYTES &&
+                !cancelled
+            ) {
+                await waitForBinaryTransferProgress(
+                    (transfer) =>
+                        offset - transfer.confirmedBytes <=
+                        BINARY_MAX_UNACKED_BYTES,
+                );
+            }
+            if (cancelled) break;
+
+            const plainChunk = new Uint8Array(
+                await file
+                    .slice(offset, offset + BINARY_FILE_CHUNK_SIZE)
+                    .arrayBuffer(),
+            );
+            const chunkIv = crypto.getRandomValues(new Uint8Array(12));
+            const encryptedChunk = new Uint8Array(
+                await crypto.subtle.encrypt(
+                    { name: "AES-GCM", iv: chunkIv },
+                    sharedKey,
+                    plainChunk,
+                ),
+            );
+            const header = new ArrayBuffer(12);
+            const headerView = new DataView(header);
+            headerView.setUint32(0, fileId);
+            headerView.setBigUint64(4, BigInt(offset));
+            const combined = new Uint8Array(
+                header.byteLength +
+                    chunkIv.byteLength +
+                    encryptedChunk.byteLength,
+            );
+            combined.set(new Uint8Array(header), 0);
+            combined.set(chunkIv, header.byteLength);
+            combined.set(
+                encryptedChunk,
+                header.byteLength + chunkIv.byteLength,
+            );
+            fileChannel.send(combined.buffer);
+
+            offset += plainChunk.length;
+            const queuedProgress = Math.round((offset / file.size) * 100);
+            const confirmed = currentFileTransfer?.confirmedBytes || 0;
+            const confirmedProgress = Math.round((confirmed / file.size) * 100);
+            updateFileTransferProgress(
+                queuedProgress,
+                `${formatFileSize(confirmed)} получено / ${formatFileSize(offset)} отправлено из ${formatFileSize(file.size)} • ${getTransferSpeedLabel(startedAt, confirmed || offset)}`,
+            );
+            updateChatStatus(`📤 ${confirmedProgress}% подтверждено`);
         }
-        if (cancelled) break;
 
-        const plainChunk = new Uint8Array(
-            await file
-                .slice(offset, offset + BINARY_FILE_CHUNK_SIZE)
-                .arrayBuffer(),
-        );
-        const chunkIv = crypto.getRandomValues(new Uint8Array(12));
-        const encryptedChunk = new Uint8Array(
-            await crypto.subtle.encrypt(
-                { name: "AES-GCM", iv: chunkIv },
-                sharedKey,
-                plainChunk,
-            ),
-        );
-        const header = new ArrayBuffer(12);
-        const headerView = new DataView(header);
-        headerView.setUint32(0, fileId);
-        headerView.setBigUint64(4, BigInt(offset));
-        const combined = new Uint8Array(
-            header.byteLength + chunkIv.byteLength + encryptedChunk.byteLength,
-        );
-        combined.set(new Uint8Array(header), 0);
-        combined.set(chunkIv, header.byteLength);
-        combined.set(encryptedChunk, header.byteLength + chunkIv.byteLength);
-        fileChannel.send(combined.buffer);
-
-        offset += plainChunk.length;
-        const queuedProgress = Math.round((offset / file.size) * 100);
-        const confirmed = currentFileTransfer?.confirmedBytes || 0;
-        const confirmedProgress = Math.round((confirmed / file.size) * 100);
-        updateFileTransferProgress(
-            queuedProgress,
-            `${formatFileSize(confirmed)} получено / ${formatFileSize(offset)} отправлено из ${formatFileSize(file.size)} • ${getTransferSpeedLabel(startedAt, confirmed || offset)}`,
-        );
-        updateChatStatus(`📤 ${confirmedProgress}% подтверждено`);
+        if (cancelled) {
+            // Добавляем системное сообщение об отмене для отправителя
+            messages.push({
+                system: true,
+                text: "📤 Отправка файла отменена",
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        } else {
+            dataChannel.send(
+                JSON.stringify({ type: "file_end", fileId: fileId }),
+            );
+            updateChatStatus(
+                "📤 100% отправлено. Ждём подтверждение получения...",
+            );
+            await waitForBinaryTransferProgress(
+                (transfer) => transfer.receivedComplete,
+                10 * 60 * 1000,
+            );
+            const url = URL.createObjectURL(file);
+            const messageType = isImage ? "image" : "file";
+            messages.push({
+                from: "me",
+                text: file.name,
+                size: file.size,
+                type: messageType,
+                url: url,
+                isImage: isImage,
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        }
+    } finally {
+        clearInterval(watchdog);
     }
-
-    if (cancelled) {
-        // Добавляем системное сообщение об отмене для отправителя
-        messages.push({
-            system: true,
-            text: "📤 Отправка файла отменена",
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-        });
-        renderMessages();
-    } else {
-        dataChannel.send(JSON.stringify({ type: "file_end", fileId: fileId }));
-        updateChatStatus("📤 100% отправлено. Ждём подтверждение получения...");
-        await waitForBinaryTransferProgress(
-            (transfer) => transfer.receivedComplete,
-            10 * 60 * 1000,
-        );
-        const url = URL.createObjectURL(file);
-        const messageType = isImage ? "image" : "file";
-        messages.push({
-            from: "me",
-            text: file.name,
-            size: file.size,
-            type: messageType,
-            url: url,
-            isImage: isImage,
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-        });
-        renderMessages();
-    }
+    if (watchdogTriggered) throw new Error("Binary transfer stalled");
 
     removeFileTransferProgressElement();
     currentFileTransfer = null;
@@ -1678,60 +1756,78 @@ async function sendFileJson(file) {
     const data = new Uint8Array(encrypted);
     let offset = 0;
     const startedAt = Date.now();
+    let watchdogTriggered = false;
+    const watchdog = startTransferWatchdog(
+        () => offset,
+        () => {
+            watchdogTriggered = true;
+        },
+    );
 
-    while (offset < data.length && !cancelled) {
-        while (dataChannel.bufferedAmount > 1_000_000 && !cancelled) {
-            await new Promise((r) => setTimeout(r, 10));
+    try {
+        while (offset < data.length && !cancelled) {
+            if (
+                !dataChannel ||
+                dataChannel.readyState !== "open" ||
+                watchdogTriggered
+            ) {
+                throw new Error("JSON transfer stalled or data channel closed");
+            }
+            while (dataChannel.bufferedAmount > 1_000_000 && !cancelled) {
+                await new Promise((r) => setTimeout(r, 10));
+            }
+            if (cancelled) break;
+            const chunk = data.slice(offset, offset + CHUNK);
+            dataChannel.send(
+                JSON.stringify({
+                    type: "file_chunk",
+                    fileId,
+                    offset,
+                    total: data.length,
+                    data: Array.from(chunk),
+                }),
+            );
+            offset += CHUNK;
+            const progress = Math.round((offset / data.length) * 100);
+            updateFileTransferProgress(
+                progress,
+                `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`,
+            );
+            updateChatStatus(`📤 ${progress}%`);
         }
-        if (cancelled) break;
-        const chunk = data.slice(offset, offset + CHUNK);
-        dataChannel.send(
-            JSON.stringify({
-                type: "file_chunk",
-                fileId,
-                offset,
-                total: data.length,
-                data: Array.from(chunk),
-            }),
-        );
-        offset += CHUNK;
-        const progress = Math.round((offset / data.length) * 100);
-        updateFileTransferProgress(
-            progress,
-            `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`,
-        );
-        updateChatStatus(`📤 ${progress}%`);
-    }
 
-    if (cancelled) {
-        // Добавляем системное сообщение об отмене для отправителя
-        messages.push({
-            system: true,
-            text: "📤 Отправка файла отменена",
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-        });
-        renderMessages();
-    } else {
-        dataChannel.send(JSON.stringify({ type: "file_end", fileId }));
-        const originalBlob = new Blob([fileData], { type: file.type });
-        const url = URL.createObjectURL(originalBlob);
-        const messageType = isImage ? "image" : "file";
-        messages.push({
-            from: "me",
-            text: file.name,
-            size: file.size,
-            type: messageType,
-            url: url,
-            isImage: isImage,
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-        });
-        renderMessages();
+        if (cancelled) {
+            // Добавляем системное сообщение об отмене для отправителя
+            messages.push({
+                system: true,
+                text: "📤 Отправка файла отменена",
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        } else {
+            dataChannel.send(JSON.stringify({ type: "file_end", fileId }));
+            const originalBlob = new Blob([fileData], { type: file.type });
+            const url = URL.createObjectURL(originalBlob);
+            const messageType = isImage ? "image" : "file";
+            messages.push({
+                from: "me",
+                text: file.name,
+                size: file.size,
+                type: messageType,
+                url: url,
+                isImage: isImage,
+                time: new Date().toLocaleTimeString("ru-RU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                }),
+            });
+            renderMessages();
+        }
+    } finally {
+        clearInterval(watchdog);
     }
 
     removeFileTransferProgressElement();
@@ -1803,77 +1899,98 @@ async function sendFilePlanB(file) {
         let offset = 0;
         let seq = 0;
         const startedAt = Date.now();
-        while (offset < data.length && !cancelled) {
-            while (
-                !cancelled &&
-                planBOutgoingFileTransfer &&
-                planBOutgoingFileTransfer.sentSeq -
-                    planBOutgoingFileTransfer.lastAckedSeq >=
-                    PLAN_B_MAX_IN_FLIGHT
-            ) {
+        let watchdogTriggered = false;
+        const watchdog = startTransferWatchdog(
+            () => planBOutgoingFileTransfer?.lastAckedSeq || -1,
+            () => {
+                watchdogTriggered = true;
+            },
+            FILE_STALL_CHECK_INTERVAL_MS,
+        );
+        try {
+            while (offset < data.length && !cancelled) {
+                while (
+                    !cancelled &&
+                    planBOutgoingFileTransfer &&
+                    planBOutgoingFileTransfer.sentSeq -
+                        planBOutgoingFileTransfer.lastAckedSeq >=
+                        PLAN_B_MAX_IN_FLIGHT
+                ) {
+                    await waitForPlanBAck(
+                        planBOutgoingFileTransfer.lastAckedSeq + 1,
+                    );
+                }
+                const chunk = data.slice(
+                    offset,
+                    offset + PLAN_B_FILE_CHUNK_SIZE,
+                );
+                const chunkBase64 = uint8ArrayToBase64(chunk);
+                await sendRealtimeSignal({
+                    type: "file_chunk",
+                    fileId,
+                    seq,
+                    offset,
+                    data: chunkBase64,
+                });
+                if (planBOutgoingFileTransfer) {
+                    planBOutgoingFileTransfer.sentSeq = seq;
+                }
+                offset += chunk.length;
+                seq += 1;
+                const progress = Math.round((offset / data.length) * 100);
+                updateFileTransferProgress(
+                    progress,
+                    `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`,
+                );
+                updateChatStatus(`📤 ${progress}%`);
+
+                await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+
+            if (!cancelled && planBOutgoingFileTransfer?.sentSeq >= 0) {
                 await waitForPlanBAck(
-                    planBOutgoingFileTransfer.lastAckedSeq + 1,
+                    planBOutgoingFileTransfer.sentSeq,
+                    PLAN_B_ACK_TIMEOUT_MS * 2,
                 );
             }
-            const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
-            const chunkBase64 = uint8ArrayToBase64(chunk);
-            await sendRealtimeSignal({
-                type: "file_chunk",
-                fileId,
-                seq,
-                offset,
-                data: chunkBase64,
-            });
-            if (planBOutgoingFileTransfer) {
-                planBOutgoingFileTransfer.sentSeq = seq;
+            if (watchdogTriggered) {
+                throw new Error("Plan B transfer stalled");
             }
-            offset += chunk.length;
-            seq += 1;
-            const progress = Math.round((offset / data.length) * 100);
-            updateFileTransferProgress(
-                progress,
-                `${(offset / 1024 / 1024).toFixed(1)} MB / ${(data.length / 1024 / 1024).toFixed(1)} MB • ${getTransferSpeedLabel(startedAt, offset)}`,
-            );
-            updateChatStatus(`📤 ${progress}%`);
 
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-
-        if (!cancelled && planBOutgoingFileTransfer?.sentSeq >= 0) {
-            await waitForPlanBAck(planBOutgoingFileTransfer.sentSeq);
-        }
-
-        if (cancelled) {
-            messages.push({
-                system: true,
-                text: "📤 Отправка файла отменена",
-                time: new Date().toLocaleTimeString("ru-RU", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                }),
-            });
-            renderMessages();
-        } else {
-            await sendRealtimeSignal({
-                type: "file_end",
-                fileId,
-            });
-            const originalBlob = new Blob([fileData], { type: file.type });
-            const url = URL.createObjectURL(originalBlob);
-            const messageType = isImage ? "image" : "file";
-            messages.push({
-                from: "me",
-                text: file.name,
-                size: file.size,
-                type: messageType,
-                url,
-                isImage,
-                time: new Date().toLocaleTimeString("ru-RU", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                }),
-            });
-            renderMessages();
+            if (cancelled) {
+                messages.push({
+                    system: true,
+                    text: "📤 Отправка файла отменена",
+                    time: new Date().toLocaleTimeString("ru-RU", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                    }),
+                });
+                renderMessages();
+            } else {
+                await sendRealtimeSignal({
+                    type: "file_end",
+                    fileId,
+                });
+                const originalBlob = new Blob([fileData], { type: file.type });
+                const url = URL.createObjectURL(originalBlob);
+                const messageType = isImage ? "image" : "file";
+                messages.push({
+                    from: "me",
+                    text: file.name,
+                    size: file.size,
+                    type: messageType,
+                    url,
+                    isImage,
+                    time: new Date().toLocaleTimeString("ru-RU", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                    }),
+                });
+                renderMessages();
+            }
+        } finally {
+            clearInterval(watchdog);
         }
     } finally {
         removeFileTransferProgressElement();
@@ -2283,7 +2400,9 @@ window.handleWebRTCMessage = async function (msg) {
             );
             console.log("[KEY] ✅ Ключи шифрования согласованы");
             if (keyExchangeStartedAt) {
-                console.log(`[KEY] Обмен ключами занял ${formatElapsedTime(Date.now() - keyExchangeStartedAt)}`);
+                console.log(
+                    `[KEY] Обмен ключами занял ${formatElapsedTime(Date.now() - keyExchangeStartedAt)}`,
+                );
             }
             rtcState.keyReady = true;
             trySendReady();

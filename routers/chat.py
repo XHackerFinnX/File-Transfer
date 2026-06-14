@@ -20,6 +20,8 @@ templates = Jinja2Templates(directory="templates")
 allowed_origins = normalize_allowed_origins(config.ALLOWED_ORIGINS)
 
 clients = {}
+clients_by_session = {}
+disconnect_cleanup_tasks = {}
 rooms_chat = {}
 connect_attempts = defaultdict(deque)
 relay_usage = defaultdict(deque)
@@ -32,17 +34,23 @@ RELAY_WINDOW_SECONDS = config.RELAY_WINDOW_SECONDS
 RELAY_MAX_BYTES_PER_WINDOW = config.RELAY_MAX_BYTES_PER_WINDOW
 ROOM_CREATE_WINDOW_SECONDS = 60
 ROOM_CREATE_MAX_PER_WINDOW = 8
+MOBILE_RECONNECT_GRACE_SECONDS = 180
 
 async def safe_send_json(ws, message):
     try:
         await ws.send_json(message)
-    except:
-        pass
+        return True
+    except Exception:
+        return False
 
 def broadcast_users():
     waiting_list = []
     for cid, data in clients.items():
-        if data.get("status") == "waiting" and data.get("room_id") in rooms_chat:
+        if (
+            data.get("status") == "waiting"
+            and data.get("room_id") in rooms_chat
+            and data.get("connected", True)
+        ):
             room = rooms_chat[data["room_id"]]
             waiting_list.append({
                 "client_id": cid,
@@ -50,7 +58,8 @@ def broadcast_users():
                 "title": room["title"]
             })
     for client in clients.values():
-        asyncio.create_task(safe_send_json(client["ws"], {"type": "users", "data": waiting_list}))
+        if client.get("connected", True):
+            asyncio.create_task(safe_send_json(client["ws"], {"type": "users", "data": waiting_list}))
 
 def short_id(value: str | None) -> str:
     if not value:
@@ -90,6 +99,36 @@ def consume_room_create_budget(client_id: str) -> bool:
     bucket.append(now)
     return True
 
+async def finalize_client_disconnect(client_id: str, expected_ws: WebSocket | None = None):
+    await asyncio.sleep(MOBILE_RECONNECT_GRACE_SECONDS)
+    client = clients.get(client_id)
+    if not client:
+        disconnect_cleanup_tasks.pop(client_id, None)
+        return
+    if expected_ws is not None and client.get("ws") is not expected_ws:
+        disconnect_cleanup_tasks.pop(client_id, None)
+        return
+    if client.get("connected", True):
+        disconnect_cleanup_tasks.pop(client_id, None)
+        return
+
+    room_id = client.get("room_id")
+    if room_id and room_id in rooms_chat:
+        room = rooms_chat[room_id]
+        other = room.get("peer") if room.get("host") == client_id else room.get("host")
+        if other and other in clients and clients[other].get("connected", True):
+            await safe_send_json(clients[other]["ws"], {"type": "peer_disconnected"})
+        if room.get("host") == client_id or not room.get("peer"):
+            rooms_chat.pop(room_id, None)
+    session_key = client.get("session_key")
+    if session_key:
+        clients_by_session.pop(session_key, None)
+    clients.pop(client_id, None)
+    relay_usage.pop(client_id, None)
+    room_create_usage.pop(client_id, None)
+    disconnect_cleanup_tasks.pop(client_id, None)
+    broadcast_users()
+
 @router.websocket("/ws")
 async def lobby_ws(websocket: WebSocket):
     client_ip = get_websocket_client_ip(
@@ -108,16 +147,37 @@ async def lobby_ws(websocket: WebSocket):
         await websocket.close(code=4403, reason="Origin not allowed")
         return
     await websocket.accept()
-    client_id = str(uuid.uuid4())
-    clients[client_id] = {
-        "ws": websocket,
-        "nickname": "Аноним",
-        "status": "online",
-        "room_id": None
-    }
-    await websocket.send_json({"type": "init", "data": {"client_id": client_id}})
+    session_key = (websocket.query_params.get("session") or "")[:80]
+    resumed = False
+    if session_key and session_key in clients_by_session:
+        client_id = clients_by_session[session_key]
+        if client_id in clients:
+            cleanup_task = disconnect_cleanup_tasks.pop(client_id, None)
+            if cleanup_task:
+                cleanup_task.cancel()
+            clients[client_id]["ws"] = websocket
+            clients[client_id]["connected"] = True
+            clients[client_id].pop("disconnected_at", None)
+            resumed = True
+        else:
+            clients_by_session.pop(session_key, None)
+
+    if not resumed:
+        client_id = str(uuid.uuid4())
+        clients[client_id] = {
+            "ws": websocket,
+            "nickname": "Аноним",
+            "status": "online",
+            "room_id": None,
+            "session_key": session_key or None,
+            "connected": True,
+        }
+        if session_key:
+            clients_by_session[session_key] = client_id
+
+    await websocket.send_json({"type": "init", "data": {"client_id": client_id, "resumed": resumed}})
     broadcast_users()
-    print(f"[CHAT] Новый клиент: {short_id(client_id)} ip={client_ip}")
+    print(f"[CHAT] {'Возврат' if resumed else 'Новый клиент'}: {short_id(client_id)} ip={client_ip}")
 
     try:
         while True:
@@ -150,7 +210,7 @@ async def lobby_ws(websocket: WebSocket):
 
             elif msg_type == "connect_request":
                 target_id = payload.get("target_id")
-                if target_id in clients and clients[target_id]["status"] == "waiting":
+                if target_id in clients and clients[target_id]["status"] == "waiting" and clients[target_id].get("connected", True):
                     await clients[target_id]["ws"].send_json({
                         "type": "incoming_request",
                         "data": {"from": client_id, "from_nickname": clients[client_id]["nickname"]}
@@ -240,7 +300,7 @@ async def lobby_ws(websocket: WebSocket):
 
             elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"] or is_call_signal_type(msg_type):
                 target_id = payload.get("to")
-                if target_id in clients:
+                if target_id in clients and clients[target_id].get("connected", True):
                     sender_room_id = clients[client_id].get("room_id")
                     target_room_id = clients[target_id].get("room_id")
                     if (
@@ -294,18 +354,15 @@ async def lobby_ws(websocket: WebSocket):
     except Exception as e:
         print(f"[CHAT] Ошибка: {e}")
     finally:
-        if client_id in clients:
-            room_id = clients[client_id].get("room_id")
-            if room_id and room_id in rooms_chat:
-                room = rooms_chat[room_id]
-                other = room.get("peer") if room.get("host") == client_id else room.get("host")
-                if other and other in clients:
-                    await safe_send_json(clients[other]["ws"], {"type": "peer_disconnected"})
-                if room.get("host") == client_id or not room.get("peer"):
-                    rooms_chat.pop(room_id, None)
-            clients.pop(client_id, None)
-            relay_usage.pop(client_id, None)
-            room_create_usage.pop(client_id, None)
+        if client_id in clients and clients[client_id].get("ws") is websocket:
+            clients[client_id]["connected"] = False
+            clients[client_id]["disconnected_at"] = time.time()
+            cleanup_task = disconnect_cleanup_tasks.get(client_id)
+            if cleanup_task:
+                cleanup_task.cancel()
+            disconnect_cleanup_tasks[client_id] = asyncio.create_task(
+                finalize_client_disconnect(client_id, websocket)
+            )
             broadcast_users()
 
 @router.get("/", response_class=HTMLResponse)

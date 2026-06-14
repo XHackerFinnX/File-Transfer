@@ -1,6 +1,27 @@
 let ws,
     myClientId = "";
 let pendingRequest = false;
+const CHAT_SESSION_STORAGE_KEY = "p2p_chat_session_id";
+let mobileFilePickerOpen = false;
+
+function getChatSessionId() {
+    let sessionId = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+    if (!sessionId) {
+        sessionId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        localStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+    }
+    return sessionId;
+}
+
+function updateViewportHeightVar() {
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
+}
+
+updateViewportHeightVar();
+window.addEventListener("resize", updateViewportHeightVar);
+window.visualViewport?.addEventListener("resize", updateViewportHeightVar);
+window.visualViewport?.addEventListener("scroll", updateViewportHeightVar);
 
 function setChatScreen(screen, text = "") {
     const lobby = document.getElementById("lobby");
@@ -20,7 +41,8 @@ window.setChatScreen = setChatScreen;
 
 function connectWebSocket() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${protocol}//${location.host}/chat/ws`);
+    const sessionId = encodeURIComponent(getChatSessionId());
+    ws = new WebSocket(`${protocol}//${location.host}/chat/ws?session=${sessionId}`);
     window.ws = ws;
 
     ws.onmessage = async (e) => {
@@ -29,6 +51,9 @@ function connectWebSocket() {
 
         if (msg.type === "init") {
             myClientId = msg.data.client_id;
+            if (msg.data.resumed) {
+                console.log("🔄 Сессия чата восстановлена после мобильного фонового режима");
+            }
         } else if (msg.type === "users") {
             renderUsers(msg.data);
         } else if (msg.type === "incoming_request") {
@@ -485,10 +510,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (attachBtn && fileInput) {
         attachBtn.addEventListener("click", () => {
+            mobileFilePickerOpen = true;
+            document.body.classList.add("file-picker-open");
             fileInput.click();
         });
 
         fileInput.addEventListener("change", (e) => {
+            mobileFilePickerOpen = false;
+            document.body.classList.remove("file-picker-open");
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
                 if (file.size > 1024 * 1024 * 1024 * 100) {
@@ -503,6 +532,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 fileInput.value = "";
             }
+        });
+
+        window.addEventListener("focus", () => {
+            if (!mobileFilePickerOpen) return;
+            mobileFilePickerOpen = false;
+            document.body.classList.remove("file-picker-open");
         });
     }
 
