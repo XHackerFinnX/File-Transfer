@@ -710,6 +710,7 @@ body::before {
 
 .connecting-text {
     max-width: 360px;
+    white-space: pre-line;
     color: #94a3b8;
     font-size: 14px;
     line-height: 1.5;
@@ -744,6 +745,7 @@ body::before {
 
 .connection-overlay-text {
     font-size: 14px;
+    white-space: pre-line;
     color: #dbeafe;
     text-align: center;
     max-width: 280px;

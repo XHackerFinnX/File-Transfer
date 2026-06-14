@@ -10,9 +10,12 @@ let pc,
     peerNickname,
     messages = [];
 let connectionTimeout = null;
+let connectionTimerInterval = null;
+let connectionStartedAt = 0;
+let keyExchangeStartedAt = 0;
 
 let connectionAttempts = 0;
-const MAX_TURN_ATTEMPTS = 3;
+const MAX_TURN_ATTEMPTS = 2;
 let forceTurn = true;
 let usingTurn = false;
 let localTransportState = null;
@@ -24,6 +27,9 @@ let turnProbePromise = null;
 let turnProbeCachedAt = 0;
 let turnProbeCachedResult = false;
 const TURN_PROBE_CACHE_MS = 60_000;
+const PLAN_B_ACTIVATION_DELAY_MS = 20_000;
+const CONNECTION_WARNING_DELAY_MS = 30_000;
+const KEY_RETRY_INTERVAL_MS = 2_000;
 const DEFAULT_STUN_SERVERS = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -50,6 +56,71 @@ let safetyVerified = true;
 
 function updateSafetyVerificationUI() {
     // Ручное подтверждение по коду отключено: после обмена ключами чат готов автоматически.
+}
+
+function formatElapsedTime(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
+    const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+    return `${minutes}:${seconds}`;
+}
+
+function buildConnectionTimerText(baseText) {
+    const now = Date.now();
+    const connectionElapsed = connectionStartedAt
+        ? formatElapsedTime(now - connectionStartedAt)
+        : "00:00";
+    const keyElapsed = keyExchangeStartedAt
+        ? formatElapsedTime(now - keyExchangeStartedAt)
+        : "00:00";
+    return `${baseText}\nТаймер соединения: ${connectionElapsed} • Обмен ключами: ${keyElapsed}`;
+}
+
+function updateConnectionTimerText(baseText = "Устанавливаем защищённое соединение...") {
+    const text = buildConnectionTimerText(baseText);
+    const connectingText = document.getElementById("connectingText");
+    if (connectingText) connectingText.textContent = text;
+    const overlay = document.getElementById("connectionOverlay");
+    const overlayText = overlay?.querySelector(".connection-overlay-text");
+    if (overlayText && !overlay.classList.contains("hidden")) {
+        overlayText.textContent = text;
+    }
+}
+
+function startConnectionTimers(baseText = "Устанавливаем защищённое соединение...") {
+    connectionStartedAt = Date.now();
+    keyExchangeStartedAt = Date.now();
+    clearInterval(connectionTimerInterval);
+    updateConnectionTimerText(baseText);
+    connectionTimerInterval = setInterval(() => {
+        updateConnectionTimerText(baseText);
+        if (!sharedKey && peerId) {
+            requestPeerPublicKey("key_timer_retry");
+        }
+    }, KEY_RETRY_INTERVAL_MS);
+}
+
+function stopConnectionTimers() {
+    clearInterval(connectionTimerInterval);
+    connectionTimerInterval = null;
+}
+
+function uint8ArrayToBase64(bytes) {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
+
+function base64ToUint8Array(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
 }
 
 function requestPeerPublicKey(reason = "manual") {
@@ -110,7 +181,7 @@ async function encryptPlanBPayload(payload) {
     return {
         mode: "encrypted_payload",
         iv: Array.from(iv),
-        encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+        encrypted: uint8ArrayToBase64(new Uint8Array(encrypted)),
     };
 }
 
@@ -120,9 +191,7 @@ async function decryptPlanBPayload(payload) {
         return null;
     }
     const iv = new Uint8Array(payload.iv);
-    const encrypted = Uint8Array.from(atob(payload.encrypted), (c) =>
-        c.charCodeAt(0),
-    );
+    const encrypted = base64ToUint8Array(payload.encrypted);
     const decrypted = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         sharedKey,
@@ -145,6 +214,7 @@ function setConnectionOverlayVisible(visible, text) {
 function resetConnectionReadiness() {
     clearTimeout(planBTimer);
     planBTimer = null;
+    stopConnectionTimers();
     clearTimeout(pendingPlanBKeyRetry);
     pendingPlanBKeyRetry = null;
     localReadySent = false;
@@ -236,6 +306,7 @@ function showPlanBReadyState(
     clearTimeout(connectionTimeout);
     clearTimeout(planBTimer);
     planBTimer = null;
+    if (sharedKey) stopConnectionTimers();
     setConnectionOverlayVisible(false);
     if (typeof window.setChatScreen === "function") {
         window.setChatScreen("chat");
@@ -271,10 +342,11 @@ function evaluateConnectionReady() {
         const waitText = localReady
             ? "Ваше соединение готово. Ждём подтверждение готовности собеседника..."
             : "Устанавливаем защищённое соединение...";
+        const timedWaitText = buildConnectionTimerText(waitText);
         if (typeof window.setChatScreen === "function") {
-            window.setChatScreen("connecting", waitText);
+            window.setChatScreen("connecting", timedWaitText);
         }
-        setConnectionOverlayVisible(true, waitText);
+        setConnectionOverlayVisible(true, timedWaitText);
     }
 }
 
@@ -287,7 +359,7 @@ function activatePlanB() {
     planBActive = true;
     showPlanBReadyState();
     addSystemMessage(
-        "P2P не установился за 5 секунд — переключились на Plan B.",
+        "P2P не установился вовремя — переключились на Plan B.",
     );
     syncTransportState("plan_b_activated");
     if (!sharedKey) {
@@ -528,9 +600,9 @@ async function getIceServers() {
         const turnReady = await checkTurnAvailability(turnIceServers);
 
         if (!turnReady) {
-            console.warn("❌ TURN не прошёл проверку relay → fallback на STUN");
-            forceTurn = false;
-            return [...DEFAULT_STUN_SERVERS];
+            console.warn("⚠️ TURN relay не подтвердился быстро, но оставляем TURN в ICE для медленных/VPN сетей");
+            usingTurn = true;
+            return [...turnIceServers, ...DEFAULT_STUN_SERVERS];
         }
 
         usingTurn = true;
@@ -539,7 +611,6 @@ async function getIceServers() {
         return [...turnIceServers, ...DEFAULT_STUN_SERVERS];
     } catch (err) {
         console.warn("❌ TURN недоступен → fallback на STUN");
-        forceTurn = false;
         usingTurn = false;
         syncTransportState("stun_only_selected", false);
 
@@ -751,7 +822,8 @@ window.startChat = async function (data) {
     messages = [];
     flushReadReceipts();
 
-    setConnectionOverlayVisible(true, "Устанавливаем защищённое соединение...");
+    startConnectionTimers("Устанавливаем защищённое соединение...");
+    setConnectionOverlayVisible(true, buildConnectionTimerText("Устанавливаем защищённое соединение..."));
     updateChatStatus("Устанавливается защищённое соединение...");
     syncTransportState("chat_started");
     clearTimeout(planBTimer);
@@ -761,7 +833,7 @@ window.startChat = async function (data) {
         if (!ready) {
             activatePlanB();
         }
-    }, 5000);
+    }, PLAN_B_ACTIVATION_DELAY_MS);
     clearTimeout(connectionTimeout);
     connectionTimeout = setTimeout(() => {
         if (planBActive) return;
@@ -778,10 +850,10 @@ window.startChat = async function (data) {
                 "Соединение устанавливается долго. Ожидаем сеть...",
             );
             addSystemMessage(
-                "Соединение не установлено за 15 секунд. Попробуйте выйти и создать новый чат.",
+                "Соединение устанавливается дольше обычного. Продолжаем попытки и при необходимости включим Plan B автоматически.",
             );
         }
-    }, 15000);
+    }, CONNECTION_WARNING_DELAY_MS);
 
     const iceServers = await getIceServers();
 
@@ -848,19 +920,11 @@ window.startChat = async function (data) {
                     return;
                 }
 
-                console.warn("⚠️ TURN не работает → переключаемся на STUN");
-                forceTurn = false;
+                console.warn("⚠️ P2P не установился → включаем Plan B");
                 connectionAttempts = 0;
 
-                setTimeout(() => {
-                    window.startChat({
-                        peer_id: peerId,
-                        peer_nickname: peerNickname,
-                        role: role,
-                    });
-                }, 1000);
-
-                updateChatStatus("Переключаемся на резервное соединение...");
+                activatePlanB();
+                updateChatStatus("Включаем резервное соединение Plan B...");
                 break;
             case "disconnected":
                 if (planBActive) {
@@ -910,11 +974,9 @@ window.startChat = async function (data) {
             true,
             ["deriveKey"],
         );
-        const pub = btoa(
-            String.fromCharCode(
-                ...new Uint8Array(
-                    await crypto.subtle.exportKey("raw", myKeyPair.publicKey),
-                ),
+        const pub = uint8ArrayToBase64(
+            new Uint8Array(
+                await crypto.subtle.exportKey("raw", myKeyPair.publicKey),
             ),
         );
         myPublicKeyBase64 = pub;
@@ -1148,9 +1210,7 @@ function setupDataChannel() {
                     return;
                 }
                 const iv = new Uint8Array(data.iv);
-                const encrypted = Uint8Array.from(atob(data.encrypted), (c) =>
-                    c.charCodeAt(0),
-                );
+                const encrypted = base64ToUint8Array(data.encrypted);
                 const decrypted = await crypto.subtle.decrypt(
                     { name: "AES-GCM", iv },
                     sharedKey,
@@ -1756,7 +1816,7 @@ async function sendFilePlanB(file) {
                 );
             }
             const chunk = data.slice(offset, offset + PLAN_B_FILE_CHUNK_SIZE);
-            const chunkBase64 = btoa(String.fromCharCode(...chunk));
+            const chunkBase64 = uint8ArrayToBase64(chunk);
             await sendRealtimeSignal({
                 type: "file_chunk",
                 fileId,
@@ -1868,9 +1928,7 @@ async function sendMessage() {
                 type: "message",
                 messageId,
                 iv: Array.from(iv),
-                encrypted: btoa(
-                    String.fromCharCode(...new Uint8Array(encrypted)),
-                ),
+                encrypted: uint8ArrayToBase64(new Uint8Array(encrypted)),
                 replyTo: replyToId,
             };
             dataChannel.send(JSON.stringify(messagePayload));
@@ -2016,11 +2074,9 @@ function showTypingIndicator() {
 
 window.handleWebRTCMessage = async function (msg) {
     if (msg.type === "public_key_request" && myKeyPair) {
-        const pub = btoa(
-            String.fromCharCode(
-                ...new Uint8Array(
-                    await crypto.subtle.exportKey("raw", myKeyPair.publicKey),
-                ),
+        const pub = uint8ArrayToBase64(
+            new Uint8Array(
+                await crypto.subtle.exportKey("raw", myKeyPair.publicKey),
             ),
         );
         myPublicKeyBase64 = pub;
@@ -2109,9 +2165,7 @@ window.handleWebRTCMessage = async function (msg) {
             if (payload.type === "file_chunk") {
                 const receiving = planBReceivingFiles[payload.fileId];
                 if (!receiving || !payload.data) return;
-                const chunk = Uint8Array.from(atob(payload.data), (c) =>
-                    c.charCodeAt(0),
-                );
+                const chunk = base64ToUint8Array(payload.data);
                 receiving.chunks[payload.offset] = chunk;
                 receiving.received += chunk.length;
                 receiving.receivedChunks = (receiving.receivedChunks || 0) + 1;
@@ -2215,7 +2269,7 @@ window.handleWebRTCMessage = async function (msg) {
             peerPublicKeyBase64 = msg.data.key;
             const theirPub = await crypto.subtle.importKey(
                 "raw",
-                Uint8Array.from(atob(msg.data.key), (c) => c.charCodeAt(0)),
+                base64ToUint8Array(msg.data.key),
                 { name: "ECDH", namedCurve: "P-256" },
                 true,
                 [],
@@ -2228,6 +2282,9 @@ window.handleWebRTCMessage = async function (msg) {
                 ["encrypt", "decrypt"],
             );
             console.log("[KEY] ✅ Ключи шифрования согласованы");
+            if (keyExchangeStartedAt) {
+                console.log(`[KEY] Обмен ключами занял ${formatElapsedTime(Date.now() - keyExchangeStartedAt)}`);
+            }
             rtcState.keyReady = true;
             trySendReady();
             evaluateConnectionReady();
@@ -2238,6 +2295,7 @@ window.handleWebRTCMessage = async function (msg) {
                 console.log(`[KEY] Safety fingerprint: ${safetyNumber}`);
                 updateSafetyVerificationUI();
             }
+            if (planBActive || connectionReadyShown) stopConnectionTimers();
             syncTransportState("shared_key_ready", false);
         } catch (err) {
             console.error("[KEY] Error deriving shared key:", err);

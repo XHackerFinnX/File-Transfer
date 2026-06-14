@@ -491,8 +491,8 @@ document.addEventListener("DOMContentLoaded", () => {
         fileInput.addEventListener("change", (e) => {
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
-                if (file.size > 1024 * 1024 * 1024) {
-                    alert("Файл слишком большой! Максимальный размер: 1 ГБ");
+                if (file.size > 1024 * 1024 * 1024 * 100) {
+                    alert("Файл слишком большой! Максимальный размер: 100 ГБ");
                     fileInput.value = "";
                     return;
                 }
