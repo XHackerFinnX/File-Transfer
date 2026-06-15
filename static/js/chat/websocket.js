@@ -622,6 +622,7 @@ window.addEventListener("load", () => {
                     hideMenus();
                 }),
         );
+        reactionBar.classList.remove("expanded");
         const rect = messageEl.getBoundingClientRect();
         reactionBar.style.left = `${Math.min(rect.left, window.innerWidth - 320)}px`;
         reactionBar.style.top = `${Math.max(8, rect.top - 54)}px`;
@@ -643,6 +644,12 @@ window.addEventListener("load", () => {
         const isFile = messageEl.classList.contains("file");
         const isImage = messageEl.classList.contains("image");
         const isOwnMessage = messageEl.classList.contains("me");
+        document.getElementById("replyMenuItem").style.display = "flex";
+        const canReply = !isFile || isImage;
+        const canReact = !isFile || isImage;
+        document.getElementById("replyMenuItem").style.display = canReply
+            ? "flex"
+            : "none";
         document.getElementById("copyMenuItem").style.display =
             isFile || isImage ? "none" : "flex";
         document.getElementById("editMenuItem").style.display =
@@ -655,7 +662,12 @@ window.addEventListener("load", () => {
         document.getElementById("saveFileMenuItem").style.display = isFile
             ? "flex"
             : "none";
-        showReactions(messageEl);
+        if (canReact) {
+            showReactions(messageEl);
+        } else {
+            reactionBar.style.display = "none";
+            reactionBar.classList.remove("expanded");
+        }
         const rect = messageEl.getBoundingClientRect();
         contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
         contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 180)}px`;
@@ -667,7 +679,11 @@ window.addEventListener("load", () => {
             hideMenus();
     });
     document.getElementById("replyMenuItem").onclick = () => {
-        if (selectedMessage && window.replyToMessage)
+        const canReply =
+            selectedMessage &&
+            (!selectedMessage.classList.contains("file") ||
+                selectedMessage.classList.contains("image"));
+        if (canReply && window.replyToMessage)
             window.replyToMessage(selectedMessage.dataset.messageId);
         hideMenus();
     };

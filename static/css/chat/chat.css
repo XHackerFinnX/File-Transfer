@@ -1834,7 +1834,9 @@ body::before {
     z-index: 10000;
     display: none;
     flex-direction: column;
-    padding: 2px 0;
+    padding: 4px;
+    overflow: hidden;
+    background-clip: padding-box;
 }
 
 .context-menu-item {
@@ -1845,6 +1847,7 @@ body::before {
     display: flex;
     align-items: center;
     gap: 10px;
+    border-radius: 9px;
     transition: background 0.2s ease;
 }
 
@@ -1992,10 +1995,17 @@ body::before {
     color: #cbd5e1;
     font-size: 12px;
     display: block;
+    width: 100%;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    /* white-space: nowrap; */
-    max-width: 110px;
+    white-space: nowrap;
+}
+
+.composer-reply > div,
+.message-reply-preview > div:last-child {
+    min-width: 0;
+    flex: 1;
 }
 .composer-reply button {
     border: none;
@@ -2036,7 +2046,7 @@ body::before {
     background: rgba(15, 23, 42, 0.35);
     color: #e2e8f0;
     padding: 2px 7px;
-    font-size: 12px;
+    font-size: 15px;
     cursor: pointer;
 }
 .message-reaction.mine {
@@ -2234,8 +2244,9 @@ body::before {
     position: absolute;
     left: 0;
     top: calc(100% + 8px);
-    width: min(286px, calc(100vw - 20px));
+    width: min(296px, calc(100vw - 20px));
     max-height: 230px;
+    overflow-x: hidden;
     overflow-y: auto;
     flex-wrap: wrap;
     gap: 4px;
@@ -2244,6 +2255,9 @@ body::before {
     background: rgba(15, 23, 42, 0.98);
     border: 1px solid rgba(148, 163, 184, 0.24);
     box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    background-clip: padding-box;
+    clip-path: inset(0 round 18px);
+    scrollbar-gutter: stable;
 }
 .context-reaction-bar.expanded {
     border-radius: 18px;

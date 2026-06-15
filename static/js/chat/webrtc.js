@@ -2240,14 +2240,15 @@ async function sendFilePlanB(file, queueItem = null) {
 }
 
 function getMessageById(messageId) {
-    return messages.find((message) => message.id === messageId);
+    if (messageId == null) return undefined;
+    return messages.find((message) => String(message.id) === String(messageId));
 }
 
 function getMessagePreview(message) {
     if (!message) return "Сообщение";
     if (message.deleted) return "Сообщение удалено";
-    if (message.type === "image") return `📷 ${message.text || "Изображение"}`;
-    if (message.type === "file") return `📎 ${message.text || "Файл"}`;
+    if (message.type === "image") return `${message.text || "Изображение"}`;
+    if (message.type === "file") return `${message.text || "Файл"}`;
     return message.text || "Сообщение";
 }
 
