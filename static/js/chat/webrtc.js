@@ -516,25 +516,11 @@ function removeFileTransferProgressElement() {
     fileTransferProgressElement = null;
 }
 
-function createFileTransferProgressElement(cancelHandler) {
+function createFileTransferProgressElement() {
+    // Старый индикатор .file-progress-container больше не создаём:
+    // прогресс и управление передачей теперь находятся в #fileQueuePanel.
     removeFileTransferProgressElement();
-    fileTransferProgressElement = document.createElement("div");
-    fileTransferProgressElement.className = "file-progress-container";
-    fileTransferProgressElement.innerHTML = `
-        <div class="file-progress-bar"><div class="file-progress-fill"></div></div>
-        <div class="file-progress-info">0%</div>
-        <button class="file-progress-cancel" type="button" aria-label="Отменить передачу">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-        </button>
-    `;
-    const inputWrapper = document.querySelector(".message-input-wrapper");
-    if (inputWrapper) inputWrapper.before(fileTransferProgressElement);
-    fileTransferProgressElement
-        .querySelector(".file-progress-cancel")
-        .addEventListener("click", cancelHandler);
-    return fileTransferProgressElement;
+    return null;
 }
 
 function updateFileTransferProgress(fillPercent, infoText) {
@@ -1553,10 +1539,14 @@ function renderFileQueue() {
             if (!item) return;
             if (button.dataset.action === "cancel") {
                 item.cancelled = true;
-                if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-                const index = outgoingFileQueue.indexOf(item);
-                if (index >= 0) outgoingFileQueue.splice(index, 1);
-                cancelActiveFileTransfer();
+                const isActive = currentFileTransfer?.queueItem === item;
+                if (isActive) {
+                    cancelActiveFileTransfer();
+                } else {
+                    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+                    const index = outgoingFileQueue.indexOf(item);
+                    if (index >= 0) outgoingFileQueue.splice(index, 1);
+                }
             } else if (button.dataset.action === "pause") {
                 item.paused = !item.paused;
                 item.statusText = item.paused
@@ -1595,10 +1585,13 @@ window.enqueueFiles = function (files) {
 };
 
 async function waitWhileQueueItemPaused(item) {
-    while (item.paused && !item.cancelled) {
-        item.statusText = "Пауза";
+    while (item?.paused && !item.cancelled) {
+        item.statusText = item.status === "sending" ? "Пауза отправки" : "Пауза";
         renderFileQueue();
         await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    if (item?.cancelled) {
+        throw new Error("File transfer cancelled");
     }
 }
 
@@ -1609,6 +1602,7 @@ async function processFileQueue() {
         while (outgoingFileQueue.length) {
             const item = outgoingFileQueue[0];
             if (item.cancelled) {
+                if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
                 outgoingFileQueue.shift();
                 continue;
             }
@@ -1626,9 +1620,14 @@ async function processFileQueue() {
                 item.statusText = `Отправка • SHA-256 ${item.checksum.slice(0, 10)}…`;
                 renderFileQueue();
                 await sendSingleFile(item.file, item);
+                if (item.cancelled) {
+                    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+                    outgoingFileQueue.shift();
+                    continue;
+                }
                 item.status = "done";
                 item.progress = 100;
-                item.statusText = `Готово • SHA-256 ${item.checksum.slice(0, 10)}…`;
+                item.statusText = `Готово`;
                 renderFileQueue();
                 setTimeout(() => {
                     const index = outgoingFileQueue.indexOf(item);
@@ -1794,6 +1793,11 @@ async function sendFileBinary(file, queueItem = null) {
 
     try {
         while (offset < file.size && !cancelled) {
+            await waitWhileQueueItemPaused(queueItem);
+            if (queueItem?.cancelled) {
+                cancelHandler();
+                break;
+            }
             await waitForBufferedAmountLow(
                 fileChannel,
                 FILE_CHANNEL_BUFFER_HIGH_WATERMARK,
@@ -1813,6 +1817,11 @@ async function sendFileBinary(file, queueItem = null) {
                 );
             }
             if (cancelled) break;
+            await waitWhileQueueItemPaused(queueItem);
+            if (queueItem?.cancelled) {
+                cancelHandler();
+                break;
+            }
 
             const plainChunk = new Uint8Array(
                 await file
@@ -1970,6 +1979,11 @@ async function sendFileJson(file, queueItem = null) {
 
     try {
         while (offset < data.length && !cancelled) {
+            await waitWhileQueueItemPaused(queueItem);
+            if (queueItem?.cancelled) {
+                cancelHandler();
+                break;
+            }
             if (
                 !dataChannel ||
                 dataChannel.readyState !== "open" ||
@@ -1978,6 +1992,7 @@ async function sendFileJson(file, queueItem = null) {
                 throw new Error("JSON transfer stalled or data channel closed");
             }
             while (dataChannel.bufferedAmount > 1_000_000 && !cancelled) {
+                await waitWhileQueueItemPaused(queueItem);
                 await new Promise((r) => setTimeout(r, 10));
             }
             if (cancelled) break;
@@ -2120,6 +2135,11 @@ async function sendFilePlanB(file, queueItem = null) {
         );
         try {
             while (offset < data.length && !cancelled) {
+                await waitWhileQueueItemPaused(queueItem);
+                if (queueItem?.cancelled) {
+                    cancelHandler();
+                    break;
+                }
                 while (
                     !cancelled &&
                     planBOutgoingFileTransfer &&
@@ -2127,6 +2147,7 @@ async function sendFilePlanB(file, queueItem = null) {
                         planBOutgoingFileTransfer.lastAckedSeq >=
                         PLAN_B_MAX_IN_FLIGHT
                 ) {
+                    await waitWhileQueueItemPaused(queueItem);
                     await waitForPlanBAck(
                         planBOutgoingFileTransfer.lastAckedSeq + 1,
                     );

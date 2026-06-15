@@ -1,3 +1,6 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -5,7 +8,26 @@ from routers import main_router, chat_router, launcher_router, launcher_feedback
 from config import config
 from security import normalize_allowed_origins, extract_origin_from_url
 
-app = FastAPI(title="P2P Chat & File Transfer")
+def ignore_windows_disconnect_noise(loop, context):
+    exception = context.get("exception")
+    handle = str(context.get("handle", ""))
+
+    if isinstance(exception, ConnectionResetError) and "_call_connection_lost" in handle:
+        return
+
+    loop.default_exception_handler(context)
+    
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(ignore_windows_disconnect_noise)
+
+    yield
+
+app = FastAPI(
+    title="P2P Chat & File Transfer",
+    lifespan=lifespan
+)
 allowed_origins = normalize_allowed_origins(config.ALLOWED_ORIGINS)
 
 app.add_middleware(
