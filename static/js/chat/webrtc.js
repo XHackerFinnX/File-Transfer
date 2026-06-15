@@ -2397,6 +2397,12 @@ function bindMessageGestures() {
     let startX = 0;
     let startY = 0;
     let activeMessage = null;
+    let longPressTimer = null;
+    const clearLongPressTimer = () => {
+        if (!longPressTimer) return;
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    };
     container.addEventListener(
         "touchstart",
         (event) => {
@@ -2404,12 +2410,40 @@ function bindMessageGestures() {
             if (!activeMessage) return;
             startX = event.touches[0].clientX;
             startY = event.touches[0].clientY;
+            clearLongPressTimer();
+            longPressTimer = setTimeout(() => {
+                if (!activeMessage || activeMessage.classList.contains("deleted"))
+                    return;
+                activeMessage.dispatchEvent(
+                    new MouseEvent("contextmenu", {
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: startX,
+                        clientY: startY,
+                    }),
+                );
+                activeMessage = null;
+            }, 550);
+        },
+        { passive: true },
+    );
+    container.addEventListener(
+        "touchmove",
+        (event) => {
+            if (!activeMessage) return;
+            const touch = event.touches[0];
+            if (
+                Math.abs(touch.clientX - startX) > 12 ||
+                Math.abs(touch.clientY - startY) > 12
+            )
+                clearLongPressTimer();
         },
         { passive: true },
     );
     container.addEventListener(
         "touchend",
         (event) => {
+            clearLongPressTimer();
             if (!activeMessage) return;
             const touch = event.changedTouches[0];
             const dx = touch.clientX - startX;
@@ -2424,6 +2458,10 @@ function bindMessageGestures() {
         },
         { passive: true },
     );
+    container.addEventListener("touchcancel", () => {
+        clearLongPressTimer();
+        activeMessage = null;
+    });
     container.addEventListener("dblclick", (event) => {
         const message = event.target.closest(".message");
         if (message && !message.classList.contains("deleted"))
@@ -2639,11 +2677,15 @@ function renderMessages() {
             }
             if (m.type === "file") {
                 return `<div class="message ${m.from} file" ${commonAttrs} data-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
-                ${quoteHtml}<div class="file-icon"> 
+                ${quoteHtml}
+                <div style="display: flex;">
+                    <div class="file-icon"> 
                         <svg width="24px" height="24px" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="none">
                             <path fill="#ffffff" fill-rule="evenodd" d="M4 1a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V7.414A2 2 0 0017.414 6L13 1.586A2 2 0 0011.586 1H4zm6.5 2H4v14h12V9.5h-3.5a2 2 0 01-2-2V3zM16 7.5h-3.5V3.914l3.5 3.5V7.5z"/>
                         </svg> 
-                    </div><div><div class="file-name">${m.url && !m.isImage ? `<a href="#" class="file-download-link" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>` : escapeHtml(m.text)}</div><div class="file-size">${formatFileSize(m.size)}</div><div class="message-time">${m.time}</div></div>${reactions}</div>`;
+                    </div><div><div class="file-name">${m.url && !m.isImage ? `<a href="#" class="file-download-link" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>` : escapeHtml(m.text)}</div><div class="file-size">${formatFileSize(m.size)}</div><div class="message-time">${m.time}</div>
+                </div>
+                </div>${reactions}</div>`;
             }
             const parsedText = window.parseLinks
                 ? window.parseLinks(m.text)

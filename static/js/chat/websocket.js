@@ -589,8 +589,44 @@ window.addEventListener("load", () => {
     const hideMenus = () => {
         contextMenu.style.display = "none";
         reactionBar.style.display = "none";
-        reactionBar.classList.remove("expanded");
+        reactionBar.classList.remove("expanded", "open-up");
         selectedMessage = null;
+    };
+    const EDGE_PADDING = 8;
+    const MENU_GAP = 4;
+    const MENU_BOTTOM_THRESHOLD = 220;
+    const REACTION_EXPANDED_HEIGHT = 246;
+    const clamp = (value, min, max) =>
+        Math.min(Math.max(value, min), Math.max(min, max));
+    const positionContextMenu = (messageEl) => {
+        const rect = messageEl.getBoundingClientRect();
+        contextMenu.style.visibility = "hidden";
+        contextMenu.style.display = "flex";
+        const menuWidth = contextMenu.offsetWidth || 220;
+        const menuHeight = contextMenu.offsetHeight || 180;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const shouldOpenUp =
+            spaceBelow < MENU_BOTTOM_THRESHOLD ||
+            rect.bottom + MENU_GAP + menuHeight >
+                window.innerHeight - EDGE_PADDING;
+        const reactionRect =
+            reactionBar.style.display === "none"
+                ? null
+                : reactionBar.getBoundingClientRect();
+        const top = shouldOpenUp
+            ? (reactionRect?.top || rect.top) - menuHeight - MENU_GAP
+            : rect.bottom + MENU_GAP;
+        contextMenu.style.left = `${clamp(
+            rect.left,
+            EDGE_PADDING,
+            window.innerWidth - menuWidth - EDGE_PADDING,
+        )}px`;
+        contextMenu.style.top = `${clamp(
+            top,
+            EDGE_PADDING,
+            window.innerHeight - menuHeight - EDGE_PADDING,
+        )}px`;
+        contextMenu.style.visibility = "visible";
     };
     const showReactions = (messageEl) => {
         const base = ["🔥", "👍", "❤️", "😂", "😮", "😢"];
@@ -622,10 +658,18 @@ window.addEventListener("load", () => {
                     hideMenus();
                 }),
         );
-        reactionBar.classList.remove("expanded");
+        reactionBar.classList.remove("expanded", "open-up");
         const rect = messageEl.getBoundingClientRect();
-        reactionBar.style.left = `${Math.min(rect.left, window.innerWidth - 320)}px`;
-        reactionBar.style.top = `${Math.max(8, rect.top - 54)}px`;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        if (spaceBelow < REACTION_EXPANDED_HEIGHT) {
+            reactionBar.classList.add("open-up");
+        }
+        reactionBar.style.left = `${clamp(
+            rect.left,
+            EDGE_PADDING,
+            window.innerWidth - 320,
+        )}px`;
+        reactionBar.style.top = `${Math.max(EDGE_PADDING, rect.top - 54)}px`;
         reactionBar.style.display = "flex";
     };
 
@@ -645,8 +689,8 @@ window.addEventListener("load", () => {
         const isImage = messageEl.classList.contains("image");
         const isOwnMessage = messageEl.classList.contains("me");
         document.getElementById("replyMenuItem").style.display = "flex";
-        const canReply = !isFile || isImage;
-        const canReact = !isFile || isImage;
+        const canReply = true;
+        const canReact = true;
         document.getElementById("replyMenuItem").style.display = canReply
             ? "flex"
             : "none";
@@ -666,12 +710,9 @@ window.addEventListener("load", () => {
             showReactions(messageEl);
         } else {
             reactionBar.style.display = "none";
-            reactionBar.classList.remove("expanded");
+            reactionBar.classList.remove("expanded", "open-up");
         }
-        const rect = messageEl.getBoundingClientRect();
-        contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
-        contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 180)}px`;
-        contextMenu.style.display = "flex";
+        positionContextMenu(messageEl);
     });
 
     document.addEventListener("click", (e) => {
@@ -679,10 +720,7 @@ window.addEventListener("load", () => {
             hideMenus();
     });
     document.getElementById("replyMenuItem").onclick = () => {
-        const canReply =
-            selectedMessage &&
-            (!selectedMessage.classList.contains("file") ||
-                selectedMessage.classList.contains("image"));
+        const canReply = selectedMessage && !selectedMessage.classList.contains("deleted");
         if (canReply && window.replyToMessage)
             window.replyToMessage(selectedMessage.dataset.messageId);
         hideMenus();
