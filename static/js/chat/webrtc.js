@@ -30,6 +30,7 @@ const TURN_PROBE_CACHE_MS = 60_000;
 const PLAN_B_ACTIVATION_DELAY_MS = 20_000;
 const CONNECTION_WARNING_DELAY_MS = 30_000;
 const KEY_RETRY_INTERVAL_MS = 2_000;
+const MOBILE_RECONNECT_GRACE_SECONDS = 180;
 const DEFAULT_STUN_SERVERS = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -53,6 +54,13 @@ let peerActivityTimeout = null;
 const pendingReadReceipts = new Set();
 let safetyNumber = null;
 let safetyVerified = true;
+let editingMessageId = null;
+let pendingReplyId = null;
+const pendingMessages = [];
+const outgoingFileQueue = [];
+let fileQueueProcessing = false;
+let reconnectTimerInterval = null;
+let reconnectDeadline = 0;
 
 function updateSafetyVerificationUI() {
     // Ручное подтверждение по коду отключено: после обмена ключами чат готов автоматически.
@@ -530,6 +538,14 @@ function createFileTransferProgressElement(cancelHandler) {
 }
 
 function updateFileTransferProgress(fillPercent, infoText) {
+    if (currentFileTransfer?.queueItem) {
+        currentFileTransfer.queueItem.progress = Math.min(
+            100,
+            Math.max(0, fillPercent),
+        );
+        currentFileTransfer.queueItem.statusText = infoText;
+        renderFileQueue();
+    }
     if (!fileTransferProgressElement) return;
     const progressFill = fileTransferProgressElement.querySelector(
         ".file-progress-fill",
@@ -1076,6 +1092,7 @@ function setupDataChannel() {
         trySendReady();
         evaluateConnectionReady();
         syncTransportState("data_channel_opened");
+        if (reconnectTimerInterval) stopReconnectUX();
         if (!sharedKey)
             addSystemMessage(
                 "Ключи шифрования ещё не согласованы. Ожидаем обмен ключами...",
@@ -1089,8 +1106,8 @@ function setupDataChannel() {
             syncTransportState("data_channel_closed_during_plan_b", false);
             return;
         }
-        addSystemMessage("Собеседник отключился");
-        setConnectionOverlayVisible(true, "Собеседник отключился");
+        addSystemMessage("Собеседник временно offline, ждём 180 секунд");
+        startReconnectUX("Собеседник временно offline");
         syncTransportState("data_channel_closed");
     };
     dataChannel.onerror = (err) => {
@@ -1117,6 +1134,7 @@ function setupDataChannel() {
                         size: data.size,
                         iv: new Uint8Array(data.iv),
                         mimeType: data.mimeType,
+                        checksum: data.checksum || "",
                         chunks: {},
                         received: 0,
                         isImage: data.isImage,
@@ -1137,6 +1155,7 @@ function setupDataChannel() {
                         size: data.size,
                         iv: new Uint8Array(data.iv),
                         mimeType: data.mimeType,
+                        checksum: data.checksum || "",
                         chunks: {},
                         received: 0,
                         isImage: data.isImage,
@@ -1161,6 +1180,15 @@ function setupDataChannel() {
 
             if (data.type === "read_receipt") {
                 markMessageAsRead(data.messageId);
+                return;
+            }
+
+            if (
+                ["message_edit", "message_delete", "reaction"].includes(
+                    data.type,
+                )
+            ) {
+                applyMessagePatch(data, "other");
                 return;
             }
 
@@ -1400,6 +1428,12 @@ async function finalizeJsonFileReceive(receiving) {
         );
         fileBytes = decrypted;
     }
+    const actualChecksum = receiving.checksum
+        ? await sha256BytesHex(fileBytes)
+        : "";
+    const checksumValid = receiving.checksum
+        ? actualChecksum === receiving.checksum
+        : null;
     const blob = new Blob([fileBytes], { type: receiving.mimeType });
     const url = URL.createObjectURL(blob);
     const messageType = receiving.isImage ? "image" : "file";
@@ -1410,6 +1444,8 @@ async function finalizeJsonFileReceive(receiving) {
         type: messageType,
         url: url,
         isImage: receiving.isImage,
+        checksum: receiving.checksum || actualChecksum || "",
+        checksumValid,
         time: new Date().toLocaleTimeString("ru-RU", {
             hour: "2-digit",
             minute: "2-digit",
@@ -1438,6 +1474,12 @@ async function finalizeBinaryFileReceive(receiving) {
         );
         fileBytes = decrypted;
     }
+    const actualChecksum = receiving.checksum
+        ? await sha256BytesHex(fileBytes)
+        : "";
+    const checksumValid = receiving.checksum
+        ? actualChecksum === receiving.checksum
+        : null;
     const blob = new Blob([fileBytes], { type: receiving.mimeType });
     const url = URL.createObjectURL(blob);
     const messageType = receiving.isImage ? "image" : "file";
@@ -1448,6 +1490,8 @@ async function finalizeBinaryFileReceive(receiving) {
         type: messageType,
         url: url,
         isImage: receiving.isImage,
+        checksum: receiving.checksum || actualChecksum || "",
+        checksumValid,
         time: new Date().toLocaleTimeString("ru-RU", {
             hour: "2-digit",
             minute: "2-digit",
@@ -1456,7 +1500,161 @@ async function finalizeBinaryFileReceive(receiving) {
     renderMessages();
 }
 
-async function sendFile(file) {
+async function sha256BytesHex(bytes) {
+    const buffer =
+        bytes instanceof ArrayBuffer
+            ? bytes
+            : bytes.buffer.slice(
+                  bytes.byteOffset,
+                  bytes.byteOffset + bytes.byteLength,
+              );
+    const digest = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+async function sha256FileHex(file) {
+    const buffer = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+function getFileQueuePanel() {
+    return document.getElementById("fileQueuePanel");
+}
+
+function renderFileQueue() {
+    const panel = getFileQueuePanel();
+    if (!panel) return;
+    panel.innerHTML = outgoingFileQueue
+        .map((item) => {
+            const preview =
+                item.previewUrl && item.file.type.startsWith("image/")
+                    ? `<img src="${item.previewUrl}" alt="${escapeHtml(item.file.name)}">`
+                    : `<div class="file-icon"> 
+                        <svg width="24px" height="24px" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="none">
+                            <path fill="#ffffff" fill-rule="evenodd" d="M4 1a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V7.414A2 2 0 0017.414 6L13 1.586A2 2 0 0011.586 1H4zm6.5 2H4v14h12V9.5h-3.5a2 2 0 01-2-2V3zM16 7.5h-3.5V3.914l3.5 3.5V7.5z"/>
+                        </svg> 
+                    </div>`;
+            const progress = Math.max(0, Math.min(100, item.progress || 0));
+            return `<article class="file-queue-card ${item.status}" data-queue-id="${item.id}">${preview}<div class="file-queue-info"><b>${escapeHtml(item.file.name)}</b><span>${formatFileSize(item.file.size)} • ${item.statusText || "В очереди"}</span><div class="file-queue-progress"><div style="width:${progress}%"></div></div></div><div class="file-queue-actions"><button data-action="pause">${item.paused ? "▶" : "⏸"}</button><button data-action="retry">↻</button><button data-action="cancel">×</button></div></article>`;
+        })
+        .join("");
+    panel.classList.toggle("visible", outgoingFileQueue.length > 0);
+    panel.querySelectorAll("button").forEach((button) => {
+        button.onclick = () => {
+            const card = button.closest(".file-queue-card");
+            const item = outgoingFileQueue.find(
+                (entry) => entry.id === card.dataset.queueId,
+            );
+            if (!item) return;
+            if (button.dataset.action === "cancel") {
+                item.cancelled = true;
+                if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+                const index = outgoingFileQueue.indexOf(item);
+                if (index >= 0) outgoingFileQueue.splice(index, 1);
+                cancelActiveFileTransfer();
+            } else if (button.dataset.action === "pause") {
+                item.paused = !item.paused;
+                item.statusText = item.paused
+                    ? "Пауза перед отправкой"
+                    : "Продолжаем";
+            } else if (button.dataset.action === "retry") {
+                item.cancelled = false;
+                item.status = "queued";
+                item.statusText = "Повторная отправка";
+                item.progress = 0;
+                processFileQueue();
+            }
+            renderFileQueue();
+        };
+    });
+}
+
+window.enqueueFiles = function (files) {
+    const accepted = Array.from(files)
+        .filter(Boolean)
+        .map((file) => ({
+            id: crypto.randomUUID(),
+            file,
+            previewUrl: file.type.startsWith("image/")
+                ? URL.createObjectURL(file)
+                : "",
+            status: "queued",
+            statusText: "В очереди",
+            progress: 0,
+            paused: false,
+            cancelled: false,
+        }));
+    outgoingFileQueue.push(...accepted);
+    renderFileQueue();
+    processFileQueue();
+};
+
+async function waitWhileQueueItemPaused(item) {
+    while (item.paused && !item.cancelled) {
+        item.statusText = "Пауза";
+        renderFileQueue();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+}
+
+async function processFileQueue() {
+    if (fileQueueProcessing) return;
+    fileQueueProcessing = true;
+    try {
+        while (outgoingFileQueue.length) {
+            const item = outgoingFileQueue[0];
+            if (item.cancelled) {
+                outgoingFileQueue.shift();
+                continue;
+            }
+            await waitWhileQueueItemPaused(item);
+            if (item.cancelled) {
+                outgoingFileQueue.shift();
+                continue;
+            }
+            try {
+                item.status = "hashing";
+                item.statusText = "Считаем SHA-256";
+                renderFileQueue();
+                item.checksum = await sha256FileHex(item.file);
+                item.status = "sending";
+                item.statusText = `Отправка • SHA-256 ${item.checksum.slice(0, 10)}…`;
+                renderFileQueue();
+                await sendSingleFile(item.file, item);
+                item.status = "done";
+                item.progress = 100;
+                item.statusText = `Готово • SHA-256 ${item.checksum.slice(0, 10)}…`;
+                renderFileQueue();
+                setTimeout(() => {
+                    const index = outgoingFileQueue.indexOf(item);
+                    if (index >= 0) outgoingFileQueue.splice(index, 1);
+                    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+                    renderFileQueue();
+                }, 1800);
+                outgoingFileQueue.shift();
+            } catch (err) {
+                item.status = "error";
+                item.statusText = "Ошибка, можно повторить";
+                renderFileQueue();
+                console.error("[FILE_QUEUE] Ошибка отправки", err);
+                break;
+            }
+        }
+    } finally {
+        fileQueueProcessing = false;
+    }
+}
+
+function sendFile(file) {
+    window.enqueueFiles([file]);
+}
+
+async function sendSingleFile(file, queueItem = null) {
     if (currentFileTransfer) {
         updateChatStatus(
             "Дождитесь завершения текущей передачи или отмените её",
@@ -1482,7 +1680,7 @@ async function sendFile(file) {
     );
     try {
         if (planBActive) {
-            await sendFilePlanB(file);
+            await sendFilePlanB(file, queueItem);
             return;
         }
 
@@ -1493,7 +1691,7 @@ async function sendFile(file) {
             fileChannelReady
         ) {
             try {
-                await sendFileBinary(file);
+                await sendFileBinary(file, queueItem);
             } catch (err) {
                 if (isTransferCancellationError(err)) {
                     console.log(
@@ -1506,13 +1704,13 @@ async function sendFile(file) {
                     err,
                 );
                 binaryFileSupported = false;
-                await sendFileJson(file);
+                await sendFileJson(file, queueItem);
             }
         } else {
             console.log(
                 "[FILE] Бинарный канал недоступен, используем JSON-режим (fallback)",
             );
-            await sendFileJson(file);
+            await sendFileJson(file, queueItem);
         }
     } catch (err) {
         if (isTransferCancellationError(err)) {
@@ -1531,7 +1729,7 @@ async function sendFile(file) {
             );
             cleanupCurrentTransferState();
             activatePlanB();
-            await sendFilePlanB(file);
+            await sendFilePlanB(file, queueItem);
             return;
         }
         addSystemMessage("❌ Ошибка отправки файла. Попробуйте ещё раз.");
@@ -1542,7 +1740,7 @@ async function sendFile(file) {
     }
 }
 
-async function sendFileBinary(file) {
+async function sendFileBinary(file, queueItem = null) {
     const fileId = nextFileId++;
     const isImage = isImageFile(file.type);
 
@@ -1575,6 +1773,7 @@ async function sendFileBinary(file) {
     };
     createFileTransferProgressElement(cancelHandler);
     currentFileTransfer = {
+        queueItem,
         fileId,
         cancel: cancelHandler,
         cancelled: false,
@@ -1687,6 +1886,7 @@ async function sendFileBinary(file) {
                 type: messageType,
                 url: url,
                 isImage: isImage,
+                checksum: queueItem?.checksum || "",
                 time: new Date().toLocaleTimeString("ru-RU", {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -1704,7 +1904,7 @@ async function sendFileBinary(file) {
     updateChatStatus("");
 }
 
-async function sendFileJson(file) {
+async function sendFileJson(file, queueItem = null) {
     const fileId = crypto.randomUUID();
 
     let cancelled = false;
@@ -1721,7 +1921,11 @@ async function sendFileJson(file) {
         updateChatStatus("передача файла отменена");
     };
     createFileTransferProgressElement(cancelHandler);
-    currentFileTransfer = { cancel: cancelHandler, cancelled: false };
+    currentFileTransfer = {
+        queueItem,
+        cancel: cancelHandler,
+        cancelled: false,
+    };
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const fileData = await file.arrayBuffer();
@@ -1819,6 +2023,7 @@ async function sendFileJson(file) {
                 type: messageType,
                 url: url,
                 isImage: isImage,
+                checksum: queueItem?.checksum || "",
                 time: new Date().toLocaleTimeString("ru-RU", {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -1835,7 +2040,7 @@ async function sendFileJson(file) {
     updateChatStatus("");
 }
 
-async function sendFilePlanB(file) {
+async function sendFilePlanB(file, queueItem = null) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         updateChatStatus("Plan B недоступен: нет подключения к серверу");
         return;
@@ -1854,6 +2059,7 @@ async function sendFilePlanB(file) {
     const fileId = crypto.randomUUID();
     let cancelled = false;
     planBOutgoingFileTransfer = {
+        queueItem,
         fileId,
         lastAckedSeq: -1,
         sentSeq: -1,
@@ -1871,7 +2077,11 @@ async function sendFilePlanB(file) {
         updateChatStatus("передача файла отменена");
     };
     createFileTransferProgressElement(cancelHandler);
-    currentFileTransfer = { cancel: cancelHandler, cancelled: false };
+    currentFileTransfer = {
+        queueItem,
+        cancel: cancelHandler,
+        cancelled: false,
+    };
 
     try {
         const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -1893,6 +2103,7 @@ async function sendFilePlanB(file) {
             size: data.length,
             iv: Array.from(iv),
             mimeType: file.type || "application/octet-stream",
+            checksum: queueItem?.checksum || "",
             isImage,
             transport: "plan_b",
         });
@@ -2000,145 +2211,397 @@ async function sendFilePlanB(file) {
     }
 }
 
+function getMessageById(messageId) {
+    return messages.find((message) => message.id === messageId);
+}
+
+function getMessagePreview(message) {
+    if (!message) return "Сообщение";
+    if (message.deleted) return "Сообщение удалено";
+    if (message.type === "image") return `📷 ${message.text || "Изображение"}`;
+    if (message.type === "file") return `📎 ${message.text || "Файл"}`;
+    return message.text || "Сообщение";
+}
+
+function getMessageAuthor(message) {
+    if (!message) return "Сообщение";
+    return message.from === "me"
+        ? "Вы"
+        : message.senderName || peerNickname || "Собеседник";
+}
+
+function sendMessageEvent(event) {
+    return sendRealtimeSignal(event);
+}
+
+function applyMessagePatch(event, from) {
+    const message = getMessageById(event.messageId);
+    if (!message) return;
+    if (event.type === "message_edit") {
+        message.text = event.text || "";
+        message.edited = true;
+    } else if (event.type === "message_delete") {
+        message.deleted = true;
+        message.text = "Сообщение удалено";
+        message.reactions = {};
+    } else if (event.type === "reaction") {
+        message.reactions = message.reactions || {};
+        const key = event.emoji;
+        message.reactions[key] = message.reactions[key] || {
+            me: false,
+            other: false,
+        };
+        message.reactions[key][from] = Boolean(event.active);
+        if (!message.reactions[key].me && !message.reactions[key].other)
+            delete message.reactions[key];
+    }
+    renderMessages();
+}
+
+async function sendMessageControl(event) {
+    applyMessagePatch(event, "me");
+    await sendMessageEvent(event);
+}
+
+function renderReplyComposer() {
+    document
+        .querySelectorAll(".composer-reply, .composer-edit")
+        .forEach((n) => n.remove());
+    const wrapper = document.querySelector(".message-input-wrapper");
+    if (!wrapper) return;
+    if (editingMessageId) {
+        const message = getMessageById(editingMessageId);
+        const node = document.createElement("div");
+        node.className = "composer-reply composer-edit";
+        node.innerHTML = `<div><b>Редактирование</b><span>${escapeHtml(getMessagePreview(message))}</span></div><button type="button" aria-label="Отменить">×</button>`;
+        node.querySelector("button").onclick = cancelComposerMode;
+        wrapper.before(node);
+        return;
+    }
+    if (pendingReplyId) {
+        const message = getMessageById(pendingReplyId);
+        const node = document.createElement("div");
+        node.className = "composer-reply";
+        node.innerHTML = `<div><b>${escapeHtml(getMessageAuthor(message))}</b><span>${escapeHtml(getMessagePreview(message)).slice(0, 180)}</span></div><button type="button" aria-label="Убрать ответ">×</button>`;
+        node.querySelector("button").onclick = cancelComposerMode;
+        wrapper.before(node);
+    }
+}
+
+function cancelComposerMode() {
+    editingMessageId = null;
+    pendingReplyId = null;
+    const input = document.getElementById("messageInput");
+    if (input) input.value = "";
+    renderReplyComposer();
+}
+
+window.replyToMessage = function (messageId) {
+    if (!getMessageById(messageId)) return;
+    pendingReplyId = messageId;
+    editingMessageId = null;
+    renderReplyComposer();
+    document.getElementById("messageInput")?.focus();
+};
+
+window.editMessage = function (messageId) {
+    const message = getMessageById(messageId);
+    if (!message || message.from !== "me" || message.deleted || message.type)
+        return;
+    editingMessageId = messageId;
+    pendingReplyId = null;
+    const input = document.getElementById("messageInput");
+    if (input) {
+        input.value = message.text || "";
+        input.focus();
+        adjustTextareaHeight(input);
+    }
+    renderReplyComposer();
+};
+
+window.deleteMessage = function (messageId) {
+    const message = getMessageById(messageId);
+    if (!message || message.deleted) return;
+    void sendMessageControl({ type: "message_delete", messageId });
+};
+
+window.showReactionPicker = function (messageId, anchor) {
+    document
+        .querySelectorAll(".reaction-picker-popover")
+        .forEach((n) => n.remove());
+    if (!getMessageById(messageId)) return;
+    const picker = document.createElement("div");
+    picker.className = "reaction-picker-popover";
+    ["👍", "❤️", "😂", "😮", "😢", "🔥"].forEach((emoji) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = emoji;
+        button.onclick = async () => {
+            const message = getMessageById(messageId);
+            const active = !message?.reactions?.[emoji]?.me;
+            await sendMessageControl({
+                type: "reaction",
+                messageId,
+                emoji,
+                active,
+            });
+            picker.remove();
+        };
+        picker.appendChild(button);
+    });
+    document.body.appendChild(picker);
+    const rect = anchor?.getBoundingClientRect?.() || { left: 20, bottom: 80 };
+    picker.style.left = `${Math.min(rect.left, window.innerWidth - 260)}px`;
+    picker.style.top = `${Math.max(12, rect.top - 50)}px`;
+    setTimeout(
+        () =>
+            document.addEventListener("click", function close(e) {
+                if (!picker.contains(e.target)) {
+                    picker.remove();
+                    document.removeEventListener("click", close);
+                }
+            }),
+        0,
+    );
+};
+
+function bindMessageGestures() {
+    const container = document.getElementById("messages");
+    if (!container || container.dataset.gesturesBound) return;
+    container.dataset.gesturesBound = "true";
+    let startX = 0;
+    let startY = 0;
+    let activeMessage = null;
+    container.addEventListener(
+        "touchstart",
+        (event) => {
+            activeMessage = event.target.closest(".message");
+            if (!activeMessage) return;
+            startX = event.touches[0].clientX;
+            startY = event.touches[0].clientY;
+        },
+        { passive: true },
+    );
+    container.addEventListener(
+        "touchend",
+        (event) => {
+            if (!activeMessage) return;
+            const touch = event.changedTouches[0];
+            const dx = touch.clientX - startX;
+            const dy = Math.abs(touch.clientY - startY);
+            if (dx < -55 && dy < 45)
+                window.replyToMessage(activeMessage.dataset.messageId);
+            activeMessage = null;
+        },
+        { passive: true },
+    );
+    container.addEventListener("dblclick", (event) => {
+        const message = event.target.closest(".message");
+        if (message)
+            window.showReactionPicker(message.dataset.messageId, message);
+    });
+}
+
+function flushPendingMessages() {
+    if (!pendingMessages.length || !canSendEncryptedPayload()) return;
+    const pending = pendingMessages.splice(0, pendingMessages.length);
+    pending.forEach((payload) => void sendOutgoingMessagePayload(payload));
+    if (pending.length)
+        addSystemMessage(
+            "✅ Отложенные сообщения отправлены после восстановления соединения",
+        );
+}
+
+async function sendOutgoingMessagePayload(payload) {
+    if (planBActive) {
+        if (!ws || ws.readyState !== WebSocket.OPEN)
+            throw new Error("No signaling connection");
+        await sendRealtimeSignal(payload);
+        return;
+    }
+    if (!dataChannel || dataChannel.readyState !== "open")
+        throw new Error("Data channel closed");
+    if (payload.type === "message") {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encoded = new TextEncoder().encode(payload.text);
+        const encrypted = await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv },
+            sharedKey,
+            encoded,
+        );
+        dataChannel.send(
+            JSON.stringify({
+                type: "message",
+                messageId: payload.messageId,
+                iv: Array.from(iv),
+                encrypted: uint8ArrayToBase64(new Uint8Array(encrypted)),
+                replyTo: payload.replyTo,
+            }),
+        );
+        return;
+    }
+    dataChannel.send(JSON.stringify(payload));
+}
+
+function startReconnectUX(reason = "Собеседник временно offline") {
+    reconnectDeadline = Date.now() + MOBILE_RECONNECT_GRACE_SECONDS * 1000;
+    clearInterval(reconnectTimerInterval);
+    const render = () => {
+        const left = Math.max(
+            0,
+            Math.ceil((reconnectDeadline - Date.now()) / 1000),
+        );
+        setConnectionOverlayVisible(
+            true,
+            `${reason}, ждём ${left} секунд\nСообщения можно писать — они отправятся после восстановления.`,
+        );
+        updateChatStatus(`Собеседник offline • ${left} сек.`);
+        if (left <= 0) clearInterval(reconnectTimerInterval);
+    };
+    render();
+    reconnectTimerInterval = setInterval(render, 1000);
+}
+
+function stopReconnectUX() {
+    clearInterval(reconnectTimerInterval);
+    reconnectTimerInterval = null;
+    setConnectionOverlayVisible(false);
+    updateChatStatus("Соединение восстановлено");
+    addSystemMessage("✅ Соединение восстановлено");
+    flushPendingMessages();
+}
+
+window.retryPeerConnection = function () {
+    if (!peerId || !window.currentChatPeer) return;
+    addSystemMessage("🔄 Пробуем переподключиться...");
+    if (
+        pc &&
+        (pc.signalingState === "stable" ||
+            pc.signalingState === "have-local-offer")
+    ) {
+        try {
+            if (dataChannel?.readyState === "open") return stopReconnectUX();
+            syncTransportState("manual_reconnect_retry");
+        } catch (err) {
+            console.warn("[RECONNECT] Retry failed", err);
+        }
+    }
+};
+
 // ========== ОСТАЛЬНЫЕ ФУНКЦИИ (отправка сообщений, рендер, статус) ==========
 async function sendMessage() {
     const input = document.getElementById("messageInput");
     const text = input.value.trim();
     if (!text) return;
 
-    const quote = document.querySelector(".message-quote");
-    let replyToId = quote ? quote.dataset.replyToId : null;
-
-    if (!canSendEncryptedPayload()) {
+    if (editingMessageId) {
+        const message = getMessageById(editingMessageId);
+        if (!message) return cancelComposerMode();
+        await sendMessageControl({
+            type: "message_edit",
+            messageId: editingMessageId,
+            text,
+        });
+        input.value = "";
+        editingMessageId = null;
+        renderReplyComposer();
         return;
     }
 
+    if (!canSendEncryptedPayload()) return;
+
+    const messageId = crypto.randomUUID();
+    const payload = {
+        type: "message",
+        messageId,
+        text,
+        replyTo: pendingReplyId,
+    };
+    messages.push({
+        id: messageId,
+        from: "me",
+        text,
+        read: false,
+        time: new Date().toLocaleTimeString("ru-RU", {
+            hour: "2-digit",
+            minute: "2-digit",
+        }),
+        replyTo: pendingReplyId,
+        senderName: "Вы",
+        pending: false,
+    });
+    renderMessages();
+    input.value = "";
+    window.handleLocalTypingInput("");
+    pendingReplyId = null;
+    renderReplyComposer();
+
     try {
-        const messageId = crypto.randomUUID();
-        if (planBActive) {
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                updateChatStatus(
-                    "Plan B недоступен: нет подключения к серверу сигналинга",
-                );
-                return;
-            }
-
-            await sendRealtimeSignal({
-                type: "message",
-                messageId,
-                text,
-                replyTo: replyToId,
-            });
-        } else {
-            if (!dataChannel || dataChannel.readyState !== "open") {
-                updateChatStatus("Соединение ещё не установлено");
-                return;
-            }
-            const iv = crypto.getRandomValues(new Uint8Array(12));
-            const encoded = new TextEncoder().encode(text);
-            const encrypted = await crypto.subtle.encrypt(
-                { name: "AES-GCM", iv },
-                sharedKey,
-                encoded,
-            );
-            const messagePayload = {
-                type: "message",
-                messageId,
-                iv: Array.from(iv),
-                encrypted: uint8ArrayToBase64(new Uint8Array(encrypted)),
-                replyTo: replyToId,
-            };
-            dataChannel.send(JSON.stringify(messagePayload));
-        }
-
-        messages.push({
-            id: messageId,
-            from: "me",
-            text: text,
-            read: false,
-            time: new Date().toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-            }),
-            replyTo: replyToId,
-            senderName: "Вы",
-        });
-        renderMessages();
-        input.value = "";
-        window.handleLocalTypingInput("");
-        if (quote) quote.remove();
+        await sendOutgoingMessagePayload(payload);
     } catch (err) {
-        console.error("[MSG] Error sending message:", err);
-        updateChatStatus("Ошибка отправки сообщения");
+        console.warn("[MSG] Сообщение поставлено в очередь до reconnect:", err);
+        const message = getMessageById(messageId);
+        if (message) message.pending = true;
+        pendingMessages.push(payload);
+        startReconnectUX("Соединение временно недоступно");
+        renderMessages();
     }
+}
+
+function renderReactions(message) {
+    const entries = Object.entries(message.reactions || {}).filter(
+        ([, users]) => users.me || users.other,
+    );
+    if (!entries.length) return "";
+    return `<div class="message-reactions">${entries
+        .map(([emoji, users]) => {
+            const count =
+                Number(Boolean(users.me)) + Number(Boolean(users.other));
+            return `<button type="button" class="message-reaction ${users.me ? "mine" : ""}" data-message-id="${message.id}" data-emoji="${emoji}">${emoji}<span>${count}</span></button>`;
+        })
+        .join("")}</div>`;
+}
+
+function renderQuote(message) {
+    if (!message.replyTo) return "";
+    const replyToMsg = getMessageById(message.replyTo);
+    const author = getMessageAuthor(replyToMsg);
+    const text = escapeHtml(getMessagePreview(replyToMsg)).slice(0, 140);
+    return `<div class="message-reply-preview"><div class="reply-bar"></div><div><b>${escapeHtml(author)}</b><span>${text}</span></div></div>`;
 }
 
 function renderMessages() {
     const container = document.getElementById("messages");
     if (!container) return;
+    bindMessageGestures();
     container.innerHTML = messages
         .map((m) => {
             if (m.system)
                 return `<div class="system-message">${escapeHtml(m.text)}</div>`;
+            const commonAttrs = `data-message-id="${m.id || ""}"`;
+            const quoteHtml = renderQuote(m);
+            const reactions = renderReactions(m);
+            const edited = m.edited
+                ? `<span class="message-edited">изменено</span>`
+                : "";
+            const pending = m.pending
+                ? `<span class="message-pending">⌛</span>`
+                : "";
+            if (m.deleted) {
+                return `<div class="message ${m.from} deleted" ${commonAttrs}><span class="message-content">Сообщение удалено</span><span class="message-time">${m.time || ""}</span></div>`;
+            }
             if (m.type === "image") {
-                return `
-                <div class="message ${m.from} image" data-message-id="${m.id || ""}" data-image-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
-                    ${m.url ? `<img src="${m.url}" alt="${escapeHtml(m.text)}" class="chat-image" />` : ""}
-                    <div>
-                        <div class="file-name">${escapeHtml(m.text)}</div>
-                        <div class="file-size">${formatFileSize(m.size)}</div>
-                        <span class="message-time">${m.time}</span>
-                    </div>
-                </div>
-            `;
+                return `<div class="message ${m.from} image" ${commonAttrs} data-image-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
+                ${quoteHtml}${m.url ? `<img src="${m.url}" alt="${escapeHtml(m.text)}" class="chat-image" />` : ""}
+                <div><div class="file-name">${escapeHtml(m.text)}</div><div class="file-size">${formatFileSize(m.size)}</div><span class="message-time">${m.time}</span></div>${reactions}</div>`;
             }
             if (m.type === "file") {
-                return `
-                <div class="message ${m.from} file" 
-                    data-message-id="${m.id}" 
-                    data-url="${m.url || ""}" 
-                    data-original-filename="${escapeAttr(m.text)}"
-                    style="display: flex; align-items: stretch; gap: 6px;">
-                    
-                    <!-- Иконка слева, растягивается на всю высоту -->
-                    <div class="file-icon"> 
+                return `<div class="message ${m.from} file" ${commonAttrs} data-url="${m.url || ""}" data-original-filename="${escapeAttr(m.text)}">
+                ${quoteHtml}<div class="file-icon"> 
                         <svg width="24px" height="24px" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="none">
                             <path fill="#ffffff" fill-rule="evenodd" d="M4 1a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V7.414A2 2 0 0017.414 6L13 1.586A2 2 0 0011.586 1H4zm6.5 2H4v14h12V9.5h-3.5a2 2 0 01-2-2V3zM16 7.5h-3.5V3.914l3.5 3.5V7.5z"/>
                         </svg> 
-                    </div>
-                    
-                    <!-- Правый блок: имя и размер сверху, время снизу справа -->
-                    <div>
-                        <div>
-                            <div class="file-name">
-                                ${
-                                    m.url && !m.isImage
-                                        ? `<a href="#" class="file-download-link" style="color: #3b82f6; text-decoration: none;" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>`
-                                        : escapeHtml(m.text)
-                                }
-                            </div>
-                            <div class="file-size">${formatFileSize(m.size)}</div>
-                        </div>
-                        <div class="message-time" style="flex-direction: row-reverse;">${m.time}</div>
-                    </div>
-                </div>
-            `;
-            }
-            let quoteHtml = "";
-            if (m.replyTo) {
-                const replyToMsg = messages.find((msg) => msg.id === m.replyTo);
-                if (replyToMsg) {
-                    const author =
-                        replyToMsg.from === "me"
-                            ? "Вы"
-                            : replyToMsg.senderName ||
-                              peerNickname ||
-                              "Собеседник";
-                    const text =
-                        escapeHtml(replyToMsg.text.substring(0, 100)) +
-                        (replyToMsg.text.length > 100 ? "..." : "");
-                    quoteHtml = `<div class="message-quote"><div class="quote-author">${author}</div><div class="quote-text">${text}</div></div>`;
-                }
+                    </div><div><div class="file-name">${m.url && !m.isImage ? `<a href="#" class="file-download-link" data-filename="${escapeAttr(m.text)}" data-url="${m.url}">${escapeHtml(m.text)}</a>` : escapeHtml(m.text)}</div><div class="file-size">${formatFileSize(m.size)}</div><div class="message-time">${m.time}</div></div>${reactions}</div>`;
             }
             const parsedText = window.parseLinks
                 ? window.parseLinks(m.text)
@@ -2147,9 +2610,21 @@ function renderMessages() {
                 m.from === "me"
                     ? `<span class="message-checks ${m.read ? "read" : "delivered"}">✓✓</span>`
                     : "";
-            return `${quoteHtml}<div class="message ${m.from}" data-message-id="${m.id}"><span class="message-content">${parsedText}</span><span class="message-time">${m.time} ${readMark}</span></div>`;
+            return `<div class="message ${m.from}" ${commonAttrs}>${quoteHtml}<span class="message-content">${parsedText}</span><span class="message-time">${m.time} ${edited} ${pending} ${readMark}</span>${reactions}</div>`;
         })
         .join("");
+    container.querySelectorAll(".message-reaction").forEach((button) => {
+        button.addEventListener(
+            "click",
+            () =>
+                void sendMessageControl({
+                    type: "reaction",
+                    messageId: button.dataset.messageId,
+                    emoji: button.dataset.emoji,
+                    active: !button.classList.contains("mine"),
+                }),
+        );
+    });
     container.scrollTop = container.scrollHeight;
 }
 
@@ -2267,6 +2742,7 @@ window.handleWebRTCMessage = async function (msg) {
                     size: payload.size,
                     iv: new Uint8Array(payload.iv),
                     mimeType: payload.mimeType,
+                    checksum: payload.checksum || "",
                     chunks: {},
                     received: 0,
                     receivedChunks: 0,
@@ -2351,6 +2827,14 @@ window.handleWebRTCMessage = async function (msg) {
                 markMessageAsRead(payload.messageId);
                 return;
             }
+            if (
+                ["message_edit", "message_delete", "reaction"].includes(
+                    payload.type,
+                )
+            ) {
+                applyMessagePatch(payload, "other");
+                return;
+            }
             let text = "";
 
             if (payload.type === "message") {
@@ -2428,12 +2912,17 @@ window.handleWebRTCMessage = async function (msg) {
         ) {
             activatePlanBFromRemote();
         }
+    } else if (msg.type === "peer_reconnected") {
+        addSystemMessage(
+            "✅ Собеседник вернулся в сеть. Пробуем восстановить P2P...",
+        );
+        stopReconnectUX();
+        if (peerId && pc && dataChannel?.readyState !== "open") {
+            window.retryPeerConnection();
+        }
     } else if (msg.type === "peer_disconnected") {
-        addSystemMessage("Собеседник покинул чат");
-        setTimeout(() => {
-            window.exitChat();
-            window.location.reload();
-        }, 2000);
+        addSystemMessage("Собеседник временно offline, ждём 180 секунд");
+        startReconnectUX("Собеседник временно offline");
     }
 };
 
@@ -2507,3 +2996,27 @@ document.addEventListener("click", (e) => {
 document.addEventListener("visibilitychange", flushReadReceipts);
 
 updateSafetyVerificationUI();
+
+function initChatFileDropZone() {
+    const chat = document.getElementById("chat");
+    const messagesEl = document.getElementById("messages");
+    if (!chat || chat.dataset.dropBound) return;
+    chat.dataset.dropBound = "true";
+    ["dragenter", "dragover"].forEach((eventName) => {
+        chat.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            messagesEl?.classList.add("drag-over");
+        });
+    });
+    ["dragleave", "drop"].forEach((eventName) => {
+        chat.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            if (eventName === "drop" && event.dataTransfer?.files?.length) {
+                window.enqueueFiles(Array.from(event.dataTransfer.files));
+            }
+            messagesEl?.classList.remove("drag-over");
+        });
+    });
+}
+
+document.addEventListener("DOMContentLoaded", initChatFileDropZone);

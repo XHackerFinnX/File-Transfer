@@ -176,6 +176,20 @@ async def lobby_ws(websocket: WebSocket):
             clients_by_session[session_key] = client_id
 
     await websocket.send_json({"type": "init", "data": {"client_id": client_id, "resumed": resumed}})
+    if resumed:
+        room_id = clients[client_id].get("room_id")
+        if room_id and room_id in rooms_chat:
+            room = rooms_chat[room_id]
+            other_id = room.get("peer") if room.get("host") == client_id else room.get("host")
+            if other_id and other_id in clients and clients[other_id].get("connected", True):
+                await safe_send_json(clients[other_id]["ws"], {
+                    "type": "peer_reconnected",
+                    "data": {"peer_id": client_id, "peer_nickname": clients[client_id]["nickname"]},
+                })
+                await safe_send_json(websocket, {
+                    "type": "peer_reconnected",
+                    "data": {"peer_id": other_id, "peer_nickname": clients[other_id]["nickname"]},
+                })
     broadcast_users()
     print(f"[CHAT] {'Возврат' if resumed else 'Новый клиент'}: {short_id(client_id)} ip={client_ip}")
 

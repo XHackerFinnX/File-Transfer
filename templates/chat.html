@@ -254,9 +254,14 @@
                     <div class="connection-overlay-text">
                         Устанавливаем защищённое соединение...
                     </div>
+                    <button class="connection-retry-btn" type="button" onclick="window.retryPeerConnection && window.retryPeerConnection()">
+                        Попробовать переподключиться
+                    </button>
                 </div>
 
                 <div id="messages" class="messages"></div>
+
+                <div id="fileQueuePanel" class="file-queue-panel" aria-live="polite"></div>
 
                 <div class="message-input-wrapper">
                     <button class="btn-emoji" id="emojiBtn">
@@ -289,7 +294,7 @@
                             />
                         </svg>
                     </button>
-                    <input type="file" id="fileInput" style="display: none" />
+                    <input type="file" id="fileInput" style="display: none" multiple />
 
                     <div class="emoji-picker" id="emojiPicker">
                         <div class="emoji-categories">

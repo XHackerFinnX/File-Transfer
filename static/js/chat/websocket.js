@@ -7,7 +7,9 @@ let mobileFilePickerOpen = false;
 function getChatSessionId() {
     let sessionId = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
     if (!sessionId) {
-        sessionId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        sessionId = crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random()}`;
         localStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
     }
     return sessionId;
@@ -15,7 +17,10 @@ function getChatSessionId() {
 
 function updateViewportHeightVar() {
     const viewportHeight = window.visualViewport?.height || window.innerHeight;
-    document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
+    document.documentElement.style.setProperty(
+        "--app-height",
+        `${viewportHeight}px`,
+    );
 }
 
 updateViewportHeightVar();
@@ -42,7 +47,9 @@ window.setChatScreen = setChatScreen;
 function connectWebSocket() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const sessionId = encodeURIComponent(getChatSessionId());
-    ws = new WebSocket(`${protocol}//${location.host}/chat/ws?session=${sessionId}`);
+    ws = new WebSocket(
+        `${protocol}//${location.host}/chat/ws?session=${sessionId}`,
+    );
     window.ws = ws;
 
     ws.onmessage = async (e) => {
@@ -52,7 +59,9 @@ function connectWebSocket() {
         if (msg.type === "init") {
             myClientId = msg.data.client_id;
             if (msg.data.resumed) {
-                console.log("🔄 Сессия чата восстановлена после мобильного фонового режима");
+                console.log(
+                    "🔄 Сессия чата восстановлена после мобильного фонового режима",
+                );
             }
         } else if (msg.type === "users") {
             renderUsers(msg.data);
@@ -116,6 +125,7 @@ function connectWebSocket() {
                 "relay_message",
                 "transport_state",
                 "peer_disconnected",
+                "peer_reconnected",
             ].includes(msg.type)
         ) {
             if (typeof window.handleWebRTCMessage === "function") {
@@ -518,15 +528,22 @@ document.addEventListener("DOMContentLoaded", () => {
         fileInput.addEventListener("change", (e) => {
             mobileFilePickerOpen = false;
             document.body.classList.remove("file-picker-open");
-            if (e.target.files && e.target.files[0]) {
-                const file = e.target.files[0];
-                if (file.size > 1024 * 1024 * 1024 * 100) {
-                    alert("Файл слишком большой! Максимальный размер: 100 ГБ");
+            if (e.target.files && e.target.files.length) {
+                const files = Array.from(e.target.files);
+                const tooLarge = files.find(
+                    (file) => file.size > 1024 * 1024 * 1024 * 100,
+                );
+                if (tooLarge) {
+                    alert(
+                        `Файл ${tooLarge.name} слишком большой! Максимальный размер: 100 ГБ`,
+                    );
                     fileInput.value = "";
                     return;
                 }
-                if (typeof window.sendFile === "function") {
-                    window.sendFile(file);
+                if (typeof window.enqueueFiles === "function") {
+                    window.enqueueFiles(files);
+                } else if (typeof window.sendFile === "function") {
+                    files.forEach((file) => window.sendFile(file));
                 } else {
                     alert("Сначала установите соединение с собеседником");
                 }
@@ -550,6 +567,10 @@ window.addEventListener("load", () => {
     const contextMenu = document.createElement("div");
     contextMenu.className = "context-menu";
     contextMenu.innerHTML = `
+        <div class="context-menu-item" id="replyMenuItem">↩️ Ответить</div>
+        <div class="context-menu-item" id="reactMenuItem">😊 Реакция</div>
+        <div class="context-menu-item" id="editMenuItem">✏️ Редактировать</div>
+        <div class="context-menu-item" id="deleteMenuItem">🗑️ Удалить</div>
         <div class="context-menu-item" id="copyMenuItem">             
             <svg fill="none" width="16px" height="16px" viewBox="0 0 36 36" version="1.1"  preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
                 <title>copy-line</title>
@@ -621,6 +642,14 @@ window.addEventListener("load", () => {
                     ? "none"
                     : "flex";
 
+            const isOwnMessage = messageEl.classList.contains("me");
+            document.getElementById("editMenuItem").style.display =
+                isOwnMessage &&
+                !messageEl.classList.contains("file") &&
+                !messageEl.classList.contains("image")
+                    ? "flex"
+                    : "none";
+
             const rect = messageEl.getBoundingClientRect();
             contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 200)}px`;
             contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 150)}px`;
@@ -636,6 +665,37 @@ window.addEventListener("load", () => {
             contextMenu.style.display = "none";
             selectedMessage = null;
         }
+    });
+
+    document.getElementById("replyMenuItem").addEventListener("click", () => {
+        if (selectedMessage && window.replyToMessage) {
+            window.replyToMessage(selectedMessage.dataset.messageId);
+        }
+        contextMenu.style.display = "none";
+    });
+
+    document.getElementById("reactMenuItem").addEventListener("click", () => {
+        if (selectedMessage && window.showReactionPicker) {
+            window.showReactionPicker(
+                selectedMessage.dataset.messageId,
+                selectedMessage,
+            );
+        }
+        contextMenu.style.display = "none";
+    });
+
+    document.getElementById("editMenuItem").addEventListener("click", () => {
+        if (selectedMessage && window.editMessage) {
+            window.editMessage(selectedMessage.dataset.messageId);
+        }
+        contextMenu.style.display = "none";
+    });
+
+    document.getElementById("deleteMenuItem").addEventListener("click", () => {
+        if (selectedMessage && window.deleteMessage) {
+            window.deleteMessage(selectedMessage.dataset.messageId);
+        }
+        contextMenu.style.display = "none";
     });
 
     document.getElementById("copyMenuItem").addEventListener("click", () => {
