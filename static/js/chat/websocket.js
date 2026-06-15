@@ -113,7 +113,7 @@ function connectWebSocket() {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
             });
-            alert(`Ошибка: ${msg.data.reason}`);
+            // alert(`Ошибка: ${msg.data.reason}`);
             pendingRequest = false;
         } else if (
             [
@@ -564,193 +564,163 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Контекстное меню инициализируем после полной загрузки всех скриптов
 window.addEventListener("load", () => {
+    const menuIcon = (svg) => `<span class="context-menu-icon">${svg}</span>`;
+    const replyIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" version="1.1" viewBox="0 0 32 32"><path fill="currentColor" d="M29.934,24.707c-0.076-0.892-0.193-1.784-0.353-2.666c-0.162-0.906-0.417-1.778-0.787-2.62c-0.337-0.771-0.75-1.501-1.155-2.238c-0.197-0.356-0.405-0.707-0.615-1.057c-0.249-0.411-0.538-0.793-0.837-1.169c-0.506-0.637-1.093-1.221-1.687-1.776c-0.666-0.623-1.352-1.225-2.142-1.689c-0.736-0.43-1.484-0.853-2.269-1.188c-0.427-0.183-0.857-0.37-1.305-0.5c-0.425-0.123-0.853-0.226-1.289-0.3c-0.442-0.076-0.882-0.152-1.32-0.25c-0.232-0.052-0.461-0.113-0.691-0.171c-0.13-1.452-0.15-2.915-0.25-4.371c-0.002-0.029-0.016-0.055-0.02-0.083c0.03-0.234-0.03-0.477-0.211-0.658c-0.148-0.148-0.353-0.234-0.563-0.234c-0.195,0-0.434,0.078-0.565,0.234c-0.249,0.3-0.528,0.573-0.799,0.855c-0.249,0.261-0.504,0.516-0.76,0.773c-0.551,0.553-1.133,1.077-1.694,1.622C10.058,7.768,9.509,8.327,8.94,8.868c-0.565,0.537-1.139,1.065-1.692,1.615c-0.795,0.785-1.525,1.632-2.327,2.411c-0.775,0.75-1.505,1.544-2.221,2.353c-0.169,0.03-0.332,0.093-0.456,0.216c-0.331,0.331-0.317,0.861,0,1.194c0.647,0.678,1.299,1.348,1.946,2.026c0.575,0.602,1.145,1.208,1.712,1.817c0.584,0.625,1.196,1.221,1.807,1.821c0.59,0.576,1.178,1.157,1.768,1.733c0.711,0.693,1.441,1.362,2.177,2.026c0.352,0.317,0.717,0.623,1.075,0.935c0.337,0.291,0.678,0.587,0.983,0.912c0.246,0.319,0.675,0.445,1.045,0.231c0.074-0.043,0.135-0.104,0.191-0.169c0.257-0.144,0.449-0.407,0.435-0.715c-0.035-0.837-0.027-1.677-0.033-2.516c-0.005-0.781-0.006-1.561-0.011-2.34c1.341-0.068,2.68-0.152,4.019,0.005c0.58,0.096,1.157,0.218,1.722,0.375c0.552,0.154,1.083,0.361,1.612,0.582c0.463,0.202,0.921,0.42,1.359,0.675c0.483,0.283,0.942,0.599,1.39,0.937c0.437,0.342,0.871,0.69,1.305,1.036c0.439,0.354,0.885,0.716,1.254,1.143c0.004,0.006,0.008,0.012,0.012,0.018c0.126,0.179,0.271,0.309,0.478,0.377c0.155,0.202,0.395,0.344,0.646,0.344c0.464,0,0.785-0.37,0.812-0.812c0.025-0.411,0.062-0.816,0.051-1.229C29.988,25.478,29.965,25.092,29.934,24.707z"/></svg>`;
+    const deleteIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M22,5H17V2a1,1,0,0,0-1-1H8A1,1,0,0,0,7,2V5H2A1,1,0,0,0,2,7H3.117L5.008,22.124A1,1,0,0,0,6,23H18a1,1,0,0,0,.992-.876L20.883,7H22a1,1,0,0,0,0-2ZM9,3h6V5H9Zm8.117,18H6.883L5.133,7H18.867Z"/></svg>`;
+    const editIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 9.99982L14 5.99982M2.5 21.4998L5.88437 21.1238C6.29786 21.0778 6.5046 21.0549 6.69785 20.9923C6.86929 20.9368 7.03245 20.8584 7.18289 20.7592C7.35245 20.6474 7.49955 20.5003 7.79373 20.2061L21 6.99982C22.1046 5.89525 22.1046 4.10438 21 2.99981C19.8955 1.89525 18.1046 1.89524 17 2.99981L3.79373 16.2061C3.49955 16.5003 3.35246 16.6474 3.24064 16.8169C3.14143 16.9674 3.06301 17.1305 3.00751 17.302C2.94496 17.4952 2.92198 17.702 2.87604 18.1155L2.5 21.4998Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const copyIcon = `<svg fill="none" width="16" height="16" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M29.5,7h-19A1.5,1.5,0,0,0,9,8.5v24A1.5,1.5,0,0,0,10.5,34h19A1.5,1.5,0,0,0,31,32.5V8.5A1.5,1.5,0,0,0,29.5,7ZM29,32H11V9H29Z"/><path fill="currentColor" d="M26,3.5A1.5,1.5,0,0,0,24.5,2H5.5A1.5,1.5,0,0,0,4,3.5v24A1.5,1.5,0,0,0,5.5,29H6V4H26Z"/></svg>`;
+    const saveIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 21H3M18 11L12 17M12 17L6 11M12 17V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    const reactionBar = document.createElement("div");
+    reactionBar.className = "context-reaction-bar";
+    document.body.appendChild(reactionBar);
     const contextMenu = document.createElement("div");
     contextMenu.className = "context-menu";
     contextMenu.innerHTML = `
-        <div class="context-menu-item" id="replyMenuItem">↩️ Ответить</div>
-        <div class="context-menu-item" id="reactMenuItem">😊 Реакция</div>
-        <div class="context-menu-item" id="editMenuItem">✏️ Редактировать</div>
-        <div class="context-menu-item" id="deleteMenuItem">🗑️ Удалить</div>
-        <div class="context-menu-item" id="copyMenuItem">             
-            <svg fill="none" width="16px" height="16px" viewBox="0 0 36 36" version="1.1"  preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-                <title>copy-line</title>
-                <path d="M29.5,7h-19A1.5,1.5,0,0,0,9,8.5v24A1.5,1.5,0,0,0,10.5,34h19A1.5,1.5,0,0,0,31,32.5V8.5A1.5,1.5,0,0,0,29.5,7ZM29,32H11V9H29Z" class="clr-i-outline clr-i-outline-path-1"></path><path d="M26,3.5A1.5,1.5,0,0,0,24.5,2H5.5A1.5,1.5,0,0,0,4,3.5v24A1.5,1.5,0,0,0,5.5,29H6V4H26Z" class="clr-i-outline clr-i-outline-path-2"></path>
-            </svg>         
-            Копировать текст
-        </div>
-        <div class="context-menu-item" id="saveImageMenuItem" style="display: none;">
-            <svg version="1.1" id="Icons" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
-                width="16px" height="16px" viewBox="0 0 32 32" xml:space="preserve">
-            <style type="text/css">
-                .st0{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
-                .st1{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
-                .st2{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:6,6;}
-                .st3{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:4,4;}
-                .st4{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;}
-                .st5{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-dasharray:3.1081,3.1081;}
-                
-                    .st6{fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;stroke-dasharray:4,3;}
-            </style>
-            <path class="st0" d="M27,16V8.8c1.2-0.4,2-1.5,2-2.8c0-1.7-1.3-3-3-3c-1.3,0-2.4,0.8-2.8,2H8.8C8.4,3.8,7.3,3,6,3C4.3,3,3,4.3,3,6
-                c0,1.3,0.8,2.4,2,2.8v14.4c-1.2,0.4-2,1.5-2,2.8c0,1.7,1.3,3,3,3c1.3,0,2.4-0.8,2.8-2H18"/>
-            <polyline class="st0" points="16,23 9,23 9,9 23,9 23,15 "/>
-            <circle class="st0" cx="13" cy="13" r="1"/>
-            <polyline class="st0" points="9,20 16,16 17,17 "/>
-            <circle class="st0" cx="23" cy="22" r="7"/>
-            <line class="st0" x1="23" y1="15" x2="23" y2="25"/>
-            <polyline class="st0" points="19,21 23,25 27,21 "/>
-            </svg>
-            Сохранить изображение
-        </div>
-        <div class="context-menu-item" id="saveFileMenuItem" style="display: none;">                 
-            <svg width="16px" height="16px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M21 21H3M18 11L12 17M12 17L6 11M12 17V3" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>        
-            Сохранить файл
-        </div>
-    `;
+        <div class="context-menu-item" id="replyMenuItem">${menuIcon(replyIcon)}Ответить</div>
+        <div class="context-menu-item" id="editMenuItem">${menuIcon(editIcon)}Редактировать</div>
+        <div class="context-menu-item" id="deleteMenuItem">${menuIcon(deleteIcon)}Удалить</div>
+        <div class="context-menu-item" id="copyMenuItem">${menuIcon(copyIcon)}Копировать текст</div>
+        <div class="context-menu-item" id="saveImageMenuItem" style="display: none;">${menuIcon(saveIcon)}Сохранить изображение</div>
+        <div class="context-menu-item" id="saveFileMenuItem" style="display: none;">${menuIcon(saveIcon)}Сохранить файл</div>`;
     document.body.appendChild(contextMenu);
 
     let selectedMessage = null;
+    const hideMenus = () => {
+        contextMenu.style.display = "none";
+        reactionBar.style.display = "none";
+        reactionBar.classList.remove("expanded");
+        selectedMessage = null;
+    };
+    const showReactions = (messageEl) => {
+        const base = ["🔥", "👍", "❤️", "😂", "😮", "😢"];
+        const all =
+            typeof emojiData === "object"
+                ? Object.values(emojiData).flat()
+                : base;
+        reactionBar.innerHTML =
+            base
+                .map(
+                    (emoji) =>
+                        `<button type="button" class="reaction-option" data-emoji="${emoji}">${emoji}</button>`,
+                )
+                .join("") +
+            `<button type="button" class="reaction-expand" aria-label="Все реакции"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 1024 1024" fill="currentColor" class="icon" version="1.1"><path d="M478.312 644.16c24.38 26.901 64.507 26.538 88.507-0.89l270.57-309.222c7.758-8.867 6.86-22.344-2.008-30.103-8.866-7.759-22.344-6.86-30.103 2.007L534.71 615.173c-7.202 8.231-17.541 8.325-24.782 0.335L229.14 305.674c-7.912-8.73-21.403-9.394-30.133-1.482s-9.394 21.403-1.482 30.134l280.786 309.833z" fill=""/></svg></button><div class="reaction-all">${all.map((emoji) => `<button type="button" class="reaction-option" data-emoji="${emoji}">${emoji}</button>`).join("")}</div>`;
+        reactionBar.querySelector(".reaction-expand").onclick = (event) => {
+            event.stopPropagation();
+            reactionBar.classList.toggle("expanded");
+        };
+        reactionBar.querySelectorAll(".reaction-option").forEach(
+            (button) =>
+                (button.onclick = (event) => {
+                    event.stopPropagation();
+                    if (selectedMessage && window.toggleMessageReaction)
+                        window.toggleMessageReaction(
+                            selectedMessage.dataset.messageId,
+                            button.dataset.emoji,
+                        );
+                    hideMenus();
+                }),
+        );
+        const rect = messageEl.getBoundingClientRect();
+        reactionBar.style.left = `${Math.min(rect.left, window.innerWidth - 320)}px`;
+        reactionBar.style.top = `${Math.max(8, rect.top - 54)}px`;
+        reactionBar.style.display = "flex";
+    };
 
     document.addEventListener("contextmenu", (e) => {
         const messageEl = e.target.closest(".message");
-        if (messageEl && !messageEl.classList.contains("system-message")) {
-            e.preventDefault();
-            selectedMessage = messageEl;
-
-            const saveImageMenuItem =
-                document.getElementById("saveImageMenuItem");
-            saveImageMenuItem.style.display = messageEl.classList.contains(
-                "image",
-            )
-                ? "flex"
-                : "none";
-
-            const saveFileMenuItem =
-                document.getElementById("saveFileMenuItem");
-            saveFileMenuItem.style.display = messageEl.classList.contains(
-                "file",
-            )
-                ? "flex"
-                : "none";
-
-            const copyMenuItem = document.getElementById("copyMenuItem");
-            copyMenuItem.style.display =
-                messageEl.classList.contains("file") ||
-                messageEl.classList.contains("image")
-                    ? "none"
-                    : "flex";
-
-            const isOwnMessage = messageEl.classList.contains("me");
-            document.getElementById("editMenuItem").style.display =
-                isOwnMessage &&
-                !messageEl.classList.contains("file") &&
-                !messageEl.classList.contains("image")
-                    ? "flex"
-                    : "none";
-
-            const rect = messageEl.getBoundingClientRect();
-            contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 200)}px`;
-            contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 150)}px`;
-            contextMenu.style.display = "flex";
-        } else {
-            contextMenu.style.display = "none";
-            selectedMessage = null;
+        if (
+            !messageEl ||
+            messageEl.classList.contains("system-message") ||
+            messageEl.classList.contains("deleted")
+        ) {
+            hideMenus();
+            return;
         }
+        e.preventDefault();
+        selectedMessage = messageEl;
+        const isFile = messageEl.classList.contains("file");
+        const isImage = messageEl.classList.contains("image");
+        const isOwnMessage = messageEl.classList.contains("me");
+        document.getElementById("copyMenuItem").style.display =
+            isFile || isImage ? "none" : "flex";
+        document.getElementById("editMenuItem").style.display =
+            isOwnMessage && !isFile && !isImage ? "flex" : "none";
+        document.getElementById("deleteMenuItem").style.display =
+            isOwnMessage && !isFile && !isImage ? "flex" : "none";
+        document.getElementById("saveImageMenuItem").style.display = isImage
+            ? "flex"
+            : "none";
+        document.getElementById("saveFileMenuItem").style.display = isFile
+            ? "flex"
+            : "none";
+        showReactions(messageEl);
+        const rect = messageEl.getBoundingClientRect();
+        contextMenu.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
+        contextMenu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 180)}px`;
+        contextMenu.style.display = "flex";
     });
 
     document.addEventListener("click", (e) => {
-        if (!contextMenu.contains(e.target)) {
-            contextMenu.style.display = "none";
-            selectedMessage = null;
-        }
+        if (!contextMenu.contains(e.target) && !reactionBar.contains(e.target))
+            hideMenus();
     });
-
-    document.getElementById("replyMenuItem").addEventListener("click", () => {
-        if (selectedMessage && window.replyToMessage) {
+    document.getElementById("replyMenuItem").onclick = () => {
+        if (selectedMessage && window.replyToMessage)
             window.replyToMessage(selectedMessage.dataset.messageId);
-        }
-        contextMenu.style.display = "none";
-    });
-
-    document.getElementById("reactMenuItem").addEventListener("click", () => {
-        if (selectedMessage && window.showReactionPicker) {
-            window.showReactionPicker(
-                selectedMessage.dataset.messageId,
-                selectedMessage,
-            );
-        }
-        contextMenu.style.display = "none";
-    });
-
-    document.getElementById("editMenuItem").addEventListener("click", () => {
-        if (selectedMessage && window.editMessage) {
+        hideMenus();
+    };
+    document.getElementById("editMenuItem").onclick = () => {
+        if (selectedMessage && window.editMessage)
             window.editMessage(selectedMessage.dataset.messageId);
-        }
-        contextMenu.style.display = "none";
-    });
-
-    document.getElementById("deleteMenuItem").addEventListener("click", () => {
-        if (selectedMessage && window.deleteMessage) {
+        hideMenus();
+    };
+    document.getElementById("deleteMenuItem").onclick = () => {
+        if (selectedMessage && window.deleteMessage)
             window.deleteMessage(selectedMessage.dataset.messageId);
+        hideMenus();
+    };
+    document.getElementById("copyMenuItem").onclick = () => {
+        const textEl = selectedMessage?.querySelector(".message-content");
+        if (textEl)
+            navigator.clipboard
+                .writeText(textEl.textContent)
+                .then(
+                    () =>
+                        typeof addSystemMessage === "function" &&
+                        addSystemMessage("✅ Текст скопирован"),
+                );
+        hideMenus();
+    };
+    document.getElementById("saveImageMenuItem").onclick = () => {
+        if (selectedMessage?.classList.contains("image")) {
+            const a = document.createElement("a");
+            a.href = selectedMessage.dataset.imageUrl;
+            a.download = decodeHtmlEntities(
+                selectedMessage.dataset.originalFilename || "image",
+            );
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            if (typeof addSystemMessage === "function")
+                addSystemMessage("✅ Изображение сохранено");
         }
-        contextMenu.style.display = "none";
-    });
-
-    document.getElementById("copyMenuItem").addEventListener("click", () => {
-        if (selectedMessage) {
-            const textEl = selectedMessage.querySelector(".message-content");
-            if (textEl) {
-                navigator.clipboard.writeText(textEl.textContent).then(() => {
-                    if (typeof addSystemMessage === "function")
-                        addSystemMessage("✅ Текст скопирован");
-                });
-            }
+        hideMenus();
+    };
+    document.getElementById("saveFileMenuItem").onclick = () => {
+        if (selectedMessage?.classList.contains("file")) {
+            const a = document.createElement("a");
+            a.href = selectedMessage.dataset.url;
+            a.download = decodeHtmlEntities(
+                selectedMessage.dataset.originalFilename || "file",
+            );
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            if (typeof addSystemMessage === "function")
+                addSystemMessage("✅ Файл сохранён");
         }
-        contextMenu.style.display = "none";
-    });
-
-    document
-        .getElementById("saveImageMenuItem")
-        .addEventListener("click", () => {
-            if (
-                selectedMessage &&
-                selectedMessage.classList.contains("image")
-            ) {
-                const url = selectedMessage.dataset.imageUrl;
-                let fileName =
-                    selectedMessage.dataset.originalFilename || "image";
-                fileName = decodeHtmlEntities(fileName);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = fileName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                if (typeof addSystemMessage === "function")
-                    addSystemMessage("✅ Изображение сохранено");
-            }
-            contextMenu.style.display = "none";
-        });
-
-    document
-        .getElementById("saveFileMenuItem")
-        .addEventListener("click", () => {
-            if (selectedMessage && selectedMessage.classList.contains("file")) {
-                const url = selectedMessage.dataset.url;
-                let fileName =
-                    selectedMessage.dataset.originalFilename || "file";
-                fileName = decodeHtmlEntities(fileName);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = fileName;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                if (typeof addSystemMessage === "function")
-                    addSystemMessage("✅ Файл сохранён");
-            }
-            contextMenu.style.display = "none";
-        });
+        hideMenus();
+    };
 });

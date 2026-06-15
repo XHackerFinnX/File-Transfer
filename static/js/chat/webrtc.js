@@ -1424,6 +1424,7 @@ async function finalizeJsonFileReceive(receiving) {
     const url = URL.createObjectURL(blob);
     const messageType = receiving.isImage ? "image" : "file";
     messages.push({
+        id: receiving.fileId || crypto.randomUUID(),
         from: "other",
         text: receiving.name,
         size: receiving.size,
@@ -1470,6 +1471,7 @@ async function finalizeBinaryFileReceive(receiving) {
     const url = URL.createObjectURL(blob);
     const messageType = receiving.isImage ? "image" : "file";
     messages.push({
+        id: receiving.fileId || crypto.randomUUID(),
         from: "other",
         text: receiving.name,
         size: receiving.size,
@@ -1586,7 +1588,8 @@ window.enqueueFiles = function (files) {
 
 async function waitWhileQueueItemPaused(item) {
     while (item?.paused && !item.cancelled) {
-        item.statusText = item.status === "sending" ? "Пауза отправки" : "Пауза";
+        item.statusText =
+            item.status === "sending" ? "Пауза отправки" : "Пауза";
         renderFileQueue();
         await new Promise((resolve) => setTimeout(resolve, 300));
     }
@@ -1889,6 +1892,7 @@ async function sendFileBinary(file, queueItem = null) {
             const url = URL.createObjectURL(file);
             const messageType = isImage ? "image" : "file";
             messages.push({
+                id: fileId,
                 from: "me",
                 text: file.name,
                 size: file.size,
@@ -2032,6 +2036,7 @@ async function sendFileJson(file, queueItem = null) {
             const url = URL.createObjectURL(originalBlob);
             const messageType = isImage ? "image" : "file";
             messages.push({
+                id: fileId,
                 from: "me",
                 text: file.name,
                 size: file.size,
@@ -2208,12 +2213,14 @@ async function sendFilePlanB(file, queueItem = null) {
                 const url = URL.createObjectURL(originalBlob);
                 const messageType = isImage ? "image" : "file";
                 messages.push({
+                    id: fileId,
                     from: "me",
                     text: file.name,
                     size: file.size,
                     type: messageType,
                     url,
                     isImage,
+                    checksum: queueItem?.checksum || "",
                     time: new Date().toLocaleTimeString("ru-RU", {
                         hour: "2-digit",
                         minute: "2-digit",
@@ -2318,7 +2325,8 @@ function cancelComposerMode() {
 }
 
 window.replyToMessage = function (messageId) {
-    if (!getMessageById(messageId)) return;
+    const message = getMessageById(messageId);
+    if (!message || message.deleted) return;
     pendingReplyId = messageId;
     editingMessageId = null;
     renderReplyComposer();
@@ -2342,7 +2350,8 @@ window.editMessage = function (messageId) {
 
 window.deleteMessage = function (messageId) {
     const message = getMessageById(messageId);
-    if (!message || message.deleted) return;
+    if (!message || message.from !== "me" || message.deleted || message.type)
+        return;
     void sendMessageControl({ type: "message_delete", messageId });
 };
 
@@ -2350,22 +2359,16 @@ window.showReactionPicker = function (messageId, anchor) {
     document
         .querySelectorAll(".reaction-picker-popover")
         .forEach((n) => n.remove());
-    if (!getMessageById(messageId)) return;
+    const target = getMessageById(messageId);
+    if (!target || target.deleted) return;
     const picker = document.createElement("div");
     picker.className = "reaction-picker-popover";
-    ["👍", "❤️", "😂", "😮", "😢", "🔥"].forEach((emoji) => {
+    getAvailableReactionEmoji().forEach((emoji) => {
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = emoji;
         button.onclick = async () => {
-            const message = getMessageById(messageId);
-            const active = !message?.reactions?.[emoji]?.me;
-            await sendMessageControl({
-                type: "reaction",
-                messageId,
-                emoji,
-                active,
-            });
+            await window.toggleMessageReaction(messageId, emoji);
             picker.remove();
         };
         picker.appendChild(button);
@@ -2410,7 +2413,11 @@ function bindMessageGestures() {
             const touch = event.changedTouches[0];
             const dx = touch.clientX - startX;
             const dy = Math.abs(touch.clientY - startY);
-            if (dx < -55 && dy < 45)
+            if (
+                dx < -55 &&
+                dy < 45 &&
+                !activeMessage.classList.contains("deleted")
+            )
                 window.replyToMessage(activeMessage.dataset.messageId);
             activeMessage = null;
         },
@@ -2418,7 +2425,7 @@ function bindMessageGestures() {
     );
     container.addEventListener("dblclick", (event) => {
         const message = event.target.closest(".message");
-        if (message)
+        if (message && !message.classList.contains("deleted"))
             window.showReactionPicker(message.dataset.messageId, message);
     });
 }
@@ -2568,6 +2575,19 @@ async function sendMessage() {
         renderMessages();
     }
 }
+
+function getAvailableReactionEmoji() {
+    if (typeof emojiData === "object" && emojiData)
+        return Object.values(emojiData).flat();
+    return ["🔥", "👍", "❤️", "😂", "😮", "😢"];
+}
+
+window.toggleMessageReaction = async function (messageId, emoji) {
+    const message = getMessageById(messageId);
+    if (!message || message.deleted || !emoji) return;
+    const active = !message?.reactions?.[emoji]?.me;
+    await sendMessageControl({ type: "reaction", messageId, emoji, active });
+};
 
 function renderReactions(message) {
     const entries = Object.entries(message.reactions || {}).filter(

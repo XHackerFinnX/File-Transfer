@@ -2178,3 +2178,110 @@ body::before {
 .connection-retry-btn:hover {
     background: rgba(59, 130, 246, 0.28);
 }
+
+.context-menu-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+    flex-shrink: 0;
+}
+.context-menu-icon svg {
+    width: 16px;
+    height: 16px;
+}
+.context-reaction-bar {
+    position: fixed;
+    z-index: 10021;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    max-width: min(360px, calc(100vw - 20px));
+    padding: 8px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.97);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.context-reaction-bar button {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 1;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+        transform 0.15s ease,
+        background 0.15s ease;
+}
+.context-reaction-bar button:hover {
+    transform: translateY(-2px) scale(1.12);
+    background: rgba(148, 163, 184, 0.16);
+}
+.context-reaction-bar .reaction-expand {
+    color: #e2e8f0;
+    font-size: 18px;
+}
+.context-reaction-bar .reaction-all {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: calc(100% + 8px);
+    width: min(286px, calc(100vw - 20px));
+    max-height: 230px;
+    overflow-y: auto;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.context-reaction-bar.expanded {
+    border-radius: 18px;
+}
+.context-reaction-bar.expanded .reaction-all {
+    display: flex;
+}
+.message.deleted {
+    pointer-events: none;
+}
+
+.context-reaction-bar .reaction-all {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96, 165, 250, 0.65) rgba(15, 23, 42, 0.25);
+}
+.context-reaction-bar .reaction-all::-webkit-scrollbar {
+    width: 6px;
+}
+.context-reaction-bar .reaction-all::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.25);
+    border-radius: 999px;
+    margin: 8px 0;
+}
+.context-reaction-bar .reaction-all::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #60a5fa, #3b82f6);
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.98);
+}
+.context-reaction-bar .reaction-all::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #93c5fd, #60a5fa);
+}
+
+.context-reaction-bar .reaction-expand svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+    transition: transform 0.15s ease;
+}
+.context-reaction-bar.expanded .reaction-expand svg {
+    transform: rotate(180deg);
+}
