@@ -8,6 +8,8 @@ let pc,
     peerPublicKeyBase64,
     peerId,
     peerNickname,
+    currentChatRole = null,
+    currentRoomId = null,
     messages = [];
 let connectionTimeout = null;
 let connectionTimerInterval = null;
@@ -855,12 +857,21 @@ window.startChat = async function (data) {
     }
     peerId = data.peer_id;
     peerNickname = data.peer_nickname;
-    window.currentChatPeer = { id: peerId, nickname: peerNickname };
-    const role = data.role;
+    currentChatRole = data.role || currentChatRole;
+    currentRoomId = data.room_id || currentRoomId;
+    window.currentChatPeer = {
+        id: peerId,
+        nickname: peerNickname,
+        role: currentChatRole,
+        roomId: currentRoomId,
+    };
+    const role = currentChatRole;
     window.receivingFile = null;
     pendingRemoteCandidates = [];
     resetConnectionReadiness();
-    messages = [];
+    if (!data.preserveMessages) {
+        messages = [];
+    }
     flushReadReceipts();
 
     startConnectionTimers("Устанавливаем защищённое соединение...");
@@ -1664,7 +1675,7 @@ async function sendSingleFile(file, queueItem = null) {
         return;
     }
     if (!canSendEncryptedPayload()) {
-        return;
+        throw new Error("Encryption is not ready");
     }
     if (file.size > MAX_TRANSFER_FILE_SIZE) {
         const limit = formatFileSize(MAX_TRANSFER_FILE_SIZE);
@@ -1674,7 +1685,8 @@ async function sendSingleFile(file, queueItem = null) {
     }
     if (!planBActive && (!dataChannel || dataChannel.readyState !== "open")) {
         updateChatStatus("Соединение ещё не установлено");
-        return;
+        startReconnectUX("Соединение временно недоступно");
+        throw new Error("Data channel is not ready");
     }
     sendActivitySignal(
         isImageFile(file.type) ? "sending_image" : "sending_file",
@@ -2536,6 +2548,7 @@ function stopReconnectUX() {
     updateChatStatus("Соединение восстановлено");
     addSystemMessage("✅ Соединение восстановлено");
     flushPendingMessages();
+    if (outgoingFileQueue.length) processFileQueue();
 }
 
 window.retryPeerConnection = function () {
@@ -2998,15 +3011,28 @@ window.handleWebRTCMessage = async function (msg) {
         }
     } else if (msg.type === "peer_reconnected") {
         addSystemMessage(
-            "✅ Собеседник вернулся в сеть. Пробуем восстановить P2P...",
+            "✅ Собеседник вернулся в сеть. Пересобираем защищённое соединение...",
         );
         stopReconnectUX();
-        if (peerId && pc && dataChannel?.readyState !== "open") {
+        if (msg.data?.peer_id) {
+            await window.startChat({
+                room_id: msg.data.room_id || currentRoomId,
+                peer_id: msg.data.peer_id,
+                peer_nickname: msg.data.peer_nickname || peerNickname,
+                role: msg.data.role || currentChatRole || "peer",
+                preserveMessages: true,
+            });
+        } else if (peerId && pc && dataChannel?.readyState !== "open") {
             window.retryPeerConnection();
         }
+    } else if (msg.type === "peer_left") {
+        addSystemMessage("Собеседник вышел из чата");
+        alert("Собеседник вышел из чата");
+        window._exitChatInternal();
     } else if (msg.type === "peer_disconnected") {
-        addSystemMessage("Собеседник временно offline, ждём 180 секунд");
-        startReconnectUX("Собеседник временно offline");
+        addSystemMessage("Собеседник отключился от чата");
+        alert("Собеседник отключился от чата");
+        window._exitChatInternal();
     }
 };
 
@@ -3028,6 +3054,8 @@ window._exitChatInternal = function () {
     myKeyPair = null;
     peerId = null;
     peerNickname = null;
+    currentChatRole = null;
+    currentRoomId = null;
     window.currentChatPeer = null;
     if (typeof window.cleanupActiveCall === "function")
         window.cleanupActiveCall(false);
@@ -3057,7 +3085,6 @@ window.exitChat = function () {
     if (ws && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify({ type: "peer_disconnected" }));
     window._exitChatInternal();
-    window.location.reload();
 };
 
 window.sendMessage = sendMessage;

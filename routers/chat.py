@@ -99,6 +99,32 @@ def consume_room_create_budget(client_id: str) -> bool:
     bucket.append(now)
     return True
 
+async def notify_peer_left(client_id: str, message_type: str = "peer_left"):
+    room_id = clients.get(client_id, {}).get("room_id")
+    if not room_id or room_id not in rooms_chat:
+        return
+    room = rooms_chat[room_id]
+    other = room.get("peer") if room.get("host") == client_id else room.get("host")
+    if other and other in clients and clients[other].get("connected", True):
+        await safe_send_json(clients[other]["ws"], {"type": message_type})
+
+
+def clear_client_room(client_id: str):
+    room_id = clients.get(client_id, {}).get("room_id")
+    if not room_id or room_id not in rooms_chat:
+        if client_id in clients:
+            clients[client_id]["status"] = "online"
+            clients[client_id]["room_id"] = None
+        return
+
+    room = rooms_chat[room_id]
+    other = room.get("peer") if room.get("host") == client_id else room.get("host")
+    rooms_chat.pop(room_id, None)
+    for participant_id in (client_id, other):
+        if participant_id and participant_id in clients:
+            clients[participant_id]["status"] = "online"
+            clients[participant_id]["room_id"] = None
+
 async def finalize_client_disconnect(client_id: str, expected_ws: WebSocket | None = None):
     await asyncio.sleep(MOBILE_RECONNECT_GRACE_SECONDS)
     client = clients.get(client_id)
@@ -112,14 +138,8 @@ async def finalize_client_disconnect(client_id: str, expected_ws: WebSocket | No
         disconnect_cleanup_tasks.pop(client_id, None)
         return
 
-    room_id = client.get("room_id")
-    if room_id and room_id in rooms_chat:
-        room = rooms_chat[room_id]
-        other = room.get("peer") if room.get("host") == client_id else room.get("host")
-        if other and other in clients and clients[other].get("connected", True):
-            await safe_send_json(clients[other]["ws"], {"type": "peer_disconnected"})
-        if room.get("host") == client_id or not room.get("peer"):
-            rooms_chat.pop(room_id, None)
+    await notify_peer_left(client_id, "peer_disconnected")
+    clear_client_room(client_id)
     session_key = client.get("session_key")
     if session_key:
         clients_by_session.pop(session_key, None)
@@ -182,13 +202,25 @@ async def lobby_ws(websocket: WebSocket):
             room = rooms_chat[room_id]
             other_id = room.get("peer") if room.get("host") == client_id else room.get("host")
             if other_id and other_id in clients and clients[other_id].get("connected", True):
+                client_role = "host" if room.get("host") == client_id else "peer"
+                other_role = "host" if room.get("host") == other_id else "peer"
                 await safe_send_json(clients[other_id]["ws"], {
                     "type": "peer_reconnected",
-                    "data": {"peer_id": client_id, "peer_nickname": clients[client_id]["nickname"]},
+                    "data": {
+                        "room_id": room_id,
+                        "peer_id": client_id,
+                        "peer_nickname": clients[client_id]["nickname"],
+                        "role": other_role,
+                    },
                 })
                 await safe_send_json(websocket, {
                     "type": "peer_reconnected",
-                    "data": {"peer_id": other_id, "peer_nickname": clients[other_id]["nickname"]},
+                    "data": {
+                        "room_id": room_id,
+                        "peer_id": other_id,
+                        "peer_nickname": clients[other_id]["nickname"],
+                        "role": client_role,
+                    },
                 })
     broadcast_users()
     print(f"[CHAT] {'Возврат' if resumed else 'Новый клиент'}: {short_id(client_id)} ip={client_ip}")
@@ -300,16 +332,8 @@ async def lobby_ws(websocket: WebSocket):
 
             elif msg_type == "peer_disconnected":
                 print(f"[CHAT] Клиент {short_id(client_id)} покидает чат")
-                room_id = clients[client_id].get("room_id")
-                if room_id and room_id in rooms_chat:
-                    room = rooms_chat[room_id]
-                    other = room["peer"] if room["host"] == client_id else room["host"]
-                    if other and other in clients:
-                        await safe_send_json(clients[other]["ws"], {"type": "peer_disconnected"})
-                    if room["host"] == client_id or not room.get("peer"):
-                        rooms_chat.pop(room_id, None)
-                clients[client_id]["status"] = "online"
-                clients[client_id]["room_id"] = None
+                await notify_peer_left(client_id, "peer_left")
+                clear_client_room(client_id)
                 broadcast_users()
 
             elif msg_type in ["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"] or is_call_signal_type(msg_type):

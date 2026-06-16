@@ -126,6 +126,7 @@ function connectWebSocket() {
                 "transport_state",
                 "peer_disconnected",
                 "peer_reconnected",
+                "peer_left",
             ].includes(msg.type)
         ) {
             if (typeof window.handleWebRTCMessage === "function") {
