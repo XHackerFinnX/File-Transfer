@@ -18,13 +18,16 @@ let keyExchangeStartedAt = 0;
 
 let connectionAttempts = 0;
 const MAX_TURN_ATTEMPTS = 2;
-let forceTurn = true;
+let icePolicyMode = "all";
 let usingTurn = false;
 let localTransportState = null;
 let remoteTransportState = null;
 let lastLocalTransportSignature = "";
 let lastRemoteTransportSignature = "";
 let pendingRemoteCandidates = [];
+let currentConnectionId = null;
+let currentOffererId = null;
+let localSignalSeq = 0;
 let turnProbePromise = null;
 let turnProbeCachedAt = 0;
 let turnProbeCachedResult = false;
@@ -143,12 +146,7 @@ function requestPeerPublicKey(reason = "manual") {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!peerId) return;
     if (!myKeyPair) return;
-    ws.send(
-        JSON.stringify({
-            type: "public_key_request",
-            data: { to: peerId },
-        }),
-    );
+    sendSignalMessage("public_key_request", { reason });
     console.log(`[KEY] public_key_request отправлен (${reason})`);
 }
 
@@ -242,6 +240,8 @@ function resetConnectionReadiness() {
         dataOpen: false,
         keyReady: false,
     };
+    currentConnectionId = currentConnectionId || null;
+    localSignalSeq = 0;
     localTransportState = null;
     remoteTransportState = null;
     lastLocalTransportSignature = "";
@@ -301,6 +301,91 @@ function announceTransportState(state, isLocal = true) {
     // addSystemMessage(`${name} использует: ${transportLabel(state)}`);
 }
 
+function isCurrentSignal(msg) {
+    const data = msg?.data || {};
+    if (data.from && peerId && data.from !== peerId) return false;
+    if (data.room_id && currentRoomId && data.room_id !== currentRoomId) return false;
+    if (data.connection_id && currentConnectionId && data.connection_id !== currentConnectionId) return false;
+    return true;
+}
+
+function buildSignalData(extra = {}) {
+    return {
+        to: peerId,
+        room_id: currentRoomId,
+        connection_id: currentConnectionId,
+        seq: ++localSignalSeq,
+        ...extra,
+    };
+}
+
+function sendSignalMessage(type, extra = {}) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return false;
+    ws.send(JSON.stringify({ type, data: buildSignalData(extra) }));
+    return true;
+}
+
+function isLocalOfferer() {
+    return Boolean(myClientId && currentOffererId && myClientId === currentOffererId);
+}
+
+function cleanupPeerConnection() {
+    const oldPc = pc;
+    const oldDataChannel = dataChannel;
+    const oldFileChannel = fileChannel;
+    try {
+        if (oldDataChannel) {
+            oldDataChannel.onopen = null;
+            oldDataChannel.onclose = null;
+            oldDataChannel.onerror = null;
+            oldDataChannel.onmessage = null;
+            if (oldDataChannel.readyState !== "closed") oldDataChannel.close();
+        }
+    } catch (e) {
+        console.warn("[DC] Ошибка закрытия старого канала:", e);
+    }
+    try {
+        if (oldFileChannel) {
+            oldFileChannel.onopen = null;
+            oldFileChannel.onclose = null;
+            oldFileChannel.onerror = null;
+            oldFileChannel.onmessage = null;
+            if (oldFileChannel.readyState !== "closed") oldFileChannel.close();
+        }
+    } catch (e) {
+        console.warn("[FILE] Ошибка закрытия старого канала:", e);
+    }
+    try {
+        if (oldPc) {
+            oldPc.onicecandidate = null;
+            oldPc.ondatachannel = null;
+            oldPc.oniceconnectionstatechange = null;
+            oldPc.onconnectionstatechange = null;
+            oldPc.close();
+        }
+    } catch (e) {
+        console.warn("[PC] Ошибка закрытия старого соединения:", e);
+    }
+    pc = null;
+    dataChannel = null;
+    fileChannel = null;
+}
+
+async function restartPeerConnection(reason = "manual_retry", nextIcePolicy = "all") {
+    if (!window.currentChatPeer) return;
+    icePolicyMode = nextIcePolicy;
+    await window.startChat({
+        room_id: currentRoomId,
+        peer_id: peerId,
+        peer_nickname: peerNickname,
+        role: currentChatRole,
+        connection_id: currentConnectionId,
+        offerer_id: currentOffererId,
+        preserveMessages: true,
+        reason,
+    });
+}
+
 function syncTransportState(reason = "state_update", announce = true) {
     localTransportState = buildTransportState();
     if (announce) {
@@ -311,7 +396,7 @@ function syncTransportState(reason = "state_update", announce = true) {
     ws.send(
         JSON.stringify({
             type: "transport_state",
-            data: { to: peerId, reason, state: localTransportState },
+            data: buildSignalData({ reason, state: localTransportState }),
         }),
     );
 }
@@ -588,10 +673,6 @@ window.prepareWaitingRoom = function (roomData = {}) {
 async function getIceServers() {
     try {
         usingTurn = false;
-        if (!forceTurn) {
-            console.warn("⚠️ Используем только STUN (fallback)");
-            return [...DEFAULT_STUN_SERVERS];
-        }
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
@@ -655,12 +736,7 @@ async function sendRealtimeSignal(payload) {
         if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return;
         const relayPayload = await encryptPlanBPayload(payload);
         if (!relayPayload) return;
-        ws.send(
-            JSON.stringify({
-                type: "relay_message",
-                data: { to: peerId, payload: relayPayload },
-            }),
-        );
+        sendSignalMessage("relay_message", { payload: relayPayload });
         return;
     }
     if (!dataChannel || dataChannel.readyState !== "open") return;
@@ -846,19 +922,17 @@ window.handleLocalTypingInput = function (text) {
 
 // ========== ЗАПУСК ЧАТА ==========
 window.startChat = async function (data) {
-    if (pc) {
-        try {
-            pc.onicecandidate = null;
-            pc.ondatachannel = null;
-            pc.close();
-        } catch (e) {
-            console.warn("[PC] Ошибка закрытия старого соединения:", e);
-        }
-    }
+    cleanupPeerConnection();
     peerId = data.peer_id;
     peerNickname = data.peer_nickname;
     currentChatRole = data.role || currentChatRole;
     currentRoomId = data.room_id || currentRoomId;
+    currentConnectionId = data.connection_id || currentConnectionId || crypto.randomUUID();
+    currentOffererId = data.offerer_id || currentOffererId;
+    if (!data.preserveMessages) {
+        icePolicyMode = "all";
+        connectionAttempts = 0;
+    }
     window.currentChatPeer = {
         id: peerId,
         nickname: peerNickname,
@@ -868,6 +942,8 @@ window.startChat = async function (data) {
     const role = currentChatRole;
     window.receivingFile = null;
     pendingRemoteCandidates = [];
+    sharedKey = null;
+    myKeyPair = null;
     resetConnectionReadiness();
     if (!data.preserveMessages) {
         messages = [];
@@ -915,10 +991,9 @@ window.startChat = async function (data) {
     pc = new RTCPeerConnection({
         iceServers,
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: "all",
+        iceTransportPolicy: icePolicyMode,
         bundlePolicy: "max-bundle",
         rtcpMuxPolicy: "require",
-        // iceTransportPolicy: forceTurn ? "relay" : "all",
     });
 
     pc.oniceconnectionstatechange = () => {
@@ -935,12 +1010,7 @@ window.startChat = async function (data) {
                 trySendReady();
                 evaluateConnectionReady();
                 if (!sharedKey && role === "peer") {
-                    ws.send(
-                        JSON.stringify({
-                            type: "public_key_request",
-                            data: { to: peerId },
-                        }),
-                    );
+                    sendSignalMessage("public_key_request");
                 }
                 break;
             case "failed":
@@ -956,20 +1026,14 @@ window.startChat = async function (data) {
                 connectionAttempts++;
                 console.warn(`❌ ICE failed (попытка ${connectionAttempts})`);
 
-                if (connectionAttempts < MAX_TURN_ATTEMPTS && forceTurn) {
-                    const retryMode = usingTurn
-                        ? "TURN + STUN"
-                        : "STUN-only (TURN не подтверждён)";
+                if (connectionAttempts < MAX_TURN_ATTEMPTS) {
+                    const nextPolicy = icePolicyMode === "relay" ? "all" : "relay";
                     console.log(
-                        `🔄 Повторная попытка ICE (${retryMode}, попытка ${connectionAttempts + 1})...`,
+                        `🔄 Повторная попытка ICE (${nextPolicy}, попытка ${connectionAttempts + 1})...`,
                     );
 
                     setTimeout(() => {
-                        window.startChat({
-                            peer_id: peerId,
-                            peer_nickname: peerNickname,
-                            role: role,
-                        });
+                        void restartPeerConnection("ice_failed_retry", nextPolicy);
                     }, 1000);
 
                     return;
@@ -1012,12 +1076,7 @@ window.startChat = async function (data) {
     pc.onicecandidate = (e) => {
         if (e.candidate) {
             console.log(`[ICE] Кандидат (${e.candidate.type})`);
-            ws.send(
-                JSON.stringify({
-                    type: "candidate",
-                    data: { to: peerId, candidate: e.candidate },
-                }),
-            );
+            sendSignalMessage("candidate", { candidate: e.candidate });
         } else {
             console.log("[ICE] Сбор кандидатов завершён");
         }
@@ -1035,12 +1094,7 @@ window.startChat = async function (data) {
             ),
         );
         myPublicKeyBase64 = pub;
-        ws.send(
-            JSON.stringify({
-                type: "public_key",
-                data: { to: peerId, key: pub },
-            }),
-        );
+        sendSignalMessage("public_key", { key: pub });
         console.log("[KEY] Публичный ключ отправлен");
     } catch (err) {
         console.error("[KEY] Error generating keys:", err);
@@ -1048,7 +1102,7 @@ window.startChat = async function (data) {
         return;
     }
 
-    if (role === "host") {
+    if (isLocalOfferer()) {
         dataChannel = pc.createDataChannel("chat");
         setupDataChannel();
         fileChannel = pc.createDataChannel("fileTransfer", { ordered: true });
@@ -1056,12 +1110,7 @@ window.startChat = async function (data) {
         try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            ws.send(
-                JSON.stringify({
-                    type: "offer",
-                    data: { to: peerId, offer: pc.localDescription },
-                }),
-            );
+            sendSignalMessage("offer", { offer: pc.localDescription });
             console.log("[SIGNAL] Offer отправлен");
         } catch (err) {
             console.error("[SIGNAL] Error creating offer:", err);
@@ -2554,18 +2603,24 @@ function stopReconnectUX() {
 window.retryPeerConnection = function () {
     if (!peerId || !window.currentChatPeer) return;
     addSystemMessage("🔄 Пробуем переподключиться...");
-    if (
-        pc &&
-        (pc.signalingState === "stable" ||
-            pc.signalingState === "have-local-offer")
-    ) {
-        try {
-            if (dataChannel?.readyState === "open") return stopReconnectUX();
-            syncTransportState("manual_reconnect_retry");
-        } catch (err) {
-            console.warn("[RECONNECT] Retry failed", err);
+    try {
+        if (dataChannel?.readyState === "open") return stopReconnectUX();
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            startReconnectUX("Сигнальный канал восстанавливается");
+            return;
         }
+        syncTransportState("manual_reconnect_retry");
+        void restartPeerConnection("manual_reconnect_retry", icePolicyMode === "relay" ? "all" : "relay");
+    } catch (err) {
+        console.warn("[RECONNECT] Retry failed", err);
+        activatePlanB();
     }
+};
+
+window.onChatSignalingRestored = function () {
+    if (!peerId) return;
+    syncTransportState("signaling_restored");
+    if (planBActive) flushPendingMessages();
 };
 
 // ========== ОСТАЛЬНЫЕ ФУНКЦИИ (отправка сообщений, рендер, статус) ==========
@@ -2762,6 +2817,10 @@ function showTypingIndicator() {
 }
 
 window.handleWebRTCMessage = async function (msg) {
+    if (["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"].includes(msg.type) && !isCurrentSignal(msg)) {
+        console.warn("[SIGNAL] Игнорируем устаревший/чужой сигнал", msg.type, msg.data);
+        return;
+    }
     if (msg.type === "public_key_request" && myKeyPair) {
         const pub = uint8ArrayToBase64(
             new Uint8Array(
@@ -2769,12 +2828,7 @@ window.handleWebRTCMessage = async function (msg) {
             ),
         );
         myPublicKeyBase64 = pub;
-        ws.send(
-            JSON.stringify({
-                type: "public_key",
-                data: { to: msg.data.from, key: pub },
-            }),
-        );
+        sendSignalMessage("public_key", { key: pub });
         return;
     } else if (msg.type === "offer") {
         try {
@@ -2786,12 +2840,7 @@ window.handleWebRTCMessage = async function (msg) {
             }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            ws.send(
-                JSON.stringify({
-                    type: "answer",
-                    data: { to: msg.data.from, answer: pc.localDescription },
-                }),
-            );
+            sendSignalMessage("answer", { answer: pc.localDescription });
         } catch (err) {
             console.error("[SIGNAL] Error handling offer:", err);
         }
@@ -3020,18 +3069,26 @@ window.handleWebRTCMessage = async function (msg) {
                 peer_id: msg.data.peer_id,
                 peer_nickname: msg.data.peer_nickname || peerNickname,
                 role: msg.data.role || currentChatRole || "peer",
+                connection_id: msg.data.connection_id || crypto.randomUUID(),
+                offerer_id: msg.data.offerer_id,
                 preserveMessages: true,
             });
         } else if (peerId && pc && dataChannel?.readyState !== "open") {
             window.retryPeerConnection();
         }
+    } else if (msg.type === "peer_temporarily_disconnected") {
+        const seconds = msg.data?.reconnect_grace_seconds || MOBILE_RECONNECT_GRACE_SECONDS;
+        addSystemMessage(`Собеседник временно offline, ждём ${seconds} секунд`);
+        startReconnectUX("Собеседник временно offline");
+    } else if (msg.type === "peer_disconnect_timeout") {
+        addSystemMessage("Собеседник не вернулся в сеть вовремя");
+        alert("Собеседник не вернулся в сеть вовремя");
+        window._exitChatInternal();
+    } else if (msg.type === "stale_signal") {
+        console.warn("[SIGNAL] Сервер отклонил устаревший сигнал", msg.data);
     } else if (msg.type === "peer_left") {
         addSystemMessage("Собеседник вышел из чата");
         alert("Собеседник вышел из чата");
-        window._exitChatInternal();
-    } else if (msg.type === "peer_disconnected") {
-        addSystemMessage("Собеседник отключился от чата");
-        alert("Собеседник отключился от чата");
         window._exitChatInternal();
     }
 };
@@ -3068,8 +3125,10 @@ window._exitChatInternal = function () {
     planBOutgoingFileTransfer = null;
     binaryFileSupported = false;
     connectionAttempts = 0;
-    forceTurn = true;
+    icePolicyMode = "all";
     usingTurn = false;
+    currentConnectionId = null;
+    currentOffererId = null;
     const chatDiv = document.getElementById("chat");
     const lobbyDiv = document.getElementById("lobby");
     const connectingDiv = document.getElementById("connectingView");

@@ -2,7 +2,48 @@ let ws,
     myClientId = "";
 let pendingRequest = false;
 const CHAT_SESSION_STORAGE_KEY = "p2p_chat_session_id";
+const CHAT_TAB_STORAGE_KEY = "p2p_chat_tab_id";
 let mobileFilePickerOpen = false;
+let wsReconnectTimer = null;
+let wsReconnectAttempt = 0;
+let wsGeneration = 0;
+let manualWsClose = false;
+let wsConnecting = false;
+
+function getChatTabId() {
+    let tabId = sessionStorage.getItem(CHAT_TAB_STORAGE_KEY);
+    if (!tabId) {
+        tabId = crypto.randomUUID
+            ? crypto.randomUUID()
+            : `tab-${Date.now()}-${Math.random()}`;
+        sessionStorage.setItem(CHAT_TAB_STORAGE_KEY, tabId);
+    }
+    return tabId;
+}
+
+function getWsBackoffDelay(closeCode) {
+    if (closeCode === 4429) return 60_000;
+    const delays = [1000, 2000, 5000, 10000, 30000];
+    const base = delays[Math.min(wsReconnectAttempt, delays.length - 1)];
+    return base + Math.floor(Math.random() * 500);
+}
+
+function scheduleWebSocketReconnect(closeCode) {
+    if (manualWsClose) return;
+    clearTimeout(wsReconnectTimer);
+    const delay = getWsBackoffDelay(closeCode);
+    wsReconnectAttempt += 1;
+    wsReconnectTimer = setTimeout(() => {
+        wsReconnectTimer = null;
+        connectWebSocket();
+    }, delay);
+}
+
+window.closeChatWebSocket = function () {
+    manualWsClose = true;
+    clearTimeout(wsReconnectTimer);
+    if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(1000, "manual close");
+};
 
 function getChatSessionId() {
     let sessionId = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
@@ -45,19 +86,38 @@ function setChatScreen(screen, text = "") {
 window.setChatScreen = setChatScreen;
 
 function connectWebSocket() {
+    if (wsConnecting || (ws && ws.readyState === WebSocket.OPEN)) return;
+    if (ws && ws.readyState === WebSocket.CONNECTING) return;
+
+    manualWsClose = false;
+    wsConnecting = true;
+    const generation = ++wsGeneration;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const sessionId = encodeURIComponent(getChatSessionId());
+    const tabId = encodeURIComponent(getChatTabId());
     ws = new WebSocket(
-        `${protocol}//${location.host}/chat/ws?session=${sessionId}`,
+        `${protocol}//${location.host}/chat/ws?session=${sessionId}&tab=${tabId}`,
     );
     window.ws = ws;
 
+    ws.onopen = () => {
+        if (generation !== wsGeneration) return;
+        wsConnecting = false;
+        wsReconnectAttempt = 0;
+        clearTimeout(wsReconnectTimer);
+        if (typeof window.onChatSignalingRestored === "function") {
+            window.onChatSignalingRestored();
+        }
+    };
+
     ws.onmessage = async (e) => {
+        if (generation !== wsGeneration) return;
         const msg = JSON.parse(e.data);
         console.log("📨 Получено сообщение:", msg.type, msg.data);
 
         if (msg.type === "init") {
             myClientId = msg.data.client_id;
+            window.myClientId = myClientId;
             if (msg.data.resumed) {
                 console.log(
                     "🔄 Сессия чата восстановлена после мобильного фонового режима",
@@ -65,6 +125,13 @@ function connectWebSocket() {
             }
         } else if (msg.type === "users") {
             renderUsers(msg.data);
+        } else if (msg.type === "session_taken_over") {
+            manualWsClose = true;
+            clearTimeout(wsReconnectTimer);
+            alert("Эта сессия чата открыта в другой вкладке.");
+            try { ws.close(1000, "session taken over"); } catch (err) { console.warn(err); }
+        } else if (msg.type === "session_resumed_in_new_tab") {
+            console.log("🔁 Сессия перенесена в текущую вкладку");
         } else if (msg.type === "incoming_request") {
             document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
                 btn.classList.remove("loading");
@@ -113,7 +180,6 @@ function connectWebSocket() {
                 btn.classList.remove("loading");
                 btn.querySelector(".btn-loader").style.display = "none";
             });
-            // alert(`Ошибка: ${msg.data.reason}`);
             pendingRequest = false;
         } else if (
             [
@@ -124,9 +190,11 @@ function connectWebSocket() {
                 "public_key_request",
                 "relay_message",
                 "transport_state",
-                "peer_disconnected",
+                "peer_temporarily_disconnected",
+                "peer_disconnect_timeout",
                 "peer_reconnected",
                 "peer_left",
+                "stale_signal",
             ].includes(msg.type)
         ) {
             if (typeof window.handleWebRTCMessage === "function") {
@@ -147,7 +215,17 @@ function connectWebSocket() {
         }
     };
 
-    ws.onclose = () => setTimeout(connectWebSocket, 2000);
+    ws.onclose = (event) => {
+        if (generation !== wsGeneration) return;
+        wsConnecting = false;
+        console.warn("WebSocket closed:", event.code, event.reason);
+        if (event.code === 4403) {
+            manualWsClose = true;
+            alert("WebSocket отклонён сервером: origin не разрешён.");
+            return;
+        }
+        scheduleWebSocketReconnect(event.code);
+    };
     ws.onerror = (err) => console.error("WebSocket error:", err);
 }
 
