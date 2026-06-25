@@ -4,7 +4,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from routers import main_router, chat_router, launcher_router, launcher_feedback_router
+from routers import (
+    chat_router,
+    launcher_feedback_router,
+    launcher_router,
+    main_router,
+    tilda_apex_webhook_router,
+)
 from config import config
 from security import normalize_allowed_origins, extract_origin_from_url
 
@@ -80,3 +86,4 @@ app.include_router(chat_router, prefix="/chat")
 app.include_router(main_router)
 app.include_router(launcher_router, prefix="/launcher")
 app.include_router(launcher_feedback_router)
+app.include_router(tilda_apex_webhook_router)

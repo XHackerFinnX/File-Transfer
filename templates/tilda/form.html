@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Tilda {{ site_name }} — заявки и статистика</title>
+        <link rel="stylesheet" href="/static/css/tilda/form.css" />
+    </head>
+    <body>
+        <main class="dashboard" data-site-name="{{ site_name }}">
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Tilda webhook</p>
+                    <h1>Заявки и статистика {{ site_name }}</h1>
+                    <p class="hero-text">
+                        Закрытая страница заявок, полученных на endpoint
+                        <code>/tilda/{{ site_name }}/webhook</code>. Для доступа
+                        используйте <code>?secret=...</code>.
+                    </p>
+                </div>
+                <div class="hero-actions">
+                    <button class="refresh-button" type="button" data-refresh>
+                        Обновить
+                    </button>
+                    <button class="ghost-button" type="button" data-export-csv>
+                        CSV
+                    </button>
+                    <button class="ghost-button" type="button" data-export-json>
+                        JSON
+                    </button>
+                </div>
+            </section>
+
+            <section class="stats-grid" aria-label="Сводка по заявкам">
+                <article class="stat-card">
+                    <span class="stat-label">Заказов</span>
+                    <strong class="stat-value" data-total-orders>0</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Сумма заказов</span>
+                    <strong class="stat-value" data-total-sum>0 RUB</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Товаров</span>
+                    <strong class="stat-value" data-total-items>0</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Доставка</span>
+                    <strong class="stat-value" data-delivery-sum>0 RUB</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Уникальных покупателей</span>
+                    <strong class="stat-value" data-unique-buyers>0</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Последняя заявка</span>
+                    <strong class="stat-value stat-date" data-last>—</strong>
+                </article>
+            </section>
+
+            <section class="content-card filters-card">
+                <div class="filters-grid">
+                    <label class="search-box">
+                        <span>Поиск</span>
+                        <input
+                            data-search
+                            type="search"
+                            placeholder="Имя, телефон, email, товар..."
+                        />
+                    </label>
+                    <label class="search-box">
+                        <span>Дата от</span>
+                        <input data-date-from type="date" />
+                    </label>
+                    <label class="search-box">
+                        <span>Дата до</span>
+                        <input data-date-to type="date" />
+                    </label>
+                    <label class="search-box">
+                        <span>Доставка</span>
+                        <select data-delivery-filter>
+                            <option value="all">Все</option>
+                            <option value="DELIVERY">Доставка</option>
+                            <option value="PICKUP">Самовывоз</option>
+                        </select>
+                    </label>
+                    <label class="search-box">
+                        <span>Размер</span>
+                        <select data-size-filter>
+                            <option value="all">Все размеры</option>
+                        </select>
+                    </label>
+                    <label class="search-box">
+                        <span>Цвет</span>
+                        <select data-color-filter>
+                            <option value="all">Все цвета</option>
+                        </select>
+                    </label>
+                </div>
+                <p class="status" data-status>Загружаем заявки...</p>
+            </section>
+
+            <section class="analytics-grid">
+                <article class="content-card">
+                    <h2>Статистика по дням</h2>
+                    <div class="table-wrap">
+                        <table data-days-table></table>
+                    </div>
+                </article>
+                <article class="content-card">
+                    <h2>Размеры</h2>
+                    <div class="table-wrap">
+                        <table data-sizes-table></table>
+                    </div>
+                </article>
+                <article class="content-card">
+                    <h2>Цвета</h2>
+                    <div class="table-wrap">
+                        <table data-colors-table></table>
+                    </div>
+                </article>
+                <article class="content-card">
+                    <h2>Самовывоз</h2>
+                    <div class="table-wrap">
+                        <table data-pickup-table></table>
+                    </div>
+                </article>
+            </section>
+
+            <section class="content-card">
+                <div class="section-heading">
+                    <h2>Заявки</h2>
+                    <span data-visible-count>0</span>
+                </div>
+                <div class="submissions" data-submissions></div>
+            </section>
+        </main>
+        <script src="/static/js/tilda/form.js" defer></script>
+    </body>
+</html>
