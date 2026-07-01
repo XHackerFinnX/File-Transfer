@@ -12,6 +12,8 @@ from routers import (
     tilda_apex_webhook_router,
 )
 from config import config
+from db.connections import close_database_pools, open_database_pools
+from db.schemas import create_tilda_submissions_schema
 from security import normalize_allowed_origins, extract_origin_from_url
 
 def ignore_windows_disconnect_noise(loop, context):
@@ -27,8 +29,13 @@ def ignore_windows_disconnect_noise(loop, context):
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(ignore_windows_disconnect_noise)
+    await asyncio.to_thread(open_database_pools, config.TILDA_APEX_DATABASE_TARGET)
+    await create_tilda_submissions_schema(config.TILDA_APEX_DATABASE_TARGET)
 
-    yield
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(close_database_pools)
 
 app = FastAPI(
     title="P2P Chat & File Transfer",

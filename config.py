@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import SecretStr
 from typing import List
@@ -11,9 +12,21 @@ class Settings(BaseSettings):
     RELAY_WINDOW_SECONDS: int = 10
     RELAY_MAX_BYTES_PER_WINDOW: int = 100 * 1024 * 1024 * 1024
     
+    POSTGRESQL_HOST: str
+    POSTGRESQL_DATABASE: str
+    POSTGRESQL_USER: str
+    POSTGRESQL_PASSWORD: SecretStr
+    POSTGRESQL_DATABASE_APEX: str
+    POSTGRESQL_SSLMODE: str = "disable"
+
+    @property
+    def TILDA_APEX_DATABASE_TARGET(self) -> str:
+        return os.getenv("TILDA_APEX_DATABASE_TARGET", "apex").strip() or "apex"
+    
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
-        env_file_encoding='utf-8'
+        env_file_encoding='utf-8',
+        extra='ignore'
     )
     
 config = Settings()

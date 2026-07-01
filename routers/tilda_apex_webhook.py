@@ -10,11 +10,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from config import config
+from db.tilda_orders import read_tilda_submissions, save_tilda_submission
+
 router = APIRouter()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
-STORAGE_ROOT = PROJECT_ROOT / "tilda_apex_webhook_data"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_SUBMISSIONS_IN_LIST = 500
 # TODO: move to environment/settings when the admin keys are finalized.
@@ -33,10 +35,6 @@ def _site_name_or_404(name: str) -> str:
     if not TILDA_SITE_NAME_PATTERN.fullmatch(normalized):
         raise HTTPException(status_code=404, detail="Tilda form storage not found")
     return normalized
-
-
-def _submissions_dir(name: str) -> Path:
-    return STORAGE_ROOT / _site_name_or_404(name) / "submissions"
 
 
 def _form_secret_or_403(name: str, request: Request) -> None:
@@ -144,11 +142,14 @@ def _is_tilda_test(payload: dict[str, Any]) -> bool:
     return str(payload.get("test", "")).lower() == "test"
 
 
-def _save_submission(name: str, request: Request, payload: dict[str, Any], payload_type: str) -> str:
+async def _save_submission(
+    name: str,
+    request: Request,
+    payload: dict[str, Any],
+    payload_type: str,
+) -> str:
     created_at = _now_utc()
     submission_id = f"{created_at.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
-    submissions_dir = _submissions_dir(name)
-    submissions_dir.mkdir(parents=True, exist_ok=True)
 
     meta = {
         "id": submission_id,
@@ -167,28 +168,17 @@ def _save_submission(name: str, request: Request, payload: dict[str, Any], paylo
             if key.lower() not in {"authorization"}
         },
     }
-    (submissions_dir / f"{submission_id}.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    await save_tilda_submission(config.TILDA_APEX_DATABASE_TARGET, meta)
     return submission_id
 
 
-def _read_submissions(name: str) -> list[dict[str, Any]]:
-    submissions_dir = _submissions_dir(name)
-    if not submissions_dir.exists():
-        return []
-
-    submissions: list[dict[str, Any]] = []
-    submission_files = sorted(submissions_dir.glob("*.json"), reverse=True)[:MAX_SUBMISSIONS_IN_LIST]
-    for file_path in submission_files:
-        try:
-            submission = json.loads(file_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(submission, dict):
-            submissions.append(_submission_summary(submission))
-    return submissions
+async def _read_submissions(name: str) -> list[dict[str, Any]]:
+    submissions = await read_tilda_submissions(
+        config.TILDA_APEX_DATABASE_TARGET,
+        _site_name_or_404(name),
+        MAX_SUBMISSIONS_IN_LIST,
+    )
+    return [_submission_summary(submission) for submission in submissions]
 
 
 @router.options("/tilda/{name}/webhook")
@@ -210,7 +200,7 @@ async def tilda_webhook(name: str, request: Request):
             {"ok": True, "site": site_name, "message": "Tilda webhook test received"}
         )
 
-    submission_id = _save_submission(site_name, request, payload, payload_type)
+    submission_id = await _save_submission(site_name, request, payload, payload_type)
     return JSONResponse({"ok": True, "site": site_name, "submission_id": submission_id})
 
 
@@ -230,5 +220,9 @@ async def tilda_form_submissions(name: str, request: Request):
     site_name = _site_name_or_404(name)
     _form_secret_or_403(site_name, request)
     return JSONResponse(
-        {"ok": True, "site": site_name, "submissions": _read_submissions(site_name)}
+        {
+            "ok": True,
+            "site": site_name,
+            "submissions": await _read_submissions(site_name),
+        }
     )
