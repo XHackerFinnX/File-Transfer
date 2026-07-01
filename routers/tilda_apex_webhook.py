@@ -201,6 +201,7 @@ async def tilda_webhook(name: str, request: Request):
         )
 
     submission_id = await _save_submission(site_name, request, payload, payload_type)
+    print(f"Данные записаны: Проект {name} {site_name}. submission_id: {submission_id}")
     return JSONResponse({"ok": True, "site": site_name, "submission_id": submission_id})
 
 
