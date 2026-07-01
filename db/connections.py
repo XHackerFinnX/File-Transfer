@@ -51,7 +51,11 @@ def get_pool(name: str = "default") -> ConnectionPool:
     target = get_database_target(name)
     pool = _pools.get(target.name)
     if pool is None:
-        pool = ConnectionPool(target.dsn, open=False)
+        pool = ConnectionPool(
+            target.dsn,
+            open=False,
+            check=ConnectionPool.check_connection,
+        )
         _pools[target.name] = pool
     return pool
 
