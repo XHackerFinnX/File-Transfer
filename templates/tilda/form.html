@@ -5,6 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Tilda {{ site_name }} — заявки и статистика</title>
         <link rel="stylesheet" href="/static/css/tilda/form.css" />
+        <link rel="stylesheet" href="/static/css/tilda/custom_filters.css" />
     </head>
     <body>
         <main class="dashboard" data-site-name="{{ site_name }}">
@@ -68,35 +69,36 @@
                             placeholder="Имя, телефон, email, товар..."
                         />
                     </label>
-                    <label class="search-box">
+                    <label class="search-box custom-filter" data-custom-date-filter>
                         <span>Дата от</span>
-                        <input data-date-from type="date" />
+                        <input data-date-from data-custom-date type="date" />
                     </label>
-                    <label class="search-box">
+                    <label class="search-box custom-filter" data-custom-date-filter>
                         <span>Дата до</span>
-                        <input data-date-to type="date" />
+                        <input data-date-to data-custom-date type="date" />
                     </label>
-                    <label class="search-box">
+                    <label class="search-box custom-filter" data-custom-select-filter>
                         <span>Доставка</span>
-                        <select data-delivery-filter>
+                        <select data-delivery-filter data-custom-select>
                             <option value="all">Все</option>
                             <option value="DELIVERY">Доставка</option>
                             <option value="INTERNATIONAL">Международные заказы</option>
                             <option value="PICKUP">Самовывоз</option>
                         </select>
                     </label>
-                    <label class="search-box">
+                    <label class="search-box custom-filter" data-custom-select-filter>
                         <span>Размер</span>
-                        <select data-size-filter>
+                        <select data-size-filter data-custom-select>
                             <option value="all">Все размеры</option>
                         </select>
                     </label>
-                    <label class="search-box">
+                    <label class="search-box custom-filter" data-custom-select-filter>
                         <span>Цвет</span>
-                        <select data-color-filter>
+                        <select data-color-filter data-custom-select>
                             <option value="all">Все цвета</option>
                         </select>
                     </label>
+                    <button class="reset-filters-button" type="button" data-reset-filters>Сбросить</button>
                 </div>
                 <p class="status" data-status>Загружаем заявки...</p>
             </section>
@@ -118,6 +120,12 @@
                     <h2>Цвета</h2>
                     <div class="table-wrap">
                         <table data-colors-table></table>
+                    </div>
+                </article>
+                <article class="content-card">
+                    <h2>Доставка СДЭК</h2>
+                    <div class="table-wrap">
+                        <table data-cdek-table></table>
                     </div>
                 </article>
                 <article class="content-card">

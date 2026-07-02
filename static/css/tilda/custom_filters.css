@@ -1,0 +1,152 @@
+.filters-grid {
+    grid-template-columns: minmax(240px, 2fr) repeat(
+            5,
+            minmax(140px, 1fr)
+        ) minmax(130px, 0.7fr);
+}
+
+.custom-filter {
+    position: relative;
+}
+
+.custom-filter select[data-custom-select],
+.custom-filter input[data-custom-date] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.custom-filter__button,
+.reset-filters-button {
+    width: 100%;
+    min-height: 47px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 13px 42px 13px 14px;
+    color: var(--text);
+    background: rgba(15, 23, 42, 0.84);
+    text-align: left;
+    outline: none;
+}
+
+.custom-filter__button {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-weight: 700;
+}
+
+.custom-filter__button::after {
+    content: "";
+    position: absolute;
+    right: 16px;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform 160ms ease;
+}
+
+.custom-filter.is-open .custom-filter__button::after {
+    transform: rotate(225deg) translate(-2px, -2px);
+}
+
+.custom-filter__button:focus,
+.custom-filter.is-open .custom-filter__button,
+.reset-filters-button:focus {
+    border-color: rgba(56, 189, 248, 0.7);
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.12);
+}
+
+.custom-filter__panel {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    display: none;
+    overflow: hidden;
+    border: 1px solid rgba(56, 189, 248, 0.24);
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.98);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+}
+
+.custom-filter.is-open .custom-filter__panel {
+    display: block;
+}
+
+.custom-filter__options {
+    max-height: 260px;
+    overflow: auto;
+    padding: 8px;
+}
+
+.custom-filter__option {
+    width: 100%;
+    border-radius: 12px;
+    padding: 10px 12px;
+    color: var(--text);
+    background: transparent;
+    text-align: left;
+    font-weight: 700;
+}
+
+.custom-filter__option:hover,
+.custom-filter__option.is-selected {
+    background: rgba(56, 189, 248, 0.14);
+}
+
+.custom-date-picker {
+    padding: 12px;
+}
+
+.custom-date-picker input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    color: var(--text);
+    background: rgba(2, 6, 23, 0.42);
+}
+
+.custom-date-picker__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.custom-date-picker__actions button,
+.reset-filters-button {
+    padding: 12px;
+    text-align: center;
+}
+
+.reset-filters-button {
+    align-self: end;
+    padding-right: 14px;
+    color: #e0f2fe;
+    background: rgba(14, 165, 233, 0.14);
+}
+
+@media (max-width: 1160px) {
+    .filters-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 820px) {
+    .filters-grid {
+        grid-template-columns: 1fr;
+    }
+}

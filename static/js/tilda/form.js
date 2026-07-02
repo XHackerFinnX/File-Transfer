@@ -26,8 +26,10 @@
     const internationalTable = document.querySelector(
         "[data-international-table]",
     );
+    const cdekTable = document.querySelector("[data-cdek-table]");
     const exportCsv = document.querySelector("[data-export-csv]");
     const exportJson = document.querySelector("[data-export-json]");
+    const resetFiltersButton = document.querySelector("[data-reset-filters]");
     const summaryEls = {
         orders: document.querySelector("[data-total-orders]"),
         sum: document.querySelector("[data-total-sum]"),
@@ -446,6 +448,7 @@
             bySize: new Map(),
             byColor: new Map(),
             pickupBySize: new Map(),
+            cdekBySize: new Map(),
             internationalBySize: new Map(),
         };
 
@@ -482,6 +485,15 @@
                 item.items += row.itemsCount;
                 item.orders.add(row.submissionId);
                 stats.internationalBySize.set(row.size, item);
+            }
+            if (row.deliveryType === "DELIVERY") {
+                const item = stats.cdekBySize.get(row.size) || {
+                    items: 0,
+                    orders: new Set(),
+                };
+                item.items += row.itemsCount;
+                item.orders.add(row.submissionId);
+                stats.cdekBySize.set(row.size, item);
             }
         });
         return stats;
@@ -563,6 +575,14 @@
             pickupTable,
             ["Размер", "Штук", "Заказов"],
             [...stats.pickupBySize.entries()]
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([size, item]) => [size, item.items, item.orders.size]),
+            1,
+        );
+        renderTable(
+            cdekTable,
+            ["Размер", "Штук", "Заказов"],
+            [...stats.cdekBySize.entries()]
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([size, item]) => [size, item.items, item.orders.size]),
             1,
@@ -741,6 +761,18 @@
         if (sizes.includes(selectedSize)) sizeFilter.value = selectedSize;
         if (colors.some(([key]) => key === selectedColor))
             colorFilter.value = selectedColor;
+        document.dispatchEvent(new CustomEvent("tilda:filters-options-updated"));
+    }
+
+    function resetFilters() {
+        if (search) search.value = "";
+        if (dateFrom) dateFrom.value = "";
+        if (dateTo) dateTo.value = "";
+        if (deliveryFilter) deliveryFilter.value = "all";
+        if (sizeFilter) sizeFilter.value = "all";
+        if (colorFilter) colorFilter.value = "all";
+        document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
+        render();
     }
 
     function render() {
@@ -852,5 +884,6 @@
     refresh?.addEventListener("click", loadSubmissions);
     exportCsv?.addEventListener("click", exportVisibleCsv);
     exportJson?.addEventListener("click", exportVisibleJson);
+    resetFiltersButton?.addEventListener("click", resetFilters);
     loadSubmissions();
 })();
