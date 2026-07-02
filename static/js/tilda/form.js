@@ -23,6 +23,9 @@
     const sizesTable = document.querySelector("[data-sizes-table]");
     const colorsTable = document.querySelector("[data-colors-table]");
     const pickupTable = document.querySelector("[data-pickup-table]");
+    const internationalTable = document.querySelector(
+        "[data-international-table]",
+    );
     const exportCsv = document.querySelector("[data-export-csv]");
     const exportJson = document.querySelector("[data-export-json]");
     const summaryEls = {
@@ -122,11 +125,46 @@
         return "";
     }
 
-    function detectColor(productName) {
-        const rule = colorRules.find(([, , pattern]) =>
-            pattern.test(productName || ""),
+    function asObject(value) {
+        return value && typeof value === "object" && !Array.isArray(value)
+            ? value
+            : {};
+    }
+
+    function paymentPayload(payload) {
+        return asObject(
+            payload?.payment || payload?.Payment || payload?.Оплата,
         );
-        return rule ? rule[0] : "";
+    }
+
+    function optionValue(product, optionNames) {
+        const direct = firstValue(product, optionNames);
+        if (direct) return direct;
+        const options = Array.isArray(product?.options) ? product.options : [];
+        const normalizedNames = optionNames.map((name) =>
+            String(name).toLowerCase(),
+        );
+        const found = options.find((item) =>
+            normalizedNames.includes(
+                String(item?.option || item?.name || "").toLowerCase(),
+            ),
+        );
+        return found?.variant || found?.value || "";
+    }
+
+    function normalizeDeliveryType(deliveryText, deliverySum) {
+        const text = String(deliveryText || "").toLowerCase();
+        if (/самовывоз|pickup self|self[-\s]?pickup/.test(text))
+            return "PICKUP";
+        if (/международ|international/.test(text)) return "INTERNATIONAL";
+        if (/доставка|пвз|сдэк|delivery|point/.test(text)) return "DELIVERY";
+        return deliverySum > 0 ? "DELIVERY" : "PICKUP";
+    }
+
+    function detectColor(productName, explicitColor = "") {
+        const value = explicitColor || productName || "";
+        const rule = colorRules.find(([, , pattern]) => pattern.test(value));
+        return rule ? rule[0] : String(explicitColor || "").trim();
     }
 
     function colorLabel(colorKey) {
@@ -135,26 +173,40 @@
     }
 
     function deliveryInfo(payload, rawText) {
-        const deliveryValue = firstValue(payload, [
-            "delivery_sum",
-            "Delivery",
-            "delivery",
-            "Доставка",
-            "Стоимость доставки",
-        ]);
+        const payment = paymentPayload(payload);
+        const deliveryValue =
+            payment.delivery_price ??
+            firstValue(payload, [
+                "delivery_sum",
+                "Delivery",
+                "delivery",
+                "Доставка",
+                "Стоимость доставки",
+            ]);
         let deliverySum = parseMoney(deliveryValue);
         for (const pattern of deliveryPatterns) {
             const match = pattern.exec(rawText || "");
             if (match) deliverySum = parseMoney(match[1]);
         }
+        const deliveryText =
+            payment.delivery || firstValue(payload, ["delivery", "Доставка"]);
         return {
-            deliveryType: deliverySum > 0 ? "DELIVERY" : "PICKUP",
+            deliveryType: normalizeDeliveryType(deliveryText, deliverySum),
             deliverySum,
+            deliveryText: stringifyValue(deliveryText),
+            deliveryAddress: stringifyValue(payment.delivery_address || ""),
+            pickupId: stringifyValue(payment.delivery_pickup_id || ""),
+            deliveryFio: stringifyValue(payment.delivery_fio || ""),
+            deliveryCity: stringifyValue(payment.delivery_city || ""),
+            deliveryZip: stringifyValue(payment.delivery_zip || ""),
+            deliveryComment: stringifyValue(payment.delivery_comment || ""),
         };
     }
 
     function normalizeProducts(payload, rawText) {
+        const payment = paymentPayload(payload);
         const productSource =
+            payment.products ||
             payload?.products ||
             payload?.Products ||
             payload?.Товары ||
@@ -185,13 +237,24 @@
                         product["Стоимость"],
                 );
                 const size = stringifyValue(
-                    product.size || product.Size || product["Размер"] || "",
+                    optionValue(product, ["Размер", "size", "Size"]) || "",
                 ).toUpperCase();
+                const colorName = stringifyValue(
+                    optionValue(product, ["Цвет", "color", "Color"]) || "",
+                );
                 return {
                     productName,
+                    sku: stringifyValue(product.sku || ""),
+                    externalId: stringifyValue(
+                        product.externalid || product.externalId || "",
+                    ),
                     itemsCount: itemsCount || 1,
                     itemPrice,
                     size,
+                    colorName,
+                    options: Array.isArray(product.options)
+                        ? product.options
+                        : [],
                 };
             });
         }
@@ -253,18 +316,21 @@
             ]
                 .filter(Boolean)
                 .join("\n");
+            const payment = paymentPayload(payload);
             const paymentMatch = /Payment Amount:\s*([\d.,]+)\s*RUB/i.exec(
                 rawText,
             );
             const orderSumTotal = parseMoney(
-                firstValue(payload, [
-                    "payment_amount",
-                    "Payment Amount",
-                    "amount",
-                    "total",
-                    "sum",
-                    "Сумма",
-                ]) || paymentMatch?.[1],
+                payment.amount ||
+                    firstValue(payload, [
+                        "payment_amount",
+                        "Payment Amount",
+                        "amount",
+                        "total",
+                        "sum",
+                        "Сумма",
+                    ]) ||
+                    paymentMatch?.[1],
             );
             const buyerName = stringifyValue(
                 firstValue(payload, [
@@ -283,6 +349,13 @@
                 firstValue(payload, ["Email", "email", "Почта"]),
             ).toLowerCase();
             const delivery = deliveryInfo(payload, rawText);
+            const orderId = stringifyValue(
+                payment.orderid || payment.order_id || "",
+            );
+            const paymentSystem = stringifyValue(
+                payment.sys ||
+                    firstValue(payload, ["paymentsystem", "paymentSystem"]),
+            );
             const products = normalizeProducts(payload, rawText);
             const rows = products.length
                 ? products
@@ -295,7 +368,10 @@
                       },
                   ];
             return rows.map((product) => {
-                const color = detectColor(product.productName);
+                const color = detectColor(
+                    product.productName,
+                    product.colorName,
+                );
                 return {
                     submissionId: submission.id,
                     createdAt: submission.created_at,
@@ -303,9 +379,14 @@
                     buyerName,
                     phone,
                     email,
+                    orderId,
+                    paymentSystem,
                     productName: product.productName,
+                    sku: product.sku || "",
+                    externalId: product.externalId || "",
                     color,
                     colorLabel: colorLabel(color),
+                    colorName: product.colorName || "",
                     size: product.size || "Не указан",
                     itemsCount: product.itemsCount || 0,
                     itemPrice: product.itemPrice || 0,
@@ -313,6 +394,13 @@
                         (product.itemsCount || 0) * (product.itemPrice || 0),
                     deliveryType: delivery.deliveryType,
                     deliverySum: delivery.deliverySum,
+                    deliveryText: delivery.deliveryText,
+                    deliveryAddress: delivery.deliveryAddress,
+                    pickupId: delivery.pickupId,
+                    deliveryFio: delivery.deliveryFio,
+                    deliveryCity: delivery.deliveryCity,
+                    deliveryZip: delivery.deliveryZip,
+                    deliveryComment: delivery.deliveryComment,
                     orderSumTotal,
                     source: submission,
                 };
@@ -358,6 +446,7 @@
             bySize: new Map(),
             byColor: new Map(),
             pickupBySize: new Map(),
+            internationalBySize: new Map(),
         };
 
         orders.forEach((row) => {
@@ -384,6 +473,15 @@
                 item.items += row.itemsCount;
                 item.orders.add(row.submissionId);
                 stats.pickupBySize.set(row.size, item);
+            }
+            if (row.deliveryType === "INTERNATIONAL") {
+                const item = stats.internationalBySize.get(row.size) || {
+                    items: 0,
+                    orders: new Set(),
+                };
+                item.items += row.itemsCount;
+                item.orders.add(row.submissionId);
+                stats.internationalBySize.set(row.size, item);
             }
         });
         return stats;
@@ -469,19 +567,106 @@
                 .map(([size, item]) => [size, item.items, item.orders.size]),
             1,
         );
+        renderTable(
+            internationalTable,
+            ["Размер", "Штук", "Заказов"],
+            [...stats.internationalBySize.entries()]
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([size, item]) => [size, item.items, item.orders.size]),
+            1,
+        );
     }
 
-    function renderFields(payload) {
-        const entries = Object.entries(payload || {});
-        if (!entries.length)
-            return '<div class="empty-state">В заявке нет полей payload.</div>';
-        return `<div class="field-grid">${entries
+    function renderKeyValue(label, value) {
+        if (
+            value === null ||
+            value === undefined ||
+            value === "" ||
+            value === "—"
+        )
+            return "";
+        return `<div class="info-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function renderProductsTable(rows) {
+        if (!rows.length)
+            return '<div class="empty-state">Товаров в заявке не найдено.</div>';
+        return `<div class="table-wrap compact"><table>
+            <thead><tr><th>Товар</th><th>SKU</th><th>Цвет</th><th>Размер</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+            <tbody>${rows
+                .map(
+                    (row) => `<tr>
+                        <td>${escapeHtml(row.productName)}</td>
+                        <td>${escapeHtml(row.sku || "—")}</td>
+                        <td>${escapeHtml(row.colorName || row.colorLabel)}</td>
+                        <td>${escapeHtml(row.size)}</td>
+                        <td>${escapeHtml(fmtInt(row.itemsCount))}</td>
+                        <td>${escapeHtml(fmtMoney(row.itemPrice))}</td>
+                        <td>${escapeHtml(fmtMoney(row.itemsSum))}</td>
+                    </tr>`,
+                )
+                .join("")}</tbody>
+        </table></div>`;
+    }
+
+    function renderCustomerSection(submission, rows) {
+        const payload = submission.payload || {};
+        const first = rows[0] || {};
+        return `<section class="pretty-section">
+            <h3>Покупатель</h3>
+            <div class="info-grid">
+                ${renderKeyValue("Имя", first.buyerName || submission.customer_name)}
+                ${renderKeyValue("Телефон", first.phone || submission.contact)}
+                ${renderKeyValue("Email", first.email)}
+                ${renderKeyValue("ФИО доставки", first.deliveryFio)}
+                ${renderKeyValue("Согласие", firstValue(payload, ["Checkbox", "checkbox"]))}
+            </div>
+        </section>`;
+    }
+
+    function renderPaymentSection(rows) {
+        const first = rows[0] || {};
+        const subtotal = rows.reduce((sum, row) => sum + row.itemsSum, 0);
+        return `<section class="pretty-section">
+            <h3>Оплата и доставка</h3>
+            <div class="info-grid">
+                ${renderKeyValue("Номер заказа", first.orderId)}
+                ${renderKeyValue("Платёжная система", first.paymentSystem)}
+                ${renderKeyValue("Товары", fmtMoney(subtotal))}
+                ${renderKeyValue("Доставка", fmtMoney(first.deliverySum || 0))}
+                ${renderKeyValue("Итого", fmtMoney(first.orderSumTotal || subtotal + (first.deliverySum || 0)))}
+                ${renderKeyValue("Тип доставки", first.deliveryText || (first.deliveryType === "PICKUP" ? "Самовывоз" : first.deliveryType === "INTERNATIONAL" ? "Международные заказы" : "Доставка"))}
+                ${renderKeyValue("ПВЗ", first.pickupId)}
+                ${renderKeyValue("Город", first.deliveryCity)}
+                ${renderKeyValue("Индекс", first.deliveryZip)}
+                ${renderKeyValue("Адрес", first.deliveryAddress)}
+                ${renderKeyValue("Комментарий", first.deliveryComment)}
+            </div>
+        </section>`;
+    }
+
+    function renderExtraFields(payload) {
+        const skipped = new Set([
+            "payment",
+            "Payment",
+            "Оплата",
+            "Name",
+            "name",
+            "Phone",
+            "phone",
+            "Email",
+            "email",
+        ]);
+        const entries = Object.entries(payload || {}).filter(
+            ([key]) => !skipped.has(key),
+        );
+        if (!entries.length) return "";
+        return `<section class="pretty-section"><h3>Дополнительные поля формы</h3><div class="field-grid">${entries
             .map(
-                ([key, value]) => `
-            <div class="field"><span class="field-key">${escapeHtml(key)}</span><div class="field-value">${escapeHtml(stringifyValue(value))}</div></div>
-        `,
+                ([key, value]) =>
+                    `<div class="field"><span class="field-key">${escapeHtml(key)}</span><div class="field-value">${escapeHtml(stringifyValue(value))}</div></div>`,
             )
-            .join("")}</div>`;
+            .join("")}</div></section>`;
     }
 
     function renderSubmission(submission) {
@@ -489,26 +674,38 @@
             (row) => row.submissionId === submission.id,
         );
         const raw = JSON.stringify(submission, null, 2);
-        const orderSum = rows[0]?.orderSumTotal || 0;
+        const first = rows[0] || {};
+        const orderSum =
+            first.orderSumTotal ||
+            rows.reduce((sum, row) => sum + row.itemsSum, 0);
         const items = rows.reduce((sum, row) => sum + row.itemsCount, 0);
+        const title =
+            first.buyerName || submission.customer_name || "Без имени";
         return `
             <article class="submission-card">
-                <header class="submission-header">
-                    <div>
-                        <h2 class="submission-title">${escapeHtml(submission.customer_name || "Без имени")}</h2>
-                        <div class="submission-meta">
-                            <span class="badge">${escapeHtml(formatDate(submission.created_at))}</span>
-                            <span class="badge">${escapeHtml(submission.contact || "Без контакта")}</span>
-                            <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
-                            <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
+                <details class="submission-toggle">
+                    <summary class="submission-header">
+                        <div>
+                            <h2 class="submission-title">${escapeHtml(title)}</h2>
+                            <div class="submission-meta">
+                                <span class="badge">${escapeHtml(formatDate(submission.created_at))}</span>
+                                <span class="badge">${escapeHtml(first.phone || submission.contact || "Без контакта")}</span>
+                                <span class="badge">${escapeHtml(first.orderId ? `Заказ ${first.orderId}` : submission.id)}</span>
+                                <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
+                                <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
+                                <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
+                            </div>
                         </div>
+                        <span class="toggle-hint">Подробнее</span>
+                    </summary>
+                    <div class="submission-body pretty-body">
+                        ${renderCustomerSection(submission, rows)}
+                        ${renderPaymentSection(rows)}
+                        <section class="pretty-section wide"><h3>Товары</h3>${renderProductsTable(rows)}</section>
+                        ${renderExtraFields(submission.payload)}
+                        <details class="details wide"><summary>Технические данные</summary><pre>${escapeHtml(raw)}</pre></details>
                     </div>
-                    <span class="badge">${escapeHtml(submission.id)}</span>
-                </header>
-                <div class="submission-body">
-                    ${renderFields(submission.payload)}
-                    <details class="details"><summary>Технические данные</summary><pre>${escapeHtml(raw)}</pre></details>
-                </div>
+                    </details>
             </article>`;
     }
 
