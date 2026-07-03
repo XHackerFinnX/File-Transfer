@@ -56,7 +56,7 @@ body {
 /* ---------- Каркас ---------- */
 
 .dashboard {
-    width: min(1440px, 100%);
+    width: min(1540px, 100%);
     margin: 0 auto;
     padding: 20px 16px 56px;
     display: flex;
@@ -191,7 +191,7 @@ button:disabled {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(1, minmax(0, 1fr));
     gap: 1px;
     margin: 0;
     overflow: hidden;
@@ -701,7 +701,7 @@ td {
 
 @media (min-width: 1280px) {
     .stats-grid {
-        grid-template-columns: repeat(6, minmax(0, 1fr));
+        grid-template-columns: repeat(7, minmax(0, 1fr));
     }
 
     .analytics-grid {
@@ -724,4 +724,20 @@ td {
         animation-duration: 0.01ms !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+.analytics-heading {
+    margin-bottom: 0;
+}
+
+.table-wrap-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.table-wrap-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
 }

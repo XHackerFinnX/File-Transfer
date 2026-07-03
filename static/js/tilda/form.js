@@ -17,6 +17,9 @@
     const dateTo = document.querySelector("[data-date-to]");
     const deliveryFilter = document.querySelector("[data-delivery-filter]");
     const sizeFilter = document.querySelector("[data-size-filter]");
+    const productTypeFilter = document.querySelector(
+        "[data-product-type-filter]",
+    );
     const colorFilter = document.querySelector("[data-color-filter]");
     const visibleCount = document.querySelector("[data-visible-count]");
     const daysTable = document.querySelector("[data-days-table]");
@@ -27,6 +30,11 @@
         "[data-international-table]",
     );
     const cdekTable = document.querySelector("[data-cdek-table]");
+    const deliveryOrderCountEls = {
+        cdek: document.querySelector("[data-cdek-orders]"),
+        pickup: document.querySelector("[data-pickup-orders]"),
+        international: document.querySelector("[data-international-orders]"),
+    };
     const exportCsv = document.querySelector("[data-export-csv]");
     const exportJson = document.querySelector("[data-export-json]");
     const resetFiltersButton = document.querySelector("[data-reset-filters]");
@@ -35,6 +43,7 @@
         sum: document.querySelector("[data-total-sum]"),
         items: document.querySelector("[data-total-items]"),
         delivery: document.querySelector("[data-delivery-sum]"),
+        products: document.querySelector("[data-products-sum]"),
         buyers: document.querySelector("[data-unique-buyers]"),
         last: document.querySelector("[data-last]"),
     };
@@ -185,6 +194,38 @@
         return rule ? rule[0] : String(explicitColor || "").trim();
     }
 
+    function detectProductType(productName, explicitType = "", sku = "") {
+        const candidates = [explicitType, productName, sku]
+            .map((value) => String(value || "").trim())
+            .filter((value) => value && value !== "—");
+        const source = candidates[0] || "";
+        const searchable = candidates.join(" ").toLowerCase();
+        if (!searchable) return "Не определён";
+        const typeRules = [
+            ["Худи", /(зип[-\s]*)?худи|hoodie/i],
+            ["Штаны", /штаны|брюки|pants|trousers/i],
+            ["Футболка", /футболк|t-?shirt/i],
+            ["Лонгслив", /лонгслив|longsleeve|long sleeve/i],
+            ["Свитшот", /свитшот|sweatshirt/i],
+            ["Куртка", /куртк|jacket/i],
+            ["Шорты", /шорт|shorts/i],
+            ["Кепка", /кепк|cap/i],
+        ];
+        const found = typeRules.find(([, pattern]) => pattern.test(searchable));
+        if (found) return found[0];
+        return (
+            source
+                .replace(
+                    /(бел\w*|ч[её]рн\w*|син\w*|крас\w*|зел\w*|сер\w*|роз\w*|голу\w*)/gi,
+                    "",
+                )
+                .replace(/\b(xs|s|m|l|xl|xxl|xxxl|\d{2,3})\b/gi, "")
+                .replace(/[—–-]+/g, " ")
+                .replace(/\s+/g, " ")
+                .trim() || source
+        );
+    }
+
     function colorLabel(colorKey) {
         if (!colorKey) return "Не определён";
         return colorRules.find(([key]) => key === colorKey)?.[1] || colorKey;
@@ -270,6 +311,15 @@
                     itemPrice,
                     size,
                     colorName,
+                    productType:
+                        product.type ||
+                        product.category ||
+                        product.product_type ||
+                        optionValue(product, [
+                            "Тип товара",
+                            "type",
+                            "category",
+                        ]),
                     options: Array.isArray(product.options)
                         ? product.options
                         : [],
@@ -405,6 +455,11 @@
                     color,
                     colorLabel: colorLabel(color),
                     colorName: product.colorName || "",
+                    productType: detectProductType(
+                        product.productName,
+                        product.productType,
+                        product.sku,
+                    ),
                     size: product.size || "Не указан",
                     itemsCount: product.itemsCount || 0,
                     itemPrice: product.itemPrice || 0,
@@ -433,6 +488,7 @@
                     row.sku,
                     row.colorName,
                     row.colorLabel,
+                    row.productType,
                     row.size,
                     row.deliveryText,
                     row.deliveryAddress,
@@ -452,12 +508,14 @@
         const to = dateTo?.value || "";
         const delivery = deliveryFilter?.value || "all";
         const size = sizeFilter?.value || "all";
+        const productType = productTypeFilter?.value || "all";
         const color = colorFilter?.value || "all";
         return (
             (!query || row._search.includes(query)) &&
             (!from || row.date >= from) &&
             (!to || row.date <= to) &&
             (delivery === "all" || row.deliveryType === delivery) &&
+            (productType === "all" || row.productType === productType) &&
             (size === "all" || row.size === size) &&
             (color === "all" || row.color === color)
         );
@@ -471,18 +529,37 @@
                 .filter((key) => key !== "|"),
         );
         const uniqueOrders = new Map();
-        rows.forEach((row) => uniqueOrders.set(row.submissionId, row));
-        const orders = [...uniqueOrders.values()];
+        rows.forEach((row) => {
+            const order = uniqueOrders.get(row.submissionId) || {
+                ...row,
+                productsSum: 0,
+            };
+            order.productsSum += row.itemsSum;
+            uniqueOrders.set(row.submissionId, order);
+        });
+        const orders = [...uniqueOrders.values()].map((order) => {
+            const fallbackTotal = order.productsSum + order.deliverySum;
+            const total = order.orderSumTotal || fallbackTotal;
+            return {
+                ...order,
+                orderSumTotal: total,
+                productsSum: Math.max(total - order.deliverySum, 0),
+            };
+        });
         const stats = {
             totalOrders: orderIds.size,
             totalSum: orders.reduce((sum, row) => sum + row.orderSumTotal, 0),
             totalItems: rows.reduce((sum, row) => sum + row.itemsCount, 0),
+            productsSum: orders.reduce((sum, row) => sum + row.productsSum, 0),
             deliverySum: orders.reduce((sum, row) => sum + row.deliverySum, 0),
             buyers: buyers.size,
             byDay: new Map(),
             bySize: new Map(),
             byColor: new Map(),
             pickupBySize: new Map(),
+            pickupOrders: new Set(),
+            cdekOrders: new Set(),
+            internationalOrders: new Set(),
             cdekBySize: new Map(),
             internationalBySize: new Map(),
         };
@@ -510,6 +587,7 @@
                 };
                 item.items += row.itemsCount;
                 item.orders.add(row.submissionId);
+                stats.pickupOrders.add(row.submissionId);
                 stats.pickupBySize.set(row.size, item);
             }
             if (row.deliveryType === "INTERNATIONAL") {
@@ -519,6 +597,7 @@
                 };
                 item.items += row.itemsCount;
                 item.orders.add(row.submissionId);
+                stats.internationalOrders.add(row.submissionId);
                 stats.internationalBySize.set(row.size, item);
             }
             if (row.deliveryType === "DELIVERY") {
@@ -528,6 +607,7 @@
                 };
                 item.items += row.itemsCount;
                 item.orders.add(row.submissionId);
+                stats.cdekOrders.add(row.submissionId);
                 stats.cdekBySize.set(row.size, item);
             }
         });
@@ -574,10 +654,14 @@
         summaryEls.sum.textContent = fmtMoney(stats.totalSum);
         summaryEls.items.textContent = fmtInt(stats.totalItems);
         summaryEls.delivery.textContent = fmtMoney(stats.deliverySum);
+        summaryEls.products.textContent = fmtMoney(stats.productsSum);
         summaryEls.buyers.textContent = fmtInt(stats.buyers);
         summaryEls.last.textContent = submissions[0]
             ? formatDate(submissions[0].created_at)
             : "—";
+        deliveryOrderCountEls.cdek.textContent = `${fmtInt(stats.cdekOrders.size)} заказов`;
+        deliveryOrderCountEls.pickup.textContent = `${fmtInt(stats.pickupOrders.size)} заказов`;
+        deliveryOrderCountEls.international.textContent = `${fmtInt(stats.internationalOrders.size)} заказов`;
 
         renderTable(
             daysTable,
@@ -766,10 +850,14 @@
 
     function updateFilterOptions() {
         const selectedSize = sizeFilter.value;
+        const selectedProductType = productTypeFilter.value;
         const selectedColor = colorFilter.value;
         const sizes = [
             ...new Set(orderRows.map((row) => row.size).filter(Boolean)),
         ].sort();
+        const productTypes = [
+            ...new Set(orderRows.map((row) => row.productType).filter(Boolean)),
+        ].sort((a, b) => a.localeCompare(b));
         const colors = [
             ...new Map(
                 orderRows.map((row) => [row.color, row.colorLabel]),
@@ -785,6 +873,14 @@
                         `<option value="${escapeHtml(size)}">${escapeHtml(size)}</option>`,
                 )
                 .join("");
+        productTypeFilter.innerHTML =
+            '<option value="all">Все типы</option>' +
+            productTypes
+                .map(
+                    (type) =>
+                        `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`,
+                )
+                .join("");
         colorFilter.innerHTML =
             '<option value="all">Все цвета</option>' +
             colors
@@ -794,6 +890,8 @@
                 )
                 .join("");
         if (sizes.includes(selectedSize)) sizeFilter.value = selectedSize;
+        if (productTypes.includes(selectedProductType))
+            productTypeFilter.value = selectedProductType;
         if (colors.some(([key]) => key === selectedColor))
             colorFilter.value = selectedColor;
         document.dispatchEvent(
@@ -807,6 +905,7 @@
         if (dateTo) dateTo.value = "";
         if (deliveryFilter) deliveryFilter.value = "all";
         if (sizeFilter) sizeFilter.value = "all";
+        if (productTypeFilter) productTypeFilter.value = "all";
         if (colorFilter) colorFilter.value = "all";
         document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
         render();
@@ -855,6 +954,7 @@
             "email",
             "productName",
             "colorLabel",
+            "productType",
             "size",
             "itemsCount",
             "itemPrice",
@@ -927,11 +1027,16 @@
     const debouncedRender = debounce(render, 200);
     // Текстовый поиск — с debounce, остальные фильтры — мгновенно
     search?.addEventListener("input", debouncedRender);
-    [dateFrom, dateTo, deliveryFilter, sizeFilter, colorFilter].forEach(
-        (element) => {
-            element?.addEventListener("change", render);
-        },
-    );
+    [
+        dateFrom,
+        dateTo,
+        deliveryFilter,
+        productTypeFilter,
+        sizeFilter,
+        colorFilter,
+    ].forEach((element) => {
+        element?.addEventListener("change", render);
+    });
     refresh?.addEventListener("click", loadSubmissions);
     exportCsv?.addEventListener("click", exportVisibleCsv);
     exportJson?.addEventListener("click", exportVisibleJson);

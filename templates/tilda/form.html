@@ -40,16 +40,20 @@
                     <strong class="stat-value" data-total-orders>0</strong>
                 </article>
                 <article class="stat-card">
-                    <span class="stat-label">Сумма заказов</span>
+                    <span class="stat-label">Общая сумма</span>
                     <strong class="stat-value" data-total-sum>0 RUB</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Сумма доставок</span>
+                    <strong class="stat-value" data-delivery-sum>0 RUB</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Сумма без доставки</span>
+                    <strong class="stat-value" data-products-sum>0 RUB</strong>
                 </article>
                 <article class="stat-card">
                     <span class="stat-label">Товаров</span>
                     <strong class="stat-value" data-total-items>0</strong>
-                </article>
-                <article class="stat-card">
-                    <span class="stat-label">Доставка</span>
-                    <strong class="stat-value" data-delivery-sum>0 RUB</strong>
                 </article>
                 <article class="stat-card">
                     <span class="stat-label">Уникальных покупателей</span>
@@ -103,6 +107,15 @@
                         class="search-box custom-filter"
                         data-custom-select-filter
                     >
+                        <span>Тип товара</span>
+                        <select data-product-type-filter data-custom-select>
+                            <option value="all">Все типы</option>
+                        </select>
+                    </label>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-select-filter
+                    >
                         <span>Размер</span>
                         <select data-size-filter data-custom-select>
                             <option value="all">Все размеры</option>
@@ -133,7 +146,7 @@
             <section class="analytics-grid" aria-label="Аналитика">
                 <article class="content-card">
                     <h2>Статистика по дням</h2>
-                    <div class="table-wrap">
+                    <div class="table-wrap table-wrap-scroll">
                         <table data-days-table></table>
                     </div>
                 </article>
@@ -150,19 +163,19 @@
                     </div>
                 </article>
                 <article class="content-card">
-                    <h2>Доставка СДЭК</h2>
+                    <div class="section-heading analytics-heading"><h2>Доставка СДЭК</h2><span data-cdek-orders>0</span></div>
                     <div class="table-wrap">
                         <table data-cdek-table></table>
                     </div>
                 </article>
                 <article class="content-card">
-                    <h2>Самовывоз</h2>
+                    <div class="section-heading analytics-heading"><h2>Самовывоз</h2><span data-pickup-orders>0</span></div>
                     <div class="table-wrap">
                         <table data-pickup-table></table>
                     </div>
                 </article>
                 <article class="content-card">
-                    <h2>Международные заказы</h2>
+                    <div class="section-heading analytics-heading"><h2>Международные заказы</h2><span data-international-orders>0</span></div>
                     <div class="table-wrap">
                         <table data-international-table></table>
                     </div>
