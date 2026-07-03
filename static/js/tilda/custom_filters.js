@@ -214,11 +214,24 @@
                 .join("");
         }
 
+        function applyDateValue(value) {
+            input.value = value;
+            pendingValue = value;
+            sync();
+            closeAll();
+            button.focus();
+            // Диспатчим события именно на оригинальном скрытом input —
+            // на него подписан рендер фильтрации в form.js.
+            emitNativeEvents(input);
+        }
+
         daysEl.addEventListener("click", (event) => {
             const dayButton = event.target.closest("[data-day-value]");
             if (!dayButton) return;
-            pendingValue = dayButton.dataset.dayValue;
-            renderCalendar();
+            // Выбор дня сразу должен отображаться в фильтре и запускать
+            // фильтрацию. Кнопка «Применить» оставлена для пользователей,
+            // которые меняют дату клавиатурой или ожидают явного действия.
+            applyDateValue(dayButton.dataset.dayValue);
         });
 
         picker
@@ -268,25 +281,15 @@
         picker
             .querySelector("[data-apply-date]")
             .addEventListener("click", () => {
-                input.value = pendingValue;
-                sync();
-                closeAll();
-                button.focus();
-                // Диспатчим change именно на оригинальном скрытом input —
-                // на него подписан рендер фильтрации в form.js.
-                emitNativeEvents(input);
+                applyDateValue(pendingValue);
             });
         picker
             .querySelector("[data-clear-date]")
             .addEventListener("click", () => {
-                input.value = "";
-                pendingValue = "";
-                sync();
-                closeAll();
-                button.focus();
-                emitNativeEvents(input);
+                applyDateValue("");
             });
-
+        
+        input.addEventListener("input", sync);
         input.addEventListener("change", sync);
         document.addEventListener("tilda:filters-reset", sync);
         sync();
