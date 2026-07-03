@@ -1,5 +1,5 @@
 /* ============================================================
-   Кастомные фильтры (селекты и календари) — custom_filters.css
+   Кастомные фильтры (селекты и календарь) — custom_filters.css
    Стиль согласован с form.css (тёмный минимализм, акцент #3ecf8e)
    ============================================================ */
 
@@ -127,24 +127,6 @@
     padding: 10px;
 }
 
-.custom-date-picker input {
-    width: 100%;
-    min-height: 40px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 9px 12px;
-    color: var(--text);
-    background: var(--bg);
-    font-family: inherit;
-    font-size: 13px;
-    color-scheme: dark;
-}
-
-.custom-date-picker input:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
 .custom-date-picker__actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -167,6 +149,112 @@
 .custom-date-picker__actions [data-clear-date] {
     color: var(--text);
     background: var(--surface);
+}
+
+/* ---------- Кастомный календарь ---------- */
+
+.custom-calendar {
+    width: 100%;
+}
+
+.custom-calendar__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.custom-calendar__nav {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    background: var(--bg);
+    font-size: 15px;
+    line-height: 1;
+    transition:
+        border-color 140ms ease,
+        background-color 140ms ease;
+}
+
+.custom-calendar__nav:hover {
+    border-color: var(--border-strong);
+    background: var(--surface);
+}
+
+.custom-calendar__title {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.custom-calendar__weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.custom-calendar__weekdays span {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.custom-calendar__days {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 2px;
+}
+
+.custom-calendar__day {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0;
+    color: var(--text);
+    background: transparent;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    transition:
+        background-color 140ms ease,
+        border-color 140ms ease,
+        color 140ms ease;
+}
+
+button.custom-calendar__day:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.custom-calendar__day.is-today {
+    border-color: var(--border-strong);
+}
+
+.custom-calendar__day.is-selected {
+    color: #052e1c;
+    background: var(--accent);
+    font-weight: 600;
+}
+
+.custom-calendar__day.is-muted {
+    color: var(--muted);
+    opacity: 0.35;
+    cursor: default;
 }
 
 /* ---------- Кнопка сброса ---------- */
