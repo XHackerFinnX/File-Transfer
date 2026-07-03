@@ -62,6 +62,16 @@
         /Доставка[^\d]*([\d.,]+)/i,
     ];
 
+    // Утилита: отложенный вызов (debounce) — чтобы поиск не
+    // перерисовывал весь список на каждое нажатие клавиши.
+    function debounce(fn, delay = 200) {
+        let timer;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), delay);
+        };
+    }
+
     function escapeHtml(value) {
         return String(value ?? "")
             .replaceAll("&", "&amp;")
@@ -107,10 +117,16 @@
         }).format(date);
     }
 
+    // Исправление: раньше использовался toISOString(), из-за чего
+    // заявки, созданные вечером, попадали в «соседний» день (UTC-сдвиг).
+    // Теперь ключ дня строится по локальному времени.
     function dayKey(value) {
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return "—";
-        return date.toISOString().slice(0, 10);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
     }
 
     function stringifyValue(value) {
@@ -374,7 +390,7 @@
                     product.productName,
                     product.colorName,
                 );
-                return {
+                const row = {
                     submissionId: submission.id,
                     createdAt: submission.created_at,
                     date: dayKey(submission.created_at),
@@ -406,6 +422,26 @@
                     orderSumTotal,
                     source: submission,
                 };
+                // Оптимизация: поисковая строка считается один раз при
+                // нормализации, а не JSON.stringify на каждый ввод символа.
+                row._search = [
+                    buyerName,
+                    phone,
+                    email,
+                    orderId,
+                    row.productName,
+                    row.sku,
+                    row.colorName,
+                    row.colorLabel,
+                    row.size,
+                    row.deliveryText,
+                    row.deliveryAddress,
+                    row.deliveryCity,
+                    row.deliveryFio,
+                ]
+                    .join(" ")
+                    .toLowerCase();
+                return row;
             });
         });
     }
@@ -417,9 +453,8 @@
         const delivery = deliveryFilter?.value || "all";
         const size = sizeFilter?.value || "all";
         const color = colorFilter?.value || "all";
-        const searchable = JSON.stringify(row).toLowerCase();
         return (
-            (!query || searchable.includes(query)) &&
+            (!query || row._search.includes(query)) &&
             (!from || row.date >= from) &&
             (!to || row.date <= to) &&
             (delivery === "all" || row.deliveryType === delivery) &&
@@ -513,7 +548,7 @@
                       1,
                   );
         table.innerHTML = `
-            <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+            <thead><tr>${headers.map((header) => `<th scope="col">${escapeHtml(header)}</th>`).join("")}</tr></thead>
             <tbody>${rows
                 .map(
                     (row) => `
@@ -523,7 +558,7 @@
                             const width = Math.round(
                                 ((Number(cell) || 0) / maxValue) * 100,
                             );
-                            return `<td class="progress-cell">${escapeHtml(cell)}<div class="progress-bar"><span style="width:${width}%"></span></div></td>`;
+                            return `<td class="progress-cell">${escapeHtml(cell)}<div class="progress-bar" role="presentation"><span style="width:${width}%"></span></div></td>`;
                         }
                         return `<td>${escapeHtml(cell)}</td>`;
                     })
@@ -612,7 +647,7 @@
         if (!rows.length)
             return '<div class="empty-state">Товаров в заявке не найдено.</div>';
         return `<div class="table-wrap compact"><table>
-            <thead><tr><th>Товар</th><th>SKU</th><th>Цвет</th><th>Размер</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+            <thead><tr><th scope="col">Товар</th><th scope="col">SKU</th><th scope="col">Цвет</th><th scope="col">Размер</th><th scope="col">Кол-во</th><th scope="col">Цена</th><th scope="col">Сумма</th></tr></thead>
             <tbody>${rows
                 .map(
                     (row) => `<tr>
@@ -725,7 +760,7 @@
                         ${renderExtraFields(submission.payload)}
                         <details class="details wide"><summary>Технические данные</summary><pre>${escapeHtml(raw)}</pre></details>
                     </div>
-                    </details>
+                </details>
             </article>`;
     }
 
@@ -761,7 +796,9 @@
         if (sizes.includes(selectedSize)) sizeFilter.value = selectedSize;
         if (colors.some(([key]) => key === selectedColor))
             colorFilter.value = selectedColor;
-        document.dispatchEvent(new CustomEvent("tilda:filters-options-updated"));
+        document.dispatchEvent(
+            new CustomEvent("tilda:filters-options-updated"),
+        );
     }
 
     function resetFilters() {
@@ -789,6 +826,15 @@
         list.innerHTML = visibleSubmissions.length
             ? visibleSubmissions.map(renderSubmission).join("")
             : '<div class="empty-state">Заявок пока нет или ничего не найдено.</div>';
+    }
+
+    function renderLoadingSkeleton() {
+        list.innerHTML = Array.from({ length: 3 })
+            .map(
+                () =>
+                    '<div class="skeleton" style="height:76px" aria-hidden="true"></div>',
+            )
+            .join("");
     }
 
     function download(filename, content, type) {
@@ -835,9 +881,11 @@
     }
 
     function exportVisibleJson() {
+        // Служебное поле _search в экспорт не попадает
+        const cleanRows = visibleRows.map(({ _search, ...row }) => row);
         download(
             `${siteName}_orders.json`,
-            JSON.stringify(visibleRows, null, 2),
+            JSON.stringify(cleanRows, null, 2),
             "application/json;charset=utf-8",
         );
     }
@@ -845,6 +893,7 @@
     async function loadSubmissions() {
         status.textContent = "Загружаем заявки...";
         refresh.disabled = true;
+        renderLoadingSkeleton();
         try {
             const params = new URLSearchParams();
             if (secret) params.set("secret", secret);
@@ -875,9 +924,11 @@
         }
     }
 
-    [search, dateFrom, dateTo, deliveryFilter, sizeFilter, colorFilter].forEach(
+    const debouncedRender = debounce(render, 200);
+    // Текстовый поиск — с debounce, остальные фильтры — мгновенно
+    search?.addEventListener("input", debouncedRender);
+    [dateFrom, dateTo, deliveryFilter, sizeFilter, colorFilter].forEach(
         (element) => {
-            element?.addEventListener("input", render);
             element?.addEventListener("change", render);
         },
     );

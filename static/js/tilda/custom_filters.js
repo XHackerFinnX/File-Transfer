@@ -3,7 +3,12 @@
         document
             .querySelectorAll(".custom-filter.is-open")
             .forEach((filter) => {
-                if (filter !== except) filter.classList.remove("is-open");
+                if (filter !== except) {
+                    filter.classList.remove("is-open");
+                    filter
+                        .querySelector(".custom-filter__button")
+                        ?.setAttribute("aria-expanded", "false");
+                }
             });
     };
 
@@ -18,14 +23,22 @@
         return `${day}.${month}.${year}`;
     };
 
+    const setOpen = (filter, button, open) => {
+        filter.classList.toggle("is-open", open);
+        button.setAttribute("aria-expanded", String(open));
+    };
+
     function buildSelect(filter, select) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "custom-filter__button";
+        button.setAttribute("aria-haspopup", "listbox");
+        button.setAttribute("aria-expanded", "false");
         const panel = document.createElement("div");
         panel.className = "custom-filter__panel";
         const options = document.createElement("div");
         options.className = "custom-filter__options";
+        options.setAttribute("role", "listbox");
         panel.append(options);
         select.after(button, panel);
 
@@ -39,7 +52,13 @@
                     optionButton.className = "custom-filter__option";
                     optionButton.dataset.value = option.value;
                     optionButton.textContent = option.textContent;
-                    if (option.value === select.value) {
+                    optionButton.setAttribute("role", "option");
+                    const isSelected = option.value === select.value;
+                    optionButton.setAttribute(
+                        "aria-selected",
+                        String(isSelected),
+                    );
+                    if (isSelected) {
                         optionButton.classList.add("is-selected");
                     }
                     return optionButton;
@@ -50,7 +69,7 @@
         button.addEventListener("click", () => {
             const willOpen = !filter.classList.contains("is-open");
             closeAll(filter);
-            filter.classList.toggle("is-open", willOpen);
+            setOpen(filter, button, willOpen);
         });
         options.addEventListener("click", (event) => {
             const option = event.target.closest("[data-value]");
@@ -58,6 +77,7 @@
             select.value = option.dataset.value;
             sync();
             closeAll();
+            button.focus();
             emitNativeEvents(select);
         });
         select.addEventListener("change", sync);
@@ -70,12 +90,14 @@
         const button = document.createElement("button");
         button.type = "button";
         button.className = "custom-filter__button";
+        button.setAttribute("aria-haspopup", "dialog");
+        button.setAttribute("aria-expanded", "false");
         const panel = document.createElement("div");
         panel.className = "custom-filter__panel";
         const picker = document.createElement("div");
         picker.className = "custom-date-picker";
         picker.innerHTML = `
-            <input type="date" data-custom-date-picker />
+            <input type="date" data-custom-date-picker aria-label="Дата" />
             <div class="custom-date-picker__actions">
                 <button type="button" data-apply-date>Применить</button>
                 <button type="button" data-clear-date>Очистить</button>
@@ -92,7 +114,7 @@
         button.addEventListener("click", () => {
             const willOpen = !filter.classList.contains("is-open");
             closeAll(filter);
-            filter.classList.toggle("is-open", willOpen);
+            setOpen(filter, button, willOpen);
             if (willOpen) pickerInput.focus();
         });
         picker
@@ -101,6 +123,7 @@
                 input.value = pickerInput.value;
                 sync();
                 closeAll();
+                button.focus();
                 emitNativeEvents(input);
             });
         picker
@@ -109,6 +132,7 @@
                 input.value = "";
                 sync();
                 closeAll();
+                button.focus();
                 emitNativeEvents(input);
             });
         pickerInput.addEventListener("keydown", (event) => {

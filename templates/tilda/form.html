@@ -3,13 +3,15 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#0a0a0a" />
+        <meta name="robots" content="noindex, nofollow" />
         <title>Tilda {{ site_name }} — заявки и статистика</title>
         <link rel="stylesheet" href="/static/css/tilda/form.css" />
         <link rel="stylesheet" href="/static/css/tilda/custom_filters.css" />
     </head>
     <body>
         <main class="dashboard" data-site-name="{{ site_name }}">
-            <section class="hero">
+            <header class="hero">
                 <div>
                     <p class="eyebrow">Tilda webhook</p>
                     <h1>Заявки и статистика {{ site_name }}</h1>
@@ -24,13 +26,13 @@
                         Обновить
                     </button>
                     <button class="ghost-button" type="button" data-export-csv>
-                        CSV
+                        Экспорт CSV
                     </button>
                     <button class="ghost-button" type="button" data-export-json>
-                        JSON
+                        Экспорт JSON
                     </button>
                 </div>
-            </section>
+            </header>
 
             <section class="stats-grid" aria-label="Сводка по заявкам">
                 <article class="stat-card">
@@ -59,7 +61,7 @@
                 </article>
             </section>
 
-            <section class="content-card filters-card">
+            <section class="content-card filters-card" aria-label="Фильтры">
                 <div class="filters-grid">
                     <label class="search-box">
                         <span>Поиск</span>
@@ -69,41 +71,66 @@
                             placeholder="Имя, телефон, email, товар..."
                         />
                     </label>
-                    <label class="search-box custom-filter" data-custom-date-filter>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-date-filter
+                    >
                         <span>Дата от</span>
                         <input data-date-from data-custom-date type="date" />
                     </label>
-                    <label class="search-box custom-filter" data-custom-date-filter>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-date-filter
+                    >
                         <span>Дата до</span>
                         <input data-date-to data-custom-date type="date" />
                     </label>
-                    <label class="search-box custom-filter" data-custom-select-filter>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-select-filter
+                    >
                         <span>Доставка</span>
                         <select data-delivery-filter data-custom-select>
                             <option value="all">Все</option>
                             <option value="DELIVERY">Доставка</option>
-                            <option value="INTERNATIONAL">Международные заказы</option>
+                            <option value="INTERNATIONAL">
+                                Международные заказы
+                            </option>
                             <option value="PICKUP">Самовывоз</option>
                         </select>
                     </label>
-                    <label class="search-box custom-filter" data-custom-select-filter>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-select-filter
+                    >
                         <span>Размер</span>
                         <select data-size-filter data-custom-select>
                             <option value="all">Все размеры</option>
                         </select>
                     </label>
-                    <label class="search-box custom-filter" data-custom-select-filter>
+                    <label
+                        class="search-box custom-filter"
+                        data-custom-select-filter
+                    >
                         <span>Цвет</span>
                         <select data-color-filter data-custom-select>
                             <option value="all">Все цвета</option>
                         </select>
                     </label>
-                    <button class="reset-filters-button" type="button" data-reset-filters>Сбросить</button>
+                    <button
+                        class="reset-filters-button"
+                        type="button"
+                        data-reset-filters
+                    >
+                        Сбросить
+                    </button>
                 </div>
-                <p class="status" data-status>Загружаем заявки...</p>
+                <p class="status" data-status role="status">
+                    Загружаем заявки...
+                </p>
             </section>
 
-            <section class="analytics-grid">
+            <section class="analytics-grid" aria-label="Аналитика">
                 <article class="content-card">
                     <h2>Статистика по дням</h2>
                     <div class="table-wrap">
@@ -142,7 +169,7 @@
                 </article>
             </section>
 
-            <section class="content-card">
+            <section class="content-card" aria-label="Заявки">
                 <div class="section-heading">
                     <h2>Заявки</h2>
                     <span data-visible-count>0</span>
