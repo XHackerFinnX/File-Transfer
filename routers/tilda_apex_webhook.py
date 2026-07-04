@@ -9,9 +9,11 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from config import config
 from db.tilda_orders import read_tilda_submissions, save_tilda_submission
+from services.tilda_cdek import cdek_get_token, find_cdek_order, update_cdek_order_number
 
 router = APIRouter()
 
@@ -20,11 +22,15 @@ TEMPLATES_DIR = PROJECT_ROOT / "templates"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_SUBMISSIONS_IN_LIST = 500
 # TODO: move to environment/settings when the admin keys are finalized.
-FORM_ACCESS_SECRETS = {"apex": "secret"}
+FORM_ACCESS_SECRETS = {"apex": f"{config.SECRET_KEY_APEX.get_secret_value()}"}
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+class CdekImNumberUpdateRequest(BaseModel):
+    current_im_number: str
+    new_im_number: str
+    order_uuid: str | None = None
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -225,5 +231,55 @@ async def tilda_form_submissions(name: str, request: Request):
             "ok": True,
             "site": site_name,
             "submissions": await _read_submissions(site_name),
+        }
+    )
+    
+@router.post("/tilda/{name}/form/cdek/im-number")
+async def tilda_update_cdek_im_number(
+    name: str, request: Request, payload: CdekImNumberUpdateRequest
+):
+    site_name = _site_name_or_404(name)
+    _form_secret_or_403(site_name, request)
+
+    current_im_number = payload.current_im_number.strip()
+    new_im_number = payload.new_im_number.strip()
+    order_uuid = (payload.order_uuid or "").strip()
+
+    if not new_im_number:
+        return JSONResponse(
+            {"ok": False, "error": "new_im_number_required"}, status_code=400
+        )
+    if not order_uuid and not current_im_number:
+        return JSONResponse(
+            {"ok": False, "error": "current_im_number_or_uuid_required"},
+            status_code=400,
+        )
+
+    try:
+        token = cdek_get_token()
+        order = None
+        if not order_uuid:
+            order = find_cdek_order(current_im_number, token, by="im_number")
+            order_uuid = str(order.get("uuid") or "")
+        if not order_uuid:
+            return JSONResponse(
+                {"ok": False, "error": "cdek_order_uuid_not_found"},
+                status_code=404,
+            )
+        request_uuid = update_cdek_order_number(order_uuid, new_im_number, token)
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": "cdek_update_failed", "detail": str(exc)},
+            status_code=502,
+        )
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "site": site_name,
+            "order_uuid": order_uuid,
+            "request_uuid": request_uuid,
+            "old_im_number": current_im_number,
+            "new_im_number": new_im_number,
         }
     )

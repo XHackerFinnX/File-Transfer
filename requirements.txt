@@ -6,3 +6,4 @@ pydantic
 python-multipart
 Jinja2
 psycopg[binary,pool]
+requests

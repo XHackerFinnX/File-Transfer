@@ -741,3 +741,34 @@ td {
     z-index: 1;
     background: var(--surface);
 }
+
+.submission-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.action-button {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(62, 207, 142, 0.35);
+    border-radius: 6px;
+    padding: 5px 10px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.action-button:hover {
+    border-color: var(--accent);
+}
+
+.action-button[aria-busy="true"] {
+    cursor: wait;
+    opacity: 0.65;
+}

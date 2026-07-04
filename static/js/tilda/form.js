@@ -808,6 +808,70 @@
             .join("")}</div></section>`;
     }
 
+    function cdekImNumber(orderId) {
+        const value = String(orderId || "").trim();
+        return value ? `apexf1_${value}` : "";
+    }
+
+    function customerEmailHref(first, submission) {
+        const email = first.email || submission.payload?.Email || "";
+        if (!email || email === "—") return "";
+        const orderId = first.orderId || submission.id;
+        const subject = `Заказ №${orderId} принят`;
+        const body = [
+            `Здравствуйте, ${first.buyerName || submission.customer_name || ""}!`,
+            "",
+            `Ваш заказ №${orderId} принят и готовится к отправке.`,
+            "Трек-номер СДЭК пришлём отдельным письмом.",
+        ].join("\n");
+        return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    }
+
+    async function changeCdekImNumber(button) {
+        const currentImNumber = button.dataset.currentImNumber || "";
+        const defaultNewNumber =
+            button.dataset.defaultImNumber || currentImNumber;
+        const newImNumber = window.prompt(
+            "Новый Номер ИМ в СДЭК",
+            defaultNewNumber,
+        );
+        if (!newImNumber || newImNumber.trim() === currentImNumber) return;
+
+        button.setAttribute("aria-busy", "true");
+        button.textContent = "Меняем...";
+        try {
+            const params = new URLSearchParams();
+            if (secret) params.set("secret", secret);
+            const response = await fetch(
+                `/tilda/${encodeURIComponent(siteName)}/form/cdek/im-number?${params}`,
+                {
+                    method: "POST",
+                    headers: {
+                        Accept: "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        current_im_number: currentImNumber,
+                        new_im_number: newImNumber.trim(),
+                    }),
+                },
+            );
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.ok) {
+                throw new Error(
+                    data.detail || data.error || `HTTP ${response.status}`,
+                );
+            }
+            window.alert(`Номер ИМ изменён на ${data.new_im_number}`);
+            await loadSubmissions();
+        } catch (error) {
+            window.alert(`Не удалось изменить Номер ИМ: ${error.message}`);
+        } finally {
+            button.removeAttribute("aria-busy");
+            button.textContent = "Изменить Номер ИМ";
+        }
+    }
+
     function renderSubmission(submission) {
         const rows = orderRows.filter(
             (row) => row.submissionId === submission.id,
@@ -820,6 +884,10 @@
         const items = rows.reduce((sum, row) => sum + row.itemsCount, 0);
         const title =
             first.buyerName || submission.customer_name || "Без имени";
+
+        const emailHref = customerEmailHref(first, submission);
+        const currentImNumber = first.orderId || "";
+        const imNumber = cdekImNumber(first.orderId);
         return `
             <article class="submission-card">
                 <details class="submission-toggle">
@@ -830,12 +898,16 @@
                                 <span class="badge">${escapeHtml(formatDate(submission.created_at))}</span>
                                 <span class="badge">${escapeHtml(first.phone || submission.contact || "Без контакта")}</span>
                                 <span class="badge">${escapeHtml(first.orderId ? `Заказ ${first.orderId}` : submission.id)}</span>
+                                ${imNumber ? `<span class="badge">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                                 <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
                                 <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
                             </div>
                         </div>
-                        <span class="toggle-hint">Подробнее</span>
+                        <span class="submission-actions">
+                            ${currentImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(currentImNumber)}" data-default-im-number="${escapeHtml(imNumber)}">Изменить Номер ИМ</button>` : ""}
+                            <span class="toggle-hint">Подробнее</span>
+                        </span>
                     </summary>
                     <div class="submission-body pretty-body">
                         ${renderCustomerSection(submission, rows)}
@@ -847,6 +919,12 @@
                 </details>
             </article>`;
     }
+
+    // <span class="submission-actions">
+    //     ${emailHref ? `<a class="action-button" href="${emailHref}">Написать на почту</a>` : ""}
+    //     ${currentImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(currentImNumber)}" data-default-im-number="${escapeHtml(imNumber)}">Изменить Номер ИМ</button>` : ""}
+    //     <span class="toggle-hint">Подробнее</span>
+    // </span>
 
     function updateFilterOptions() {
         const selectedSize = sizeFilter.value;
@@ -1038,6 +1116,15 @@
         element?.addEventListener("change", render);
     });
     refresh?.addEventListener("click", loadSubmissions);
+    list?.addEventListener("click", (event) => {
+        const actionButton = event.target.closest(".action-button");
+        if (!actionButton) return;
+        event.stopPropagation();
+        if (actionButton.matches("[data-change-im-number]")) {
+            event.preventDefault();
+            changeCdekImNumber(actionButton);
+        }
+    });
     exportCsv?.addEventListener("click", exportVisibleCsv);
     exportJson?.addEventListener("click", exportVisibleJson);
     resetFiltersButton?.addEventListener("click", resetFilters);

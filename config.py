@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     POSTGRESQL_PASSWORD: SecretStr
     POSTGRESQL_DATABASE_APEX: str
     POSTGRESQL_SSLMODE: str = "disable"
+    
+    CDEK_CLIENT_ID: SecretStr
+    CDEK_CLIENT_SECRET: SecretStr
+    SENDER_LOCATION: SecretStr
+    
+    SECRET_KEY_APEX: SecretStr
 
     @property
     def TILDA_APEX_DATABASE_TARGET(self) -> str:
