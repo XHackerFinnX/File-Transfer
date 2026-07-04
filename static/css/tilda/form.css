@@ -703,6 +703,10 @@ td {
     .pretty-body {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .submission-header {
+        flex-direction: column;
+    }
 }
 
 @media (min-width: 1280px) {
