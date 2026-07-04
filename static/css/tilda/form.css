@@ -440,6 +440,12 @@ td {
     background: var(--warning-dim);
 }
 
+.badge.im-custom {
+    border-color: rgba(245, 166, 35, 0.45);
+    color: var(--warning);
+    background: var(--warning-dim);
+}
+
 /* ---------- Раскрытие заявки ---------- */
 
 .submission-toggle {

@@ -8,8 +8,7 @@ TILDA_SUBMISSIONS_TABLE = "tilda_submissions"
 
 
 def _create_tilda_submissions_schema(database_name: str) -> None:
-    query = sql.SQL(
-        """
+    query = sql.SQL("""
         CREATE TABLE IF NOT EXISTS {table} (
             id TEXT PRIMARY KEY,
             site TEXT NOT NULL,
@@ -18,13 +17,16 @@ def _create_tilda_submissions_schema(database_name: str) -> None:
             payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             cookies JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             client JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            headers JSONB NOT NULL DEFAULT '{{}}'::jsonb
+            headers JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            im_number TEXT NOT NULL DEFAULT ''
         );
+        
+        ALTER TABLE {table}
+            ADD COLUMN IF NOT EXISTS im_number TEXT NOT NULL DEFAULT '';
 
         CREATE INDEX IF NOT EXISTS {site_created_idx}
             ON {table} (site, created_at DESC);
-        """
-    ).format(
+        """).format(
         table=sql.Identifier(TILDA_SUBMISSIONS_TABLE),
         site_created_idx=sql.Identifier(
             f"{TILDA_SUBMISSIONS_TABLE}_site_created_at_idx"

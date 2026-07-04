@@ -12,8 +12,16 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from config import config
-from db.tilda_orders import read_tilda_submissions, save_tilda_submission
-from services.tilda_cdek import cdek_get_token, find_cdek_order, update_cdek_order_number
+from db.tilda_orders import (
+    read_tilda_submissions,
+    save_tilda_submission,
+    update_tilda_submission_im_number,
+)
+from services.tilda_cdek import (
+    cdek_get_token,
+    find_cdek_order,
+    update_cdek_order_number,
+)
 
 router = APIRouter()
 
@@ -30,7 +38,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 class CdekImNumberUpdateRequest(BaseModel):
     current_im_number: str
     new_im_number: str
+    order_id: str | None = None
     order_uuid: str | None = None
+    submission_id: str | None = None
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -104,6 +114,7 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "cookies": submission.get("cookies", {}),
         "client": submission.get("client", {}),
         "headers": submission.get("headers", {}),
+        "im_number": str(submission.get("im_number") or ""),
     }
 
 
@@ -120,11 +131,15 @@ async def _extract_payload(request: Request) -> tuple[dict[str, Any], str]:
         except json.JSONDecodeError:
             return {"_raw": body.decode("utf-8", errors="replace")}, "invalid_json"
         if isinstance(parsed, dict):
-            return {str(key): _json_safe(value) for key, value in parsed.items()}, "json"
+            return {
+                str(key): _json_safe(value) for key, value in parsed.items()
+            }, "json"
         return {"value": _json_safe(parsed)}, "json"
 
     if "application/x-www-form-urlencoded" in content_type or not content_type:
-        parsed = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        parsed = parse_qs(
+            body.decode("utf-8", errors="replace"), keep_blank_values=True
+        )
         return _normalize_form_mapping(parsed), "form"
 
     try:
@@ -199,7 +214,9 @@ async def tilda_webhook(name: str, request: Request):
     payload, payload_type = await _extract_payload(request)
 
     if payload_type == "too_large":
-        return JSONResponse({"ok": False, "error": "payload_too_large"}, status_code=413)
+        return JSONResponse(
+            {"ok": False, "error": "payload_too_large"}, status_code=413
+        )
 
     if _is_tilda_test(payload):
         return JSONResponse(
@@ -243,7 +260,9 @@ async def tilda_update_cdek_im_number(
 
     current_im_number = payload.current_im_number.strip()
     new_im_number = payload.new_im_number.strip()
+    order_id = (payload.order_id or "").strip()
     order_uuid = (payload.order_uuid or "").strip()
+    submission_id = (payload.submission_id or "").strip()
 
     if not new_im_number:
         return JSONResponse(
@@ -267,6 +286,13 @@ async def tilda_update_cdek_im_number(
                 status_code=404,
             )
         request_uuid = update_cdek_order_number(order_uuid, new_im_number, token)
+        await update_tilda_submission_im_number(
+            config.TILDA_APEX_DATABASE_TARGET,
+            site_name,
+            submission_id,
+            order_id or current_im_number,
+            new_im_number,
+        )
     except Exception as exc:
         return JSONResponse(
             {"ok": False, "error": "cdek_update_failed", "detail": str(exc)},

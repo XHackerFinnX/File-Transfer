@@ -435,6 +435,9 @@
                           size: "",
                       },
                   ];
+            const submissionImNumber = stringifyValue(
+                submission.im_number || "",
+            );
             return rows.map((product) => {
                 const color = detectColor(
                     product.productName,
@@ -448,6 +451,10 @@
                     phone,
                     email,
                     orderId,
+                    imNumber:
+                        submissionImNumber && submissionImNumber !== "—"
+                            ? submissionImNumber
+                            : orderId,
                     paymentSystem,
                     productName: product.productName,
                     sku: product.sku || "",
@@ -484,6 +491,7 @@
                     phone,
                     email,
                     orderId,
+                    row.imNumber,
                     row.productName,
                     row.sku,
                     row.colorName,
@@ -770,6 +778,7 @@
             <h3>Оплата и доставка</h3>
             <div class="info-grid">
                 ${renderKeyValue("Номер заказа", first.orderId)}
+                ${renderKeyValue("Номер ИМ", first.imNumber)}
                 ${renderKeyValue("Платёжная система", first.paymentSystem)}
                 ${renderKeyValue("Товары", fmtMoney(subtotal))}
                 ${renderKeyValue("Доставка", fmtMoney(first.deliverySum || 0))}
@@ -806,11 +815,6 @@
                     `<div class="field"><span class="field-key">${escapeHtml(key)}</span><div class="field-value">${escapeHtml(stringifyValue(value))}</div></div>`,
             )
             .join("")}</div></section>`;
-    }
-
-    function cdekImNumber(orderId) {
-        const value = String(orderId || "").trim();
-        return value ? `apexf1_${value}` : "";
     }
 
     function customerEmailHref(first, submission) {
@@ -853,6 +857,8 @@
                     body: JSON.stringify({
                         current_im_number: currentImNumber,
                         new_im_number: newImNumber.trim(),
+                        order_id: button.dataset.orderId || "",
+                        submission_id: button.dataset.submissionId || "",
                     }),
                 },
             );
@@ -886,8 +892,11 @@
             first.buyerName || submission.customer_name || "Без имени";
 
         const emailHref = customerEmailHref(first, submission);
-        const currentImNumber = first.orderId || "";
-        const imNumber = cdekImNumber(first.orderId);
+        const orderId = first.orderId || "";
+        const imNumber = first.imNumber || orderId;
+        const isCustomImNumber = Boolean(
+            orderId && imNumber && imNumber !== orderId,
+        );
         return `
             <article class="submission-card">
                 <details class="submission-toggle">
@@ -898,14 +907,14 @@
                                 <span class="badge">${escapeHtml(formatDate(submission.created_at))}</span>
                                 <span class="badge">${escapeHtml(first.phone || submission.contact || "Без контакта")}</span>
                                 <span class="badge">${escapeHtml(first.orderId ? `Заказ ${first.orderId}` : submission.id)}</span>
-                                ${imNumber ? `<span class="badge">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
+                                ${imNumber ? `<span class="badge ${isCustomImNumber ? "im-custom" : ""}">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                                 <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
                                 <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
                             </div>
                         </div>
                         <span class="submission-actions">
-                            ${currentImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(currentImNumber)}" data-default-im-number="${escapeHtml(imNumber)}">Изменить Номер ИМ</button>` : ""}
+                            ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
                             <span class="toggle-hint">Подробнее</span>
                         </span>
                     </summary>
@@ -922,7 +931,7 @@
 
     // <span class="submission-actions">
     //     ${emailHref ? `<a class="action-button" href="${emailHref}">Написать на почту</a>` : ""}
-    //     ${currentImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(currentImNumber)}" data-default-im-number="${escapeHtml(imNumber)}">Изменить Номер ИМ</button>` : ""}
+    //     ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
     //     <span class="toggle-hint">Подробнее</span>
     // </span>
 
