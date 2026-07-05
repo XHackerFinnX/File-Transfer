@@ -29,8 +29,13 @@ def ignore_windows_disconnect_noise(loop, context):
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(ignore_windows_disconnect_noise)
-    await asyncio.to_thread(open_database_pools, config.TILDA_APEX_DATABASE_TARGET)
-    await create_tilda_submissions_schema(config.TILDA_APEX_DATABASE_TARGET)
+    tilda_database_targets = {
+        config.TILDA_APEX_DATABASE_TARGET,
+        config.TILDA_REAL_BABY_DATABASE_TARGET,
+    }
+    await asyncio.to_thread(open_database_pools, *tilda_database_targets)
+    for database_target in tilda_database_targets:
+        await create_tilda_submissions_schema(database_target)
 
     try:
         yield

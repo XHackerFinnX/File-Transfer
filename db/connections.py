@@ -32,6 +32,9 @@ class DatabaseTarget:
 DATABASE_TARGETS: Mapping[str, DatabaseTarget] = {
     "default": DatabaseTarget(name="default", database=config.POSTGRESQL_DATABASE),
     "apex": DatabaseTarget(name="apex", database=config.POSTGRESQL_DATABASE_APEX),
+    "real_baby": DatabaseTarget(
+        name="real_baby", database=config.POSTGRESQL_DATABASE_REAL_BABY
+    ),
 }
 
 _pools: dict[str, ConnectionPool] = {}

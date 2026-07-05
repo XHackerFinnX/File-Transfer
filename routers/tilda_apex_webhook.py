@@ -34,6 +34,10 @@ FORM_ACCESS_SECRETS = {
     "apex": f"{config.SECRET_KEY_APEX.get_secret_value()}",
     "real_baby": f"{config.SECRET_KEY_REAL_BABY.get_secret_value()}",
 }
+FORM_DATABASE_TARGETS = {
+    "apex": config.TILDA_APEX_DATABASE_TARGET,
+    "real_baby": config.TILDA_REAL_BABY_DATABASE_TARGET,
+}
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -54,6 +58,14 @@ def _site_name_or_404(name: str) -> str:
     if not TILDA_SITE_NAME_PATTERN.fullmatch(normalized):
         raise HTTPException(status_code=404, detail="Tilda form storage not found")
     return normalized
+
+
+def _database_target_or_404(name: str) -> str:
+    site_name = _site_name_or_404(name)
+    database_target = FORM_DATABASE_TARGETS.get(site_name)
+    if not database_target:
+        raise HTTPException(status_code=404, detail="Tilda form storage not found")
+    return database_target
 
 
 def _form_secret_or_403(name: str, request: Request) -> None:
@@ -192,13 +204,13 @@ async def _save_submission(
             if key.lower() not in {"authorization"}
         },
     }
-    await save_tilda_submission(config.TILDA_APEX_DATABASE_TARGET, meta)
+    await save_tilda_submission(_database_target_or_404(name), meta)
     return submission_id
 
 
 async def _read_submissions(name: str) -> list[dict[str, Any]]:
     submissions = await read_tilda_submissions(
-        config.TILDA_APEX_DATABASE_TARGET,
+        _database_target_or_404(name),
         _site_name_or_404(name),
         MAX_SUBMISSIONS_IN_LIST,
     )
@@ -290,7 +302,7 @@ async def tilda_update_cdek_im_number(
             )
         request_uuid = update_cdek_order_number(order_uuid, new_im_number, token)
         await update_tilda_submission_im_number(
-            config.TILDA_APEX_DATABASE_TARGET,
+            _database_target_or_404(site_name),
             site_name,
             submission_id,
             order_id or current_im_number,

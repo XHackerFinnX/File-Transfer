@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     def TILDA_APEX_DATABASE_TARGET(self) -> str:
         return os.getenv("TILDA_APEX_DATABASE_TARGET", "apex").strip() or "apex"
     
+    @property
+    def TILDA_REAL_BABY_DATABASE_TARGET(self) -> str:
+        return (
+            os.getenv("TILDA_REAL_BABY_DATABASE_TARGET", "real_baby").strip()
+            or "real_baby"
+        )
+    
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
