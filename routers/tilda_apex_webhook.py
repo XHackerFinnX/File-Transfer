@@ -30,7 +30,10 @@ TEMPLATES_DIR = PROJECT_ROOT / "templates"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_SUBMISSIONS_IN_LIST = 500
 # TODO: move to environment/settings when the admin keys are finalized.
-FORM_ACCESS_SECRETS = {"apex": f"{config.SECRET_KEY_APEX.get_secret_value()}"}
+FORM_ACCESS_SECRETS = {
+    "apex": f"{config.SECRET_KEY_APEX.get_secret_value()}",
+    "real_baby": f"{config.SECRET_KEY_REAL_BABY.get_secret_value()}",
+}
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
