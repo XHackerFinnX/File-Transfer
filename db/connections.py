@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import quote_plus
@@ -12,8 +13,7 @@ class DatabaseTarget:
     """Named PostgreSQL database target.
 
     The same host/user/password can be reused by multiple project databases.
-    Add a new target in ``DATABASE_TARGETS`` when another project database is
-    introduced.
+    Add project targets through POSTGRESQL_DATABASES_JSON.
     """
 
     name: str
@@ -29,13 +29,32 @@ class DatabaseTarget:
         return f"postgresql://{user}:{password}@{host}/{database}?sslmode={sslmode}"
 
 
-DATABASE_TARGETS: Mapping[str, DatabaseTarget] = {
-    "default": DatabaseTarget(name="default", database=config.POSTGRESQL_DATABASE),
-    "apex": DatabaseTarget(name="apex", database=config.POSTGRESQL_DATABASE_APEX),
-    "real_baby": DatabaseTarget(
-        name="real_baby", database=config.POSTGRESQL_DATABASE_REAL_BABY
-    ),
-}
+def _configured_database_targets() -> Mapping[str, DatabaseTarget]:
+    targets: dict[str, DatabaseTarget] = {
+        "default": DatabaseTarget(name="default", database=config.POSTGRESQL_DATABASE)
+    }
+    if not config.POSTGRESQL_DATABASES_JSON.strip():
+        return targets
+
+    try:
+        raw_targets = json.loads(config.POSTGRESQL_DATABASES_JSON)
+    except json.JSONDecodeError as exc:
+        raise ValueError("POSTGRESQL_DATABASES_JSON contains invalid JSON") from exc
+    if not isinstance(raw_targets, dict):
+        raise ValueError("POSTGRESQL_DATABASES_JSON must be a JSON object")
+
+    for raw_name, raw_database in raw_targets.items():
+        name = str(raw_name).strip()
+        database = str(raw_database).strip()
+        if not name:
+            raise ValueError("Database target name must not be empty")
+        if not database:
+            raise ValueError(f"Database target {name!r} requires database name")
+        targets[name] = DatabaseTarget(name=name, database=database)
+    return targets
+
+
+DATABASE_TARGETS: Mapping[str, DatabaseTarget] = _configured_database_targets()
 
 _pools: dict[str, ConnectionPool] = {}
 

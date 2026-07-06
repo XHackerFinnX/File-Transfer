@@ -16,6 +16,7 @@ Unisender, or another mail service controlled by the shop.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import smtplib
@@ -28,12 +29,8 @@ from config import config
 import requests
 
 CDEK_BASE_URL = "https://api.cdek.ru/v2"
-CDEK_CLIENT_ID = config.CDEK_CLIENT_ID.get_secret_value()
-CDEK_CLIENT_SECRET = config.CDEK_CLIENT_SECRET.get_secret_value()
 
 CDEK_TARIFF_CODE = 136
-
-SENDER_LOCATION = {"address": config.SENDER_LOCATION.get_secret_value()}
 DEFAULT_ITEM_WEIGHT_GRAMS = 700
 CDEK_ORDER_NUMBER_PREFIX = ""
 
@@ -44,14 +41,74 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "пароль_или_api_key")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
 
-def cdek_get_token() -> str:
+def _configured_cdek_accounts() -> dict[str, dict[str, Any]]:
+    """Return named CDEK credentials.
+
+    CDEK_ACCOUNTS_JSON example:
+    {"shop": {"client_id": "...", "client_secret": "...", "sender_location": {"address": "..."}}}
+    """
+    if not config.CDEK_ACCOUNTS_JSON.strip():
+        raise ValueError("CDEK_ACCOUNTS_JSON is required")
+
+    try:
+        raw_accounts = json.loads(config.CDEK_ACCOUNTS_JSON)
+    except json.JSONDecodeError as exc:
+        raise ValueError("CDEK_ACCOUNTS_JSON contains invalid JSON") from exc
+    if not isinstance(raw_accounts, dict):
+        raise ValueError("CDEK_ACCOUNTS_JSON must be a JSON object")
+
+    accounts: dict[str, dict[str, Any]] = {}
+    for account_name, credentials in raw_accounts.items():
+        normalized_name = str(account_name).strip()
+        if not normalized_name:
+            raise ValueError("CDEK account name must not be empty")
+        if not isinstance(credentials, dict):
+            raise ValueError(f"CDEK account {normalized_name!r} must be an object")
+        client_id = str(credentials.get("client_id") or "").strip()
+        client_secret = str(credentials.get("client_secret") or "").strip()
+        sender_location = credentials.get("sender_location")
+        if not client_id or not client_secret:
+            raise ValueError(
+                f"CDEK account {normalized_name!r} requires client_id and client_secret"
+            )
+        if not isinstance(sender_location, dict) or not sender_location:
+            raise ValueError(
+                f"CDEK account {normalized_name!r} requires sender_location object"
+            )
+        accounts[normalized_name] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "sender_location": sender_location,
+        }
+    return accounts
+
+
+def cdek_credentials(account_name: str) -> dict[str, Any]:
+    """Return CDEK credentials by account name."""
+    normalized_name = account_name.strip()
+    if not normalized_name:
+        raise ValueError("CDEK account name must not be empty")
+    accounts = _configured_cdek_accounts()
+    credentials = accounts.get(normalized_name)
+    if not credentials:
+        raise ValueError(f"CDEK account {normalized_name!r} is not configured")
+    return credentials
+
+
+def cdek_sender_location(account_name: str) -> dict[str, Any]:
+    """Return CDEK sender location for an account."""
+    return cdek_credentials(account_name)["sender_location"]
+
+
+def cdek_get_token(account_name: str) -> str:
     """Request a CDEK OAuth token for server-to-server calls."""
+    credentials = cdek_credentials(account_name)
     response = requests.post(
         f"{CDEK_BASE_URL}/oauth/token",
         params={
             "grant_type": "client_credentials",
-            "client_id": CDEK_CLIENT_ID,
-            "client_secret": CDEK_CLIENT_SECRET,
+            "client_id": credentials["client_id"],
+            "client_secret": credentials["client_secret"],
         },
         timeout=20,
     )
@@ -98,7 +155,9 @@ def cdek_order_number(order_id: str | int, prefix: str | None = None) -> str:
     return f"{clean_prefix}{clean_order_id}" if clean_order_id else ""
 
 
-def build_cdek_order_payload(webhook_data: dict[str, Any]) -> dict[str, Any]:
+def build_cdek_order_payload(
+    webhook_data: dict[str, Any], account_name: str
+) -> dict[str, Any]:
     """Map the Tilda/Tinkoff payment webhook into POST /v2/orders payload."""
     payment = _payment(webhook_data)
     products = payment.get("products") if isinstance(payment.get("products"), list) else []
@@ -119,7 +178,7 @@ def build_cdek_order_payload(webhook_data: dict[str, Any]) -> dict[str, Any]:
         "number": cdek_order_number(payment.get("orderid") or payment.get("order_id") or ""),
         "tariff_code": CDEK_TARIFF_CODE,
         "delivery_point": payment.get("delivery_pickup_id"),
-        "from_location": SENDER_LOCATION,
+        "from_location": cdek_sender_location(account_name),
         "recipient": {
             "name": webhook_data.get("customer_name") or payment.get("delivery_fio") or "",
             "phones": [{"number": normalize_phone(str(webhook_data.get("contact") or ""))}],

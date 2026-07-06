@@ -29,15 +29,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_SUBMISSIONS_IN_LIST = 500
-# TODO: move to environment/settings when the admin keys are finalized.
-FORM_ACCESS_SECRETS = {
-    "apex": f"{config.SECRET_KEY_APEX.get_secret_value()}",
-    "real_baby": f"{config.SECRET_KEY_REAL_BABY.get_secret_value()}",
-}
-FORM_DATABASE_TARGETS = {
-    "apex": config.TILDA_APEX_DATABASE_TARGET,
-    "real_baby": config.TILDA_REAL_BABY_DATABASE_TARGET,
-}
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -48,6 +39,46 @@ class CdekImNumberUpdateRequest(BaseModel):
     order_id: str | None = None
     order_uuid: str | None = None
     submission_id: str | None = None
+
+
+def _project_config_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Build project -> secret/database/CDEK maps from TILDA_PROJECTS_JSON.
+
+    Example:
+    {"new_shop":{"secret":"...","database_target":"apex","cdek_account":"shop_cdek"}}
+    """
+    if not config.TILDA_PROJECTS_JSON.strip():
+        raise ValueError("TILDA_PROJECTS_JSON is required")
+
+    try:
+        projects = json.loads(config.TILDA_PROJECTS_JSON)
+    except json.JSONDecodeError as exc:
+        raise ValueError("TILDA_PROJECTS_JSON contains invalid JSON") from exc
+    if not isinstance(projects, dict):
+        raise ValueError("TILDA_PROJECTS_JSON must be a JSON object")
+
+    secrets: dict[str, str] = {}
+    database_targets: dict[str, str] = {}
+    cdek_accounts: dict[str, str] = {}
+    for raw_name, raw_project in projects.items():
+        site_name = _site_name_or_404(str(raw_name))
+        if not isinstance(raw_project, dict):
+            raise ValueError(f"Tilda project {site_name!r} must be an object")
+        secret = str(raw_project.get("secret") or "").strip()
+        database_target = str(raw_project.get("database_target") or "").strip()
+        cdek_account = str(raw_project.get("cdek_account") or "").strip()
+        if not secret:
+            raise ValueError(f"Tilda project {site_name!r} requires secret")
+        if not database_target:
+            raise ValueError(f"Tilda project {site_name!r} requires database_target")
+        if not cdek_account:
+            raise ValueError(f"Tilda project {site_name!r} requires cdek_account")
+        secrets[site_name] = secret
+        database_targets[site_name] = database_target
+        cdek_accounts[site_name] = cdek_account
+
+    return secrets, database_targets, cdek_accounts
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -62,14 +93,25 @@ def _site_name_or_404(name: str) -> str:
 
 def _database_target_or_404(name: str) -> str:
     site_name = _site_name_or_404(name)
-    database_target = FORM_DATABASE_TARGETS.get(site_name)
+    _, database_targets, _ = _project_config_maps()
+    database_target = database_targets.get(site_name)
     if not database_target:
         raise HTTPException(status_code=404, detail="Tilda form storage not found")
     return database_target
 
 
+def _cdek_account_or_404(name: str) -> str:
+    site_name = _site_name_or_404(name)
+    _, _, cdek_accounts = _project_config_maps()
+    account_name = cdek_accounts.get(site_name)
+    if not account_name:
+        raise HTTPException(status_code=404, detail="CDEK account mapping not found")
+    return account_name
+
+
 def _form_secret_or_403(name: str, request: Request) -> None:
-    expected_secret = FORM_ACCESS_SECRETS.get(_site_name_or_404(name))
+    secrets, _, _ = _project_config_maps()
+    expected_secret = secrets.get(_site_name_or_404(name))
     provided_secret = (
         request.query_params.get("secret")
         or request.query_params.get("token")
@@ -290,7 +332,8 @@ async def tilda_update_cdek_im_number(
         )
 
     try:
-        token = cdek_get_token()
+        cdek_account = _cdek_account_or_404(site_name)
+        token = cdek_get_token(cdek_account)
         order = None
         if not order_uuid:
             order = find_cdek_order(current_im_number, token, by="im_number")

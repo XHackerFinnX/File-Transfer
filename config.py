@@ -1,4 +1,3 @@
-import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import SecretStr
 from typing import List
@@ -20,23 +19,9 @@ class Settings(BaseSettings):
     POSTGRESQL_DATABASE_REAL_BABY: str
     POSTGRESQL_SSLMODE: str = "disable"
     
-    CDEK_CLIENT_ID: SecretStr
-    CDEK_CLIENT_SECRET: SecretStr
-    SENDER_LOCATION: SecretStr
-    
-    SECRET_KEY_APEX: SecretStr
-    SECRET_KEY_REAL_BABY: SecretStr
-
-    @property
-    def TILDA_APEX_DATABASE_TARGET(self) -> str:
-        return os.getenv("TILDA_APEX_DATABASE_TARGET", "apex").strip() or "apex"
-    
-    @property
-    def TILDA_REAL_BABY_DATABASE_TARGET(self) -> str:
-        return (
-            os.getenv("TILDA_REAL_BABY_DATABASE_TARGET", "real_baby").strip()
-            or "real_baby"
-        )
+    POSTGRESQL_DATABASES_JSON: str = ""
+    CDEK_ACCOUNTS_JSON: str = ""
+    TILDA_PROJECTS_JSON: str = ""
     
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
