@@ -276,8 +276,149 @@ async def _read_submissions(name: str) -> list[dict[str, Any]]:
     return [_submission_summary(submission) for submission in submissions]
 
 
+def _first_value(source: dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _format_detail_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    return str(value).strip()
+
+
+def _payment_payload(order_payload: dict[str, Any]) -> dict[str, Any]:
+    return _as_dict(
+        order_payload.get("payment")
+        or order_payload.get("Payment")
+        or order_payload.get("Оплата")
+    )
+
+
+def _option_value(product: dict[str, Any], names: list[str]) -> str:
+    direct = _first_value(product, names)
+    if direct:
+        return str(direct)
+    normalized = {name.lower() for name in names}
+    options = product.get("options")
+    if not isinstance(options, list):
+        return ""
+    for item in options:
+        if not isinstance(item, dict):
+            continue
+        option_name = str(item.get("option") or item.get("name") or "").lower()
+        if option_name in normalized:
+            return str(item.get("variant") or item.get("value") or "")
+    return ""
+
+
+def _order_details_from_submission(submission: dict[str, Any] | None) -> dict[str, Any]:
+    order_payload = _as_dict((submission or {}).get("payload"))
+    payment = _payment_payload(order_payload)
+    product_source = (
+        payment.get("products")
+        or order_payload.get("products")
+        or order_payload.get("Products")
+        or order_payload.get("Товары")
+        or order_payload.get("items")
+        or []
+    )
+    products: list[dict[str, str]] = []
+    if isinstance(product_source, list):
+        for product in product_source:
+            if not isinstance(product, dict):
+                continue
+            products.append(
+                {
+                    "name": _format_detail_value(
+                        _first_value(
+                            product,
+                            ["name", "title", "product_name", "Название", "Товар"],
+                        )
+                    ),
+                    "sku": _format_detail_value(product.get("sku")),
+                    "quantity": _format_detail_value(
+                        _first_value(
+                            product,
+                            ["quantity", "count", "amount", "qty", "Количество"],
+                        )
+                        or 1
+                    ),
+                    "price": _format_detail_value(
+                        _first_value(
+                            product, ["price", "item_price", "Цена", "Стоимость"]
+                        )
+                    ),
+                    "size": _format_detail_value(
+                        _option_value(product, ["Размер", "size", "Size"])
+                    ),
+                    "color": _format_detail_value(
+                        _option_value(product, ["Цвет", "color", "Color"])
+                    ),
+                }
+            )
+
+    return {
+        "customer": {
+            "name": _format_detail_value(
+                _first_value(
+                    order_payload, ["Name", "name", "Full name", "Имя", "ФИО", "fio"]
+                )
+            ),
+            "phone": _format_detail_value(
+                _first_value(order_payload, ["Phone", "phone", "Телефон"])
+            ),
+            "email": _format_detail_value(
+                _first_value(order_payload, ["Email", "email", "Почта"])
+            ),
+        },
+        "delivery": {
+            "type": _format_detail_value(
+                payment.get("delivery")
+                or _first_value(order_payload, ["delivery", "Доставка"])
+            ),
+            "address": _format_detail_value(payment.get("delivery_address")),
+            "city": _format_detail_value(payment.get("delivery_city")),
+            "zip": _format_detail_value(payment.get("delivery_zip")),
+            "pickup_id": _format_detail_value(payment.get("delivery_pickup_id")),
+            "fio": _format_detail_value(payment.get("delivery_fio")),
+            "comment": _format_detail_value(payment.get("delivery_comment")),
+        },
+        "products": products,
+    }
+
+
+def _plain_detail_lines(title: str, values: dict[str, str]) -> list[str]:
+    lines = [title]
+    for label, value in values.items():
+        if value:
+            lines.append(f"- {label}: {value}")
+    return lines if len(lines) > 1 else []
+
+
+def _html_detail_row(label: str, value: str) -> str:
+    if not value:
+        return ""
+    return (
+        '<div style="padding:10px 12px;border-radius:12px;background:#f8fafc;border:1px solid #e5e7eb;">'
+        f'<span style="color:#64748b;font-size:13px;">{html.escape(label)}</span><br>'
+        f"<b>{html.escape(value)}</b></div>"
+    )
+    
+
 def _build_order_email(
-    payload: TildaEmailSendRequest, site_name: str
+    payload: TildaEmailSendRequest,
+    site_name: str,
+    submission: dict[str, Any] | None = None,
 ) -> tuple[str, str, str]:
     customer_name = (payload.customer_name or "покупатель").strip() or "покупатель"
     order_id = (payload.order_id or payload.submission_id).strip()
@@ -286,12 +427,56 @@ def _build_order_email(
     delivery_text = (payload.delivery_text or "Доставка не указана").strip()
     shop_name = site_name.replace("_", " ").replace("-", " ").title()
     subject = f"Ваш заказ №{order_id} оформлен в магазине {shop_name}"
+    details = _order_details_from_submission(submission)
+
+    detail_lines = [
+        *_plain_detail_lines(
+            "Покупатель",
+            {
+                "Имя": details["customer"]["name"],
+                "Телефон": details["customer"]["phone"],
+                "Email": details["customer"]["email"],
+            },
+        ),
+        *_plain_detail_lines(
+            "Доставка",
+            {
+                "Способ": details["delivery"]["type"] or delivery_text,
+                "ФИО получателя": details["delivery"]["fio"],
+                "Город": details["delivery"]["city"],
+                "Индекс": details["delivery"]["zip"],
+                "Адрес": details["delivery"]["address"],
+                "ПВЗ": details["delivery"]["pickup_id"],
+                "Комментарий": details["delivery"]["comment"],
+            },
+        ),
+    ]
+    if details["products"]:
+        detail_lines.append("Товары")
+        for index, product in enumerate(details["products"], start=1):
+            options = ", ".join(
+                item
+                for item in [
+                    f"SKU: {product['sku']}" if product["sku"] else "",
+                    f"цвет: {product['color']}" if product["color"] else "",
+                    f"размер: {product['size']}" if product["size"] else "",
+                    f"кол-во: {product['quantity']}" if product["quantity"] else "",
+                    f"цена: {product['price']}" if product["price"] else "",
+                ]
+                if item
+            )
+            detail_lines.append(
+                f"{index}. {product['name'] or 'Товар'}"
+                + (f" ({options})" if options else "")
+            )
+    details_text = "\n".join(detail_lines)
     body = (
         f"Здравствуйте, {customer_name}!\n\n"
         f"Вы оформили заказ №{order_id} в магазине {shop_name}.\n"
         f"Сумма заказа: {order_sum}.\n"
         f"Доставка: {delivery_text}. Стоимость доставки: {delivery_sum}.\n\n"
-        "Мы уже получили вашу заявку и скоро свяжемся с вами по деталям отправки."
+        + (f"Подробности заказа:\n{details_text}\n\n" if details_text else "")
+        + "Мы уже получили вашу заявку и скоро свяжемся с вами по деталям отправки."
     )
     safe_customer = html.escape(customer_name)
     safe_order = html.escape(order_id)
@@ -299,6 +484,42 @@ def _build_order_email(
     safe_order_sum = html.escape(order_sum)
     safe_delivery_sum = html.escape(delivery_sum)
     safe_delivery_text = html.escape(delivery_text)
+    customer_html = "".join(
+        [
+            _html_detail_row("Имя", details["customer"]["name"]),
+            _html_detail_row("Телефон", details["customer"]["phone"]),
+            _html_detail_row("Email", details["customer"]["email"]),
+        ]
+    )
+    delivery_html = "".join(
+        [
+            _html_detail_row("Способ", details["delivery"]["type"] or delivery_text),
+            _html_detail_row("ФИО получателя", details["delivery"]["fio"]),
+            _html_detail_row("Город", details["delivery"]["city"]),
+            _html_detail_row("Индекс", details["delivery"]["zip"]),
+            _html_detail_row("Адрес", details["delivery"]["address"]),
+            _html_detail_row("ПВЗ", details["delivery"]["pickup_id"]),
+            _html_detail_row("Комментарий", details["delivery"]["comment"]),
+        ]
+    )
+    products_html = "".join(f"""<tr>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['name'] or 'Товар')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['sku'] or '—')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['color'] or '—')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['size'] or '—')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['quantity'] or '—')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">{html.escape(product['price'] or '—')}</td>
+        </tr>""" for product in details["products"])
+    products_section = (
+        f"""
+          <h2 style="font-size:18px;margin:26px 0 12px;">Товары</h2>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead><tr style="background:#f1f5f9;color:#475569;text-align:left;"><th style="padding:10px;">Товар</th><th style="padding:10px;">SKU</th><th style="padding:10px;">Цвет</th><th style="padding:10px;">Размер</th><th style="padding:10px;">Кол-во</th><th style="padding:10px;">Цена</th></tr></thead>
+            <tbody>{products_html}</tbody>
+          </table>"""
+        if products_html
+        else ""
+    )
     body_html = f"""
     <div style="margin:0;padding:24px;background:#f6f7fb;font-family:Arial,sans-serif;color:#14171f;">
       <div style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:22px;overflow:hidden;border:1px solid #e7e9f0;">
@@ -313,7 +534,12 @@ def _build_order_email(
             <div style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e5e7eb;"><span style="color:#64748b;">Сумма заказа</span><br><b style="font-size:18px;">{safe_order_sum}</b></div>
             <div style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e5e7eb;"><span style="color:#64748b;">Доставка</span><br><b>{safe_delivery_text}</b><br><span>{safe_delivery_sum}</span></div>
           </div>
-          <p style="font-size:15px;line-height:1.6;color:#475569;margin:0;">Скоро мы пришлём дополнительную информацию по сборке и отправке заказа.</p>
+          <h2 style="font-size:18px;margin:26px 0 12px;">Покупатель</h2>
+          <div style="display:grid;gap:10px;margin:0 0 18px;">{customer_html}</div>
+          <h2 style="font-size:18px;margin:26px 0 12px;">Доставка</h2>
+          <div style="display:grid;gap:10px;margin:0 0 18px;">{delivery_html}</div>
+          {products_section}
+          <p style="font-size:15px;line-height:1.6;color:#475569;margin:24px 0 0;">Скоро мы пришлём дополнительную информацию по сборке и отправке заказа.</p>
         </div>
       </div>
     </div>
@@ -399,7 +625,15 @@ async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendR
             {"ok": False, "error": "valid_email_required"}, status_code=400
         )
     if message_type == "order_notification":
-        subject, body, body_html = _build_order_email(payload, site_name)
+        submission = next(
+            (
+                item
+                for item in await _read_submissions(site_name)
+                if item.get("id") == submission_id
+            ),
+            None,
+        )
+        subject, body, body_html = _build_order_email(payload, site_name, submission)
     elif message_type == "custom_message":
         subject, body, body_html = _build_custom_email(payload)
         if not body:
