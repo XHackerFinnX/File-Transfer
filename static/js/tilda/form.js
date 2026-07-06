@@ -817,18 +817,183 @@
             .join("")}</div></section>`;
     }
 
-    function customerEmailHref(first, submission) {
-        const email = first.email || submission.payload?.Email || "";
-        if (!email || email === "—") return "";
-        const orderId = first.orderId || submission.id;
-        const subject = `Заказ №${orderId} принят`;
-        const body = [
-            `Здравствуйте, ${first.buyerName || submission.customer_name || ""}!`,
-            "",
-            `Ваш заказ №${orderId} принят и готовится к отправке.`,
-            "Трек-номер СДЭК пришлём отдельным письмом.",
-        ].join("\n");
-        return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    function customerEmail(first, submission) {
+        const email =
+            first.email ||
+            submission.payload?.Email ||
+            submission.payload?.email ||
+            "";
+        return email && email !== "—" ? email : "";
+    }
+
+    function emailStats(submission) {
+        const messages = Array.isArray(submission.email_messages)
+            ? submission.email_messages
+            : [];
+        const orderCount = messages.filter(
+            (message) => message.message_type === "order_notification",
+        ).length;
+        const customCount = messages.filter(
+            (message) => message.message_type === "custom_message",
+        ).length;
+        return { messages, orderCount, customCount, total: messages.length };
+    }
+
+    function renderEmailBadges(submission) {
+        const stats = emailStats(submission);
+        if (!stats.total) return "";
+        return `
+            <span class="badge email-sent">Писем: ${escapeHtml(fmtInt(stats.total))}</span>
+            <span class="badge email-order">Заказ: ${escapeHtml(fmtInt(stats.orderCount))}</span>
+            <span class="badge email-custom">Сообщений: ${escapeHtml(fmtInt(stats.customCount))}</span>`;
+    }
+
+    function renderEmailHistory(submission) {
+        const { messages } = emailStats(submission);
+        if (!messages.length) {
+            return `<details class="details email-history wide"><summary>История писем</summary><div class="empty-state compact">Письма этому клиенту ещё не отправлялись.</div></details>`;
+        }
+        return `<details class="details email-history wide"><summary>История писем · ${escapeHtml(fmtInt(messages.length))}</summary>
+            <div class="email-history-list">
+                ${messages
+                    .map(
+                        (
+                            message,
+                        ) => `<article class="email-history-item ${message.message_type === "order_notification" ? "is-order" : "is-custom"}">
+                            <div class="email-history-head">
+                                <span class="email-history-type">${message.message_type === "order_notification" ? "Уведомление о заказе" : "Письмо администратора"}</span>
+                                <span>${escapeHtml(formatDate(message.created_at))}</span>
+                            </div>
+                            <h4>${escapeHtml(message.subject || "Без темы")}</h4>
+                            <p>${escapeHtml(message.body || "")}</p>
+                        </article>`,
+                    )
+                    .join("")}
+            </div>
+        </details>`;
+    }
+
+    function openEmailModal(button) {
+        const submission = submissions.find(
+            (item) => item.id === button.dataset.submissionId,
+        );
+        if (!submission) return;
+        const rows = orderRows.filter(
+            (row) => row.submissionId === submission.id,
+        );
+        const first = rows[0] || {};
+        const subtotal = rows.reduce((sum, row) => sum + row.itemsSum, 0);
+        const email = customerEmail(first, submission);
+        const modal = document.createElement("div");
+        modal.className = "email-modal-backdrop";
+        modal.innerHTML = `
+            <div class="email-modal" role="dialog" aria-modal="true" aria-label="Отправка письма клиенту">
+                <button class="email-modal-close" type="button" data-email-close>×</button>
+                <div class="email-modal-hero">
+                    <span>Письмо клиенту</span>
+                    <h2>${escapeHtml(first.buyerName || submission.customer_name || "Покупатель")}</h2>
+                    <p>${escapeHtml(email || "Email не найден")}</p>
+                </div>
+                <div class="email-modal-content">
+                    <label class="email-choice"><input type="radio" name="email-mode" value="order_notification" checked> <span><b>Отправить уведомление о заказе</b><small>Письмо с названием магазина, номером заказа, суммой и доставкой.</small></span></label>
+                    <label class="email-choice"><input type="radio" name="email-mode" value="custom_message"> <span><b>Написать письмо</b><small>Вводим тему и текст сообщения.</small></span></label>
+                    <div class="custom-email-fields" hidden>
+                        <label>Тема<input data-email-subject type="text" placeholder="Сообщение по вашему заказу"></label>
+                        <label>Текст<textarea data-email-body rows="7" placeholder="Введите текст письма"></textarea></label>
+                    </div>
+                    <div class="email-preview">
+                        <b>Данные для уведомления</b>
+                        <span>Заказ: ${escapeHtml(first.orderId || submission.id)}</span>
+                        <span>Итого: ${escapeHtml(fmtMoney(first.orderSumTotal || subtotal + (first.deliverySum || 0)))}</span>
+                        <span>Доставка: ${escapeHtml(first.deliveryText || first.deliveryType || "Не указана")}, ${escapeHtml(fmtMoney(first.deliverySum || 0))}</span>
+                    </div>
+                    <div class="email-modal-actions">
+                        <button class="ghost-button" type="button" data-email-close>Отмена</button>
+                        <button class="action-button email-send-button" type="button" data-email-send>Отправить</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.append(modal);
+
+        modal.addEventListener("change", (event) => {
+            if (event.target.name === "email-mode") {
+                modal.querySelector(".custom-email-fields").hidden =
+                    event.target.value !== "custom_message";
+            }
+        });
+        modal.addEventListener("click", async (event) => {
+            if (
+                event.target.closest("[data-email-close]") ||
+                event.target === modal
+            ) {
+                modal.remove();
+                return;
+            }
+            const sendButton = event.target.closest("[data-email-send]");
+            if (!sendButton) return;
+            const mode = modal.querySelector(
+                'input[name="email-mode"]:checked',
+            )?.value;
+            const subject =
+                modal.querySelector("[data-email-subject]")?.value || "";
+            const body = modal.querySelector("[data-email-body]")?.value || "";
+            if (!email) {
+                window.alert("У этой заявки нет email клиента.");
+                return;
+            }
+            if (mode === "custom_message" && !body.trim()) {
+                window.alert("Введите текст письма.");
+                return;
+            }
+            sendButton.setAttribute("aria-busy", "true");
+            sendButton.textContent = "Отправляем...";
+            try {
+                const params = new URLSearchParams();
+                if (secret) params.set("secret", secret);
+                const response = await fetch(
+                    `/tilda/${encodeURIComponent(siteName)}/form/email/send?${params}`,
+                    {
+                        method: "POST",
+                        headers: {
+                            Accept: "application/json",
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            submission_id: submission.id,
+                            message_type: mode,
+                            to_email: email,
+                            customer_name:
+                                first.buyerName ||
+                                submission.customer_name ||
+                                "",
+                            order_id: first.orderId || submission.id,
+                            order_sum: fmtMoney(
+                                first.orderSumTotal ||
+                                    subtotal + (first.deliverySum || 0),
+                            ),
+                            delivery_sum: fmtMoney(first.deliverySum || 0),
+                            delivery_text:
+                                first.deliveryText ||
+                                first.deliveryType ||
+                                "Доставка не указана",
+                            custom_subject: subject,
+                            custom_body: body,
+                        }),
+                    },
+                );
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.ok)
+                    throw new Error(
+                        data.detail || data.error || `HTTP ${response.status}`,
+                    );
+                modal.remove();
+                await loadSubmissions();
+            } catch (error) {
+                window.alert(`Не удалось отправить письмо: ${error.message}`);
+                sendButton.removeAttribute("aria-busy");
+                sendButton.textContent = "Отправить";
+            }
+        });
     }
 
     async function changeCdekImNumber(button) {
@@ -891,7 +1056,7 @@
         const title =
             first.buyerName || submission.customer_name || "Без имени";
 
-        const emailHref = customerEmailHref(first, submission);
+        const email = customerEmail(first, submission);
         const orderId = first.orderId || "";
         const imNumber = first.imNumber || orderId;
         const isCustomImNumber = Boolean(
@@ -911,9 +1076,11 @@
                                 <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
                                 <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
+                                ${renderEmailBadges(submission)}
                             </div>
                         </div>
                         <span class="submission-actions">
+                            ${email ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
                             ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
                             <span class="toggle-hint">Подробнее</span>
                         </span>
@@ -923,6 +1090,7 @@
                         ${renderPaymentSection(rows)}
                         <section class="pretty-section wide"><h3>Товары</h3>${renderProductsTable(rows)}</section>
                         ${renderExtraFields(submission.payload)}
+                        ${renderEmailHistory(submission)}
                         <details class="details wide"><summary>Технические данные</summary><pre>${escapeHtml(raw)}</pre></details>
                     </div>
                 </details>
@@ -1129,8 +1297,12 @@
         const actionButton = event.target.closest(".action-button");
         if (!actionButton) return;
         event.stopPropagation();
+        event.preventDefault();
+        if (actionButton.matches("[data-email-modal]")) {
+            openEmailModal(actionButton);
+            return;
+        }
         if (actionButton.matches("[data-change-im-number]")) {
-            event.preventDefault();
             changeCdekImNumber(actionButton);
         }
     });

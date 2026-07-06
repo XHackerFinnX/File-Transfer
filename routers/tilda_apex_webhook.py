@@ -1,3 +1,4 @@
+import html
 import json
 import re
 import uuid
@@ -14,12 +15,14 @@ from pydantic import BaseModel
 from config import config
 from db.tilda_orders import (
     read_tilda_submissions,
+    save_tilda_email_message,
     save_tilda_submission,
     update_tilda_submission_im_number,
 )
 from services.tilda_cdek import (
     cdek_get_token,
     find_cdek_order,
+    send_customer_email,
     update_cdek_order_number,
 )
 
@@ -40,6 +43,19 @@ class CdekImNumberUpdateRequest(BaseModel):
     order_uuid: str | None = None
     submission_id: str | None = None
 
+
+class TildaEmailSendRequest(BaseModel):
+    submission_id: str
+    message_type: str
+    to_email: str
+    customer_name: str | None = None
+    order_id: str | None = None
+    order_sum: str | None = None
+    delivery_sum: str | None = None
+    delivery_text: str | None = None
+    custom_subject: str | None = None
+    custom_body: str | None = None
+    
 
 def _project_config_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """Build project -> secret/database/CDEK maps from TILDA_PROJECTS_JSON.
@@ -172,6 +188,7 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "client": submission.get("client", {}),
         "headers": submission.get("headers", {}),
         "im_number": str(submission.get("im_number") or ""),
+        "email_messages": submission.get("email_messages") or [],
     }
 
 
@@ -259,6 +276,62 @@ async def _read_submissions(name: str) -> list[dict[str, Any]]:
     return [_submission_summary(submission) for submission in submissions]
 
 
+def _build_order_email(
+    payload: TildaEmailSendRequest, site_name: str
+) -> tuple[str, str, str]:
+    customer_name = (payload.customer_name or "покупатель").strip() or "покупатель"
+    order_id = (payload.order_id or payload.submission_id).strip()
+    order_sum = (payload.order_sum or "—").strip()
+    delivery_sum = (payload.delivery_sum or "—").strip()
+    delivery_text = (payload.delivery_text or "Доставка не указана").strip()
+    shop_name = site_name.replace("_", " ").replace("-", " ").title()
+    subject = f"Ваш заказ №{order_id} оформлен в магазине {shop_name}"
+    body = (
+        f"Здравствуйте, {customer_name}!\n\n"
+        f"Вы оформили заказ №{order_id} в магазине {shop_name}.\n"
+        f"Сумма заказа: {order_sum}.\n"
+        f"Доставка: {delivery_text}. Стоимость доставки: {delivery_sum}.\n\n"
+        "Мы уже получили вашу заявку и скоро свяжемся с вами по деталям отправки."
+    )
+    safe_customer = html.escape(customer_name)
+    safe_order = html.escape(order_id)
+    safe_shop = html.escape(shop_name)
+    safe_order_sum = html.escape(order_sum)
+    safe_delivery_sum = html.escape(delivery_sum)
+    safe_delivery_text = html.escape(delivery_text)
+    body_html = f"""
+    <div style="margin:0;padding:24px;background:#f6f7fb;font-family:Arial,sans-serif;color:#14171f;">
+      <div style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:22px;overflow:hidden;border:1px solid #e7e9f0;">
+        <div style="padding:28px;background:linear-gradient(135deg,#111827,#2f3a4f);color:#ffffff;">
+          <div style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;opacity:.75;">{safe_shop}</div>
+          <h1 style="margin:10px 0 0;font-size:26px;line-height:1.25;">Заказ успешно оформлен</h1>
+        </div>
+        <div style="padding:28px;">
+          <p style="font-size:17px;line-height:1.6;margin:0 0 18px;">Здравствуйте, <b>{safe_customer}</b>!</p>
+          <p style="font-size:16px;line-height:1.6;margin:0 0 22px;">Мы получили ваш заказ <b>№{safe_order}</b> и уже готовим его к обработке.</p>
+          <div style="display:grid;gap:12px;margin:22px 0;">
+            <div style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e5e7eb;"><span style="color:#64748b;">Сумма заказа</span><br><b style="font-size:18px;">{safe_order_sum}</b></div>
+            <div style="padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #e5e7eb;"><span style="color:#64748b;">Доставка</span><br><b>{safe_delivery_text}</b><br><span>{safe_delivery_sum}</span></div>
+          </div>
+          <p style="font-size:15px;line-height:1.6;color:#475569;margin:0;">Скоро мы пришлём дополнительную информацию по сборке и отправке заказа.</p>
+        </div>
+      </div>
+    </div>
+    """
+    return subject, body, body_html
+
+
+def _build_custom_email(payload: TildaEmailSendRequest) -> tuple[str, str, str]:
+    subject = (payload.custom_subject or "Сообщение по вашему заказу").strip()
+    body = (payload.custom_body or "").strip()
+    body_html = (
+        '<div style="font-family:Arial,sans-serif;line-height:1.6;color:#14171f;">'
+        + html.escape(body).replace("\n", "<br>")
+        + "</div>"
+    )
+    return subject, body, body_html
+
+
 @router.options("/tilda/{name}/webhook")
 async def tilda_webhook_options(name: str):
     _site_name_or_404(name)
@@ -307,6 +380,62 @@ async def tilda_form_submissions(name: str, request: Request):
             "submissions": await _read_submissions(site_name),
         }
     )
+
+
+@router.post("/tilda/{name}/form/email/send")
+async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendRequest):
+    site_name = _site_name_or_404(name)
+    _form_secret_or_403(site_name, request)
+
+    submission_id = payload.submission_id.strip()
+    to_email = payload.to_email.strip().lower()
+    message_type = payload.message_type.strip()
+    if not submission_id:
+        return JSONResponse(
+            {"ok": False, "error": "submission_id_required"}, status_code=400
+        )
+    if not to_email or "@" not in to_email:
+        return JSONResponse(
+            {"ok": False, "error": "valid_email_required"}, status_code=400
+        )
+    if message_type == "order_notification":
+        subject, body, body_html = _build_order_email(payload, site_name)
+    elif message_type == "custom_message":
+        subject, body, body_html = _build_custom_email(payload)
+        if not body:
+            return JSONResponse(
+                {"ok": False, "error": "custom_body_required"}, status_code=400
+            )
+    else:
+        return JSONResponse(
+            {"ok": False, "error": "unknown_message_type"}, status_code=400
+        )
+
+    try:
+        send_customer_email(to_email, subject, body, body_html)
+        message = await save_tilda_email_message(
+            _database_target_or_404(site_name),
+            {
+                "id": f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}",
+                "submission_id": submission_id,
+                "site": site_name,
+                "created_at": _now_utc().isoformat(),
+                "message_type": message_type,
+                "to_email": to_email,
+                "subject": subject,
+                "body": body,
+                "body_html": body_html,
+                "status": "sent",
+            },
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": "email_send_failed", "detail": str(exc)},
+            status_code=502,
+        )
+
+    return JSONResponse({"ok": True, "site": site_name, "message": message})
+
     
 @router.post("/tilda/{name}/form/cdek/im-number")
 async def tilda_update_cdek_im_number(

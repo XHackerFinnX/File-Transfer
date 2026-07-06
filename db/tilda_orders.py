@@ -7,7 +7,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from db.connections import get_pool
-from db.schemas import TILDA_SUBMISSIONS_TABLE
+from db.schemas import TILDA_EMAIL_MESSAGES_TABLE, TILDA_SUBMISSIONS_TABLE
 
 
 def _extract_order_id(payload: dict[str, Any]) -> str:
@@ -78,7 +78,35 @@ def _read_tilda_submissions(
     limit: int,
 ) -> list[dict[str, Any]]:
     query = f"""
-        SELECT id, site, created_at, payload_type, payload, cookies, client, headers, im_number
+        SELECT
+            id,
+            site,
+            created_at,
+            payload_type,
+            payload,
+            cookies,
+            client,
+            headers,
+            im_number,
+            COALESCE(
+                (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            'id', messages.id,
+                            'created_at', messages.created_at,
+                            'message_type', messages.message_type,
+                            'to_email', messages.to_email,
+                            'subject', messages.subject,
+                            'body', messages.body,
+                            'status', messages.status
+                        )
+                        ORDER BY messages.created_at DESC
+                    )
+                    FROM {TILDA_EMAIL_MESSAGES_TABLE} AS messages
+                    WHERE messages.submission_id = {TILDA_SUBMISSIONS_TABLE}.id
+                ),
+                '[]'::jsonb
+            ) AS email_messages
         FROM {TILDA_SUBMISSIONS_TABLE}
         WHERE site = %(site)s
         ORDER BY created_at DESC
@@ -97,6 +125,11 @@ def _read_tilda_submissions(
         created_at = row.get("created_at")
         if isinstance(created_at, datetime):
             row["created_at"] = created_at.isoformat()
+        email_messages = row.get("email_messages") or []
+        for message in email_messages:
+            message_created_at = message.get("created_at")
+            if isinstance(message_created_at, datetime):
+                message["created_at"] = message_created_at.isoformat()
         submissions.append(dict(row))
     return submissions
 
@@ -161,3 +194,32 @@ async def update_tilda_submission_im_number(
         order_id,
         im_number,
     )
+    
+def _save_tilda_email_message(
+    database_name: str, message: dict[str, Any]
+) -> dict[str, Any]:
+    query = f"""
+        INSERT INTO {TILDA_EMAIL_MESSAGES_TABLE} (
+            id, submission_id, site, created_at, message_type, to_email, subject, body, body_html, status
+        ) VALUES (
+            %(id)s, %(submission_id)s, %(site)s, %(created_at)s, %(message_type)s,
+            %(to_email)s, %(subject)s, %(body)s, %(body_html)s, %(status)s
+        )
+        RETURNING id, submission_id, site, created_at, message_type, to_email, subject, body, status
+    """
+
+    def execute_insert(conn):
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, message)
+            return cur.fetchone()
+
+    row = _with_database_retry(database_name, execute_insert)
+    if isinstance(row.get("created_at"), datetime):
+        row["created_at"] = row["created_at"].isoformat()
+    return dict(row)
+
+
+async def save_tilda_email_message(
+    database_name: str, message: dict[str, Any]
+) -> dict[str, Any]:
+    return await asyncio.to_thread(_save_tilda_email_message, database_name, message)

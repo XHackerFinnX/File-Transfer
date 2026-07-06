@@ -21,6 +21,7 @@ import os
 import re
 import smtplib
 import time
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -34,11 +35,11 @@ CDEK_TARIFF_CODE = 136
 DEFAULT_ITEM_WEIGHT_GRAMS = 700
 CDEK_ORDER_NUMBER_PREFIX = ""
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.example.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "shop@example.com")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "пароль_или_api_key")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
+SMTP_HOST = "smtp.yandex.com"
+SMTP_PORT = 587
+SMTP_USER = "Sewingnn.notification@yandex.ru"
+SMTP_PASSWORD = config.SMTP_PASSWORD.get_secret_value()
+SMTP_FROM = "Sewingnn.notification@yandex.ru"
 
 
 def _configured_cdek_accounts() -> dict[str, dict[str, Any]]:
@@ -160,7 +161,9 @@ def build_cdek_order_payload(
 ) -> dict[str, Any]:
     """Map the Tilda/Tinkoff payment webhook into POST /v2/orders payload."""
     payment = _payment(webhook_data)
-    products = payment.get("products") if isinstance(payment.get("products"), list) else []
+    products = (
+        payment.get("products") if isinstance(payment.get("products"), list) else []
+    )
     items = [
         {
             "name": build_item_name(product),
@@ -175,19 +178,26 @@ def build_cdek_order_payload(
 
     return {
         "type": 1,
-        "number": cdek_order_number(payment.get("orderid") or payment.get("order_id") or ""),
+        "number": cdek_order_number(
+            payment.get("orderid") or payment.get("order_id") or ""
+        ),
         "tariff_code": CDEK_TARIFF_CODE,
         "delivery_point": payment.get("delivery_pickup_id"),
         "from_location": cdek_sender_location(account_name),
         "recipient": {
-            "name": webhook_data.get("customer_name") or payment.get("delivery_fio") or "",
-            "phones": [{"number": normalize_phone(str(webhook_data.get("contact") or ""))}],
+            "name": webhook_data.get("customer_name")
+            or payment.get("delivery_fio")
+            or "",
+            "phones": [
+                {"number": normalize_phone(str(webhook_data.get("contact") or ""))}
+            ],
             "email": webhook_data.get("payload", {}).get("Email"),
         },
         "packages": [
             {
                 "number": "1",
-                "weight": sum(item["weight"] * item["amount"] for item in items) or DEFAULT_ITEM_WEIGHT_GRAMS,
+                "weight": sum(item["weight"] * item["amount"] for item in items)
+                or DEFAULT_ITEM_WEIGHT_GRAMS,
                 "items": items,
             }
         ],
@@ -232,7 +242,9 @@ def update_cdek_order_number(uuid: str, new_number: str, token: str) -> str:
     return update_cdek_order({"uuid": uuid, "number": new_number}, token)
 
 
-def find_cdek_order(identifier: str, token: str, by: str = "im_number") -> dict[str, Any]:
+def find_cdek_order(
+    identifier: str, token: str, by: str = "im_number"
+) -> dict[str, Any]:
     """Find an already registered CDEK order by shop number or CDEK number."""
     response = requests.get(
         f"{CDEK_BASE_URL}/orders",
@@ -256,7 +268,10 @@ def print_barcodes_for_orders(
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.post(
         f"{CDEK_BASE_URL}/print/barcodes",
-        json={"orders": [_as_print_order(item) for item in order_identifiers], "format": "A6"},
+        json={
+            "orders": [_as_print_order(item) for item in order_identifiers],
+            "format": "A6",
+        },
         headers=headers,
         timeout=30,
     )
@@ -266,7 +281,9 @@ def print_barcodes_for_orders(
     deadline = time.time() + timeout
     while time.time() < deadline:
         info_response = requests.get(
-            f"{CDEK_BASE_URL}/print/barcodes/{barcode_uuid}", headers=headers, timeout=20
+            f"{CDEK_BASE_URL}/print/barcodes/{barcode_uuid}",
+            headers=headers,
+            timeout=20,
         )
         info_response.raise_for_status()
         url = info_response.json().get("entity", {}).get("url")
@@ -276,18 +293,23 @@ def print_barcodes_for_orders(
     raise TimeoutError("CDEK barcode PDF was not ready before timeout")
 
 
-def send_order_accepted_email(to_email: str, customer_name: str, order_number: str) -> None:
-    """Send the customer-facing accepted-order email through the shop SMTP."""
+def send_customer_email(
+    to_email: str,
+    subject: str,
+    body_text: str,
+    body_html: str | None = None,
+) -> None:
+    """Send a customer-facing email through the shop SMTP."""
     if not to_email:
         return
 
-    message = MIMEText(
-        f"Здравствуйте, {customer_name}!\n\n"
-        f"Ваш заказ №{order_number} принят и готовится к отправке.\n"
-        f"Трек-номер СДЭК пришлём отдельным письмом.",
-        _charset="utf-8",
-    )
-    message["Subject"] = f"Заказ №{order_number} принят"
+    if body_html:
+        message = MIMEMultipart("alternative")
+        message.attach(MIMEText(body_text, "plain", _charset="utf-8"))
+        message.attach(MIMEText(body_html, "html", _charset="utf-8"))
+    else:
+        message = MIMEText(body_text, _charset="utf-8")
+    message["Subject"] = subject
     message["From"] = SMTP_FROM
     message["To"] = to_email
 
@@ -295,3 +317,16 @@ def send_order_accepted_email(to_email: str, customer_name: str, order_number: s
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(message)
+        
+
+def send_order_accepted_email(
+    to_email: str, customer_name: str, order_number: str
+) -> None:
+    """Send the customer-facing accepted-order email through the shop SMTP."""
+    send_customer_email(
+        to_email,
+        f"Заказ №{order_number} принят",
+        f"Здравствуйте, {customer_name}!\n\n"
+        f"Ваш заказ №{order_number} принят и готовится к отправке.\n"
+        f"Трек-номер СДЭК пришлём отдельным письмом.",
+    )

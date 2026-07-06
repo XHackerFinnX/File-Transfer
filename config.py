@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     TILDA_REAL_BABY_DATABASE_TARGET: str = "real_baby"
     POSTGRESQL_SSLMODE: str = "disable"
     
+    SMTP_PASSWORD: SecretStr
+    
     POSTGRESQL_DATABASES_JSON: str = ""
     CDEK_ACCOUNTS_JSON: str = ""
     TILDA_PROJECTS_JSON: str = ""
