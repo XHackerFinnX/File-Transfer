@@ -48,7 +48,7 @@ def _configured_database_targets() -> Mapping[str, DatabaseTarget]:
         raise ValueError("POSTGRESQL_DATABASES_JSON must be a JSON object")
 
     for raw_name, raw_database in raw_targets.items():
-        name = str(raw_name).strip()
+        name = str(raw_name).strip().lower()
         database = str(raw_database).strip()
         if not name:
             raise ValueError("Database target name must not be empty")
@@ -64,8 +64,9 @@ _pools: dict[str, ConnectionPool] = {}
 
 
 def get_database_target(name: str) -> DatabaseTarget:
+    normalized_name = name.strip().lower()
     try:
-        return DATABASE_TARGETS[name]
+        return DATABASE_TARGETS[normalized_name]
     except KeyError as exc:
         available = ", ".join(sorted(DATABASE_TARGETS))
         raise ValueError(
