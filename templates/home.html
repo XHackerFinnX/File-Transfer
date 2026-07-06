@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="theme-color" content="#0a0a0f" />
+        <meta name="yandex-verification" content="7dc2a7a6a28ded74" />
+        <title>2P2P — P2P чат</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                --bg: #0a0a0f;
+                --card: rgba(15, 23, 42, 0.78);
+                --text: #f8fafc;
+                --muted: #94a3b8;
+                --accent: #3b82f6;
+                --accent-hover: #2563eb;
+                --border: rgba(148, 163, 184, 0.18);
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                min-height: 100vh;
+                margin: 0;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                font-family:
+                    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                    "Segoe UI", sans-serif;
+                background:
+                    radial-gradient(circle at top, rgba(59, 130, 246, 0.22), transparent 34rem),
+                    linear-gradient(135deg, #020617 0%, var(--bg) 100%);
+                color: var(--text);
+            }
+
+            main {
+                width: min(100%, 420px);
+                padding: 40px 28px;
+                border: 1px solid var(--border);
+                border-radius: 28px;
+                background: var(--card);
+                box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+                text-align: center;
+                backdrop-filter: blur(18px);
+            }
+
+            h1 {
+                margin: 0 0 12px;
+                font-size: clamp(2.25rem, 10vw, 4rem);
+                line-height: 1;
+                letter-spacing: -0.06em;
+            }
+
+            p {
+                margin: 0 0 32px;
+                color: var(--muted);
+                font-size: 1rem;
+                line-height: 1.6;
+            }
+
+            a {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 100%;
+                min-height: 56px;
+                border-radius: 16px;
+                background: var(--accent);
+                color: #ffffff;
+                font-size: 1.05rem;
+                font-weight: 700;
+                text-decoration: none;
+                box-shadow: 0 16px 36px rgba(59, 130, 246, 0.32);
+                transition:
+                    transform 160ms ease,
+                    background 160ms ease,
+                    box-shadow 160ms ease;
+            }
+
+            a:hover,
+            a:focus-visible {
+                background: var(--accent-hover);
+                box-shadow: 0 18px 44px rgba(37, 99, 235, 0.4);
+                transform: translateY(-1px);
+                outline: none;
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>2P2P</h1>
+            <p>Быстрый переход в P2P чат для общения и передачи файлов.</p>
+            <a href="/chat/">Перейти в чат</a>
+        </main>
+    </body>
+</html>

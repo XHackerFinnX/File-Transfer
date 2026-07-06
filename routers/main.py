@@ -4,11 +4,13 @@ import time
 import base64
 from collections import defaultdict, deque
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 from config import config
 from security import get_request_client_ip
 
 router = APIRouter()
+templates = Jinja2Templates(directory="templates")
 
 # TURN конфигурация
 TURN_SECRET = config.TURN_SECRET.get_secret_value()
@@ -65,10 +67,10 @@ async def get_turn_credentials(request: Request):
         print(f"[TURN] Ошибка генерации учетных данных: {e}")
         raise HTTPException(status_code=500, detail="Ошибка генерации учетных данных TURN")
 
-@router.get("/")
-async def redirect_to_chat():
-    """Главная страница перенаправляет в чат без циклических редиректов"""
-    return RedirectResponse(url="/chat", status_code=302)
+@router.get("/", response_class=HTMLResponse)
+async def serve_home(request: Request):
+    """Главная страница с переходом в чат."""
+    return templates.TemplateResponse(request, "home.html")
 
 @router.get("/favicon.ico", include_in_schema=False)
 async def favicon():
