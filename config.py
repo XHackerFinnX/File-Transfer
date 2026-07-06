@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     POSTGRESQL_PASSWORD: SecretStr
     POSTGRESQL_DATABASE_APEX: str
     POSTGRESQL_DATABASE_REAL_BABY: str
+    TILDA_APEX_DATABASE_TARGET: str = "apex"
+    TILDA_REAL_BABY_DATABASE_TARGET: str = "real_baby"
     POSTGRESQL_SSLMODE: str = "disable"
     
     POSTGRESQL_DATABASES_JSON: str = ""

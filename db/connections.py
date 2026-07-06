@@ -31,7 +31,11 @@ class DatabaseTarget:
 
 def _configured_database_targets() -> Mapping[str, DatabaseTarget]:
     targets: dict[str, DatabaseTarget] = {
-        "default": DatabaseTarget(name="default", database=config.POSTGRESQL_DATABASE)
+        "default": DatabaseTarget(name="default", database=config.POSTGRESQL_DATABASE),
+        "apex": DatabaseTarget(name="apex", database=config.POSTGRESQL_DATABASE_APEX),
+        "real_baby": DatabaseTarget(
+            name="real_baby", database=config.POSTGRESQL_DATABASE_REAL_BABY
+        ),
     }
     if not config.POSTGRESQL_DATABASES_JSON.strip():
         return targets
