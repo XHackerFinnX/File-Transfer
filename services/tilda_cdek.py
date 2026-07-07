@@ -37,9 +37,9 @@ CDEK_ORDER_NUMBER_PREFIX = ""
 
 SMTP_HOST = "smtp.yandex.com"
 SMTP_PORT = 587
-SMTP_USER = "Sewingnn.notification@yandex.ru"
+SMTP_USER = "sewingnn.notification@2p2p.ru"
 SMTP_PASSWORD = config.SMTP_PASSWORD.get_secret_value()
-SMTP_FROM = "Sewingnn.notification@yandex.ru"
+SMTP_FROM = "sewingnn.notification@2p2p.ru"
 
 
 def _configured_cdek_accounts() -> dict[str, dict[str, Any]]:
