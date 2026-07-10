@@ -6,6 +6,7 @@ const CHAT_TAB_STORAGE_KEY = "p2p_chat_tab_id";
 let mobileFilePickerOpen = false;
 let wsReconnectTimer = null;
 let wsReconnectAttempt = 0;
+const pendingWsMessages = [];
 let wsGeneration = 0;
 let manualWsClose = false;
 let wsConnecting = false;
@@ -42,16 +43,20 @@ function scheduleWebSocketReconnect(closeCode) {
 window.closeChatWebSocket = function () {
     manualWsClose = true;
     clearTimeout(wsReconnectTimer);
-    if (ws && ws.readyState !== WebSocket.CLOSED) ws.close(1000, "manual close");
+    if (ws && ws.readyState !== WebSocket.CLOSED)
+        ws.close(1000, "manual close");
 };
 
 function getChatSessionId() {
-    let sessionId = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+    // Privacy-first: keep the anonymous room identity only inside this browser tab/session.
+    // This still survives refreshes, but it is not a long-lived tracking identifier.
+    let sessionId = sessionStorage.getItem(CHAT_SESSION_STORAGE_KEY);
     if (!sessionId) {
         sessionId = crypto.randomUUID
             ? crypto.randomUUID()
             : `${Date.now()}-${Math.random()}`;
-        localStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+        sessionStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+        localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
     }
     return sessionId;
 }
@@ -85,12 +90,49 @@ function setChatScreen(screen, text = "") {
 
 window.setChatScreen = setChatScreen;
 
+function setNetworkStatus(state, text) {
+    const status = document.getElementById("networkStatus");
+    const bar = document.getElementById("chatNetworkBar");
+    const barText = document.getElementById("chatNetworkText");
+    [status, bar].forEach((el) => {
+        if (!el) return;
+        el.classList.remove("connecting", "offline", "relay");
+        if (state) el.classList.add(state);
+    });
+    if (status) status.textContent = text;
+    if (barText) barText.textContent = text;
+}
+
+function sendWsMessage(type, data = {}, { queue = true } = {}) {
+    const message = { type, data };
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(message));
+        return true;
+    }
+    if (queue) {
+        pendingWsMessages.push(message);
+        setNetworkStatus(
+            "offline",
+            "Сеть нестабильна — действие отправится автоматически",
+        );
+    }
+    return false;
+}
+
+function flushPendingWsMessages() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    while (pendingWsMessages.length) {
+        ws.send(JSON.stringify(pendingWsMessages.shift()));
+    }
+}
+
 function connectWebSocket() {
     if (wsConnecting || (ws && ws.readyState === WebSocket.OPEN)) return;
     if (ws && ws.readyState === WebSocket.CONNECTING) return;
 
     manualWsClose = false;
     wsConnecting = true;
+    setNetworkStatus("connecting", "Подключаем защищённый сигналинг...");
     const generation = ++wsGeneration;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const sessionId = encodeURIComponent(getChatSessionId());
@@ -105,6 +147,11 @@ function connectWebSocket() {
         wsConnecting = false;
         wsReconnectAttempt = 0;
         clearTimeout(wsReconnectTimer);
+        setNetworkStatus(
+            "",
+            "Сигналинг онлайн • маршрут подбирается автоматически",
+        );
+        flushPendingWsMessages();
         if (typeof window.onChatSignalingRestored === "function") {
             window.onChatSignalingRestored();
         }
@@ -129,7 +176,11 @@ function connectWebSocket() {
             manualWsClose = true;
             clearTimeout(wsReconnectTimer);
             alert("Эта сессия чата открыта в другой вкладке.");
-            try { ws.close(1000, "session taken over"); } catch (err) { console.warn(err); }
+            try {
+                ws.close(1000, "session taken over");
+            } catch (err) {
+                console.warn(err);
+            }
         } else if (msg.type === "session_resumed_in_new_tab") {
             console.log("🔁 Сессия перенесена в текущую вкладку");
         } else if (msg.type === "incoming_request") {
@@ -224,6 +275,12 @@ function connectWebSocket() {
             alert("WebSocket отклонён сервером: origin не разрешён.");
             return;
         }
+        setNetworkStatus(
+            "offline",
+            navigator.onLine
+                ? "Сигналинг восстанавливается..."
+                : "Нет интернета — ждём сеть",
+        );
         scheduleWebSocketReconnect(event.code);
     };
     ws.onerror = (err) => console.error("WebSocket error:", err);
@@ -246,12 +303,7 @@ function showConnectionRequestDialog(fromNickname, fromId) {
 
     function sendResponse(accepted) {
         document.body.removeChild(dialog);
-        ws.send(
-            JSON.stringify({
-                type: "request_response",
-                data: { to: fromId, accepted: accepted },
-            }),
-        );
+        sendWsMessage("request_response", { to: fromId, accepted: accepted });
     }
 
     dialog.querySelector(".btn-dialog-accept").onclick = () =>
@@ -341,20 +393,12 @@ function showConnectionRequestDialog(fromNickname, fromId) {
 
 function setNickname() {
     const nick = document.getElementById("nickname").value.trim();
-    if (ws) {
-        ws.send(
-            JSON.stringify({
-                type: "set_nickname",
-                data: { nickname: nick },
-            }),
-        );
-    }
+    sendWsMessage("set_nickname", { nickname: nick });
 }
 
 function createRoom() {
     const title = document.getElementById("roomTitle").value.trim();
-    if (ws) {
-        ws.send(JSON.stringify({ type: "create_room", data: { title } }));
+    if (sendWsMessage("create_room", { title })) {
         document.getElementById("roomTitle").value = "";
     }
 }
@@ -377,12 +421,7 @@ function connectToUser(targetId, buttonElement) {
     }
 
     pendingRequest = true;
-    ws.send(
-        JSON.stringify({
-            type: "connect_request",
-            data: { target_id: targetId },
-        }),
-    );
+    sendWsMessage("connect_request", { target_id: targetId }, { queue: false });
 
     setTimeout(() => {
         pendingRequest = false;
@@ -461,6 +500,8 @@ window.createRoom = createRoom;
 window.connectToUser = connectToUser;
 window.filterUsers = filterUsers;
 window.renderUsers = renderUsers;
+window.sendWsMessage = sendWsMessage;
+window.setNetworkStatus = setNetworkStatus;
 
 window.exitChat = function () {
     document.querySelectorAll(".btn-connect.loading").forEach((btn) => {
@@ -469,7 +510,7 @@ window.exitChat = function () {
     });
 
     if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "peer_disconnected" }));
+        sendWsMessage("peer_disconnected", {}, { queue: false });
     }
     if (typeof window._exitChatInternal === "function") {
         window._exitChatInternal();
@@ -799,7 +840,8 @@ window.addEventListener("load", () => {
             hideMenus();
     });
     document.getElementById("replyMenuItem").onclick = () => {
-        const canReply = selectedMessage && !selectedMessage.classList.contains("deleted");
+        const canReply =
+            selectedMessage && !selectedMessage.classList.contains("deleted");
         if (canReply && window.replyToMessage)
             window.replyToMessage(selectedMessage.dataset.messageId);
         hideMenus();
@@ -856,4 +898,13 @@ window.addEventListener("load", () => {
         }
         hideMenus();
     };
+});
+
+window.addEventListener("online", () => {
+    setNetworkStatus("connecting", "Интернет вернулся — переподключаемся...");
+    connectWebSocket();
+});
+
+window.addEventListener("offline", () => {
+    setNetworkStatus("offline", "Нет интернета — чат дождётся восстановления");
 });

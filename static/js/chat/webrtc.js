@@ -304,8 +304,14 @@ function announceTransportState(state, isLocal = true) {
 function isCurrentSignal(msg) {
     const data = msg?.data || {};
     if (data.from && peerId && data.from !== peerId) return false;
-    if (data.room_id && currentRoomId && data.room_id !== currentRoomId) return false;
-    if (data.connection_id && currentConnectionId && data.connection_id !== currentConnectionId) return false;
+    if (data.room_id && currentRoomId && data.room_id !== currentRoomId)
+        return false;
+    if (
+        data.connection_id &&
+        currentConnectionId &&
+        data.connection_id !== currentConnectionId
+    )
+        return false;
     return true;
 }
 
@@ -320,13 +326,17 @@ function buildSignalData(extra = {}) {
 }
 
 function sendSignalMessage(type, extra = {}) {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return false;
-    ws.send(JSON.stringify({ type, data: buildSignalData(extra) }));
+    if (!peerId) return false;
+    const payload = buildSignalData(extra);
+    if (window.sendWsMessage) return window.sendWsMessage(type, payload);
+    ws.send(JSON.stringify({ type, data: payload }));
     return true;
 }
 
 function isLocalOfferer() {
-    return Boolean(myClientId && currentOffererId && myClientId === currentOffererId);
+    return Boolean(
+        myClientId && currentOffererId && myClientId === currentOffererId,
+    );
 }
 
 function cleanupPeerConnection() {
@@ -371,7 +381,10 @@ function cleanupPeerConnection() {
     fileChannel = null;
 }
 
-async function restartPeerConnection(reason = "manual_retry", nextIcePolicy = "all") {
+async function restartPeerConnection(
+    reason = "manual_retry",
+    nextIcePolicy = "all",
+) {
     if (!window.currentChatPeer) return;
     icePolicyMode = nextIcePolicy;
     await window.startChat({
@@ -393,12 +406,9 @@ function syncTransportState(reason = "state_update", announce = true) {
     }
     if (!ws || ws.readyState !== WebSocket.OPEN || !peerId) return;
 
-    ws.send(
-        JSON.stringify({
-            type: "transport_state",
-            data: buildSignalData({ reason, state: localTransportState }),
-        }),
-    );
+    const payload = buildSignalData({ reason, state: localTransportState });
+    if (window.sendWsMessage) window.sendWsMessage("transport_state", payload);
+    else ws.send(JSON.stringify({ type: "transport_state", data: payload }));
 }
 
 function showPlanBReadyState(
@@ -413,6 +423,8 @@ function showPlanBReadyState(
         window.setChatScreen("chat");
     }
     updateChatStatus(statusText);
+    if (window.setNetworkStatus)
+        window.setNetworkStatus("relay", `${statusText} • E2E активен`);
 }
 
 function evaluateConnectionReady() {
@@ -432,6 +444,8 @@ function evaluateConnectionReady() {
             window.setChatScreen("chat");
         }
         updateChatStatus("");
+        if (window.setNetworkStatus)
+            window.setNetworkStatus("", "P2P онлайн • E2E активен");
         syncTransportState("p2p_ready");
         if (!connectionReadyShown) {
             addSystemMessage(
@@ -927,7 +941,8 @@ window.startChat = async function (data) {
     peerNickname = data.peer_nickname;
     currentChatRole = data.role || currentChatRole;
     currentRoomId = data.room_id || currentRoomId;
-    currentConnectionId = data.connection_id || currentConnectionId || crypto.randomUUID();
+    currentConnectionId =
+        data.connection_id || currentConnectionId || crypto.randomUUID();
     currentOffererId = data.offerer_id || currentOffererId;
     if (!data.preserveMessages) {
         icePolicyMode = "all";
@@ -956,6 +971,11 @@ window.startChat = async function (data) {
         buildConnectionTimerText("Устанавливаем защищённое соединение..."),
     );
     updateChatStatus("Устанавливается защищённое соединение...");
+    if (window.setNetworkStatus)
+        window.setNetworkStatus(
+            "connecting",
+            "Подбираем P2P/TURN/Plan B маршрут...",
+        );
     syncTransportState("chat_started");
     clearTimeout(planBTimer);
     planBTimer = setTimeout(() => {
@@ -1027,13 +1047,17 @@ window.startChat = async function (data) {
                 console.warn(`❌ ICE failed (попытка ${connectionAttempts})`);
 
                 if (connectionAttempts < MAX_TURN_ATTEMPTS) {
-                    const nextPolicy = icePolicyMode === "relay" ? "all" : "relay";
+                    const nextPolicy =
+                        icePolicyMode === "relay" ? "all" : "relay";
                     console.log(
                         `🔄 Повторная попытка ICE (${nextPolicy}, попытка ${connectionAttempts + 1})...`,
                     );
 
                     setTimeout(() => {
-                        void restartPeerConnection("ice_failed_retry", nextPolicy);
+                        void restartPeerConnection(
+                            "ice_failed_retry",
+                            nextPolicy,
+                        );
                     }, 1000);
 
                     return;
@@ -2473,7 +2497,10 @@ function bindMessageGestures() {
             startY = event.touches[0].clientY;
             clearLongPressTimer();
             longPressTimer = setTimeout(() => {
-                if (!activeMessage || activeMessage.classList.contains("deleted"))
+                if (
+                    !activeMessage ||
+                    activeMessage.classList.contains("deleted")
+                )
                     return;
                 activeMessage.dispatchEvent(
                     new MouseEvent("contextmenu", {
@@ -2595,6 +2622,13 @@ function stopReconnectUX() {
     reconnectTimerInterval = null;
     setConnectionOverlayVisible(false);
     updateChatStatus("Соединение восстановлено");
+    if (window.setNetworkStatus)
+        window.setNetworkStatus(
+            planBActive ? "relay" : "",
+            planBActive
+                ? "Plan B онлайн • E2E активен"
+                : "P2P онлайн • E2E активен",
+        );
     addSystemMessage("✅ Соединение восстановлено");
     flushPendingMessages();
     if (outgoingFileQueue.length) processFileQueue();
@@ -2610,7 +2644,10 @@ window.retryPeerConnection = function () {
             return;
         }
         syncTransportState("manual_reconnect_retry");
-        void restartPeerConnection("manual_reconnect_retry", icePolicyMode === "relay" ? "all" : "relay");
+        void restartPeerConnection(
+            "manual_reconnect_retry",
+            icePolicyMode === "relay" ? "all" : "relay",
+        );
     } catch (err) {
         console.warn("[RECONNECT] Retry failed", err);
         activatePlanB();
@@ -2762,7 +2799,7 @@ function renderMessages() {
                 m.from === "me"
                     ? `<span class="message-checks ${m.read ? "read" : "delivered"}">✓✓</span>`
                     : "";
-            return `<div class="message ${m.from}" ${commonAttrs}>${quoteHtml}<span class="message-content">${parsedText}</span><span class="message-time">${m.time} ${edited} ${pending} ${readMark}</span>${reactions}</div>`;
+            return `<div class="message ${m.from}${m.pending ? " pending" : ""}" ${commonAttrs}>${quoteHtml}<span class="message-content">${parsedText}</span><span class="message-time">${m.time} ${edited} ${pending} ${readMark}</span>${reactions}</div>`;
         })
         .join("");
     container.querySelectorAll(".message-reaction").forEach((button) => {
@@ -2817,8 +2854,23 @@ function showTypingIndicator() {
 }
 
 window.handleWebRTCMessage = async function (msg) {
-    if (["offer", "answer", "candidate", "public_key", "public_key_request", "relay_message", "transport_state"].includes(msg.type) && !isCurrentSignal(msg)) {
-        console.warn("[SIGNAL] Игнорируем устаревший/чужой сигнал", msg.type, msg.data);
+    if (
+        [
+            "offer",
+            "answer",
+            "candidate",
+            "public_key",
+            "public_key_request",
+            "relay_message",
+            "transport_state",
+        ].includes(msg.type) &&
+        !isCurrentSignal(msg)
+    ) {
+        console.warn(
+            "[SIGNAL] Игнорируем устаревший/чужой сигнал",
+            msg.type,
+            msg.data,
+        );
         return;
     }
     if (msg.type === "public_key_request" && myKeyPair) {
@@ -3077,7 +3129,8 @@ window.handleWebRTCMessage = async function (msg) {
             window.retryPeerConnection();
         }
     } else if (msg.type === "peer_temporarily_disconnected") {
-        const seconds = msg.data?.reconnect_grace_seconds || MOBILE_RECONNECT_GRACE_SECONDS;
+        const seconds =
+            msg.data?.reconnect_grace_seconds || MOBILE_RECONNECT_GRACE_SECONDS;
         addSystemMessage(`Собеседник временно offline, ждём ${seconds} секунд`);
         startReconnectUX("Собеседник временно offline");
     } else if (msg.type === "peer_disconnect_timeout") {

@@ -112,6 +112,15 @@
                     </div>
                 </div>
 
+                <div class="privacy-strip" aria-live="polite">
+                    <span class="privacy-pill">Без аккаунта</span>
+                    <span class="privacy-pill">E2E ключи</span>
+                    <span class="privacy-pill">Fallback при слабой сети</span>
+                    <span class="network-pill" id="networkStatus"
+                        >Подключаемся...</span
+                    >
+                </div>
+
                 <div class="lobby-content">
                     <div class="input-group">
                         <label class="input-label">Ваш никнейм</label>
@@ -255,14 +264,35 @@
                     <div class="connection-overlay-text">
                         Устанавливаем защищённое соединение...
                     </div>
-                    <button class="connection-retry-btn" type="button" onclick="window.retryPeerConnection && window.retryPeerConnection()">
+                    <button
+                        class="connection-retry-btn"
+                        type="button"
+                        onclick="
+                            window.retryPeerConnection &&
+                                window.retryPeerConnection()
+                        "
+                    >
                         Попробовать переподключиться
                     </button>
                 </div>
 
+                <div
+                    class="chat-network-bar"
+                    id="chatNetworkBar"
+                    aria-live="polite"
+                >
+                    <span id="chatNetworkText"
+                        >Защищённый маршрут подбирается автоматически</span
+                    >
+                </div>
+
                 <div id="messages" class="messages"></div>
 
-                <div id="fileQueuePanel" class="file-queue-panel" aria-live="polite"></div>
+                <div
+                    id="fileQueuePanel"
+                    class="file-queue-panel"
+                    aria-live="polite"
+                ></div>
 
                 <div class="message-input-wrapper">
                     <button class="btn-emoji" id="emojiBtn">
@@ -295,7 +325,12 @@
                             />
                         </svg>
                     </button>
-                    <input type="file" id="fileInput" style="display: none" multiple />
+                    <input
+                        type="file"
+                        id="fileInput"
+                        style="display: none"
+                        multiple
+                    />
 
                     <div class="emoji-picker" id="emojiPicker">
                         <div class="emoji-categories">
