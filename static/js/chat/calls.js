@@ -1,64 +1,110 @@
-// Online voice/video calls for the encrypted chat.
+/*
+ * Production-ready 1-to-1 WebRTC calls for the encrypted chat.
+ * Requires window.currentChatPeer and the existing WebSocket signaling channel.
+ */
 (() => {
-    const defaultIceServers = [
+    "use strict";
+
+    const DEFAULT_STUN_SERVERS = [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
         { urls: "stun:stun.cloudflare.com:3478" },
     ];
 
+    const TURN_ENDPOINTS = ["/turn-credentials", "/chat/turn-credentials"];
+    const CALL_ANSWER_TIMEOUT_MS = 45_000;
+    const CALL_CONNECT_TIMEOUT_MS = 25_000;
+    const MAX_ICE_RESTARTS = 2;
+
     const icons = {
         phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.11 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.63 2.61a2 2 0 0 1-.45 2.11L8.09 9.64a16 16 0 0 0 6.27 6.27l1.2-1.2a2 2 0 0 1 2.11-.45c.84.3 1.71.51 2.61.63A2 2 0 0 1 22 16.92z"/></svg>',
         phoneOff:
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.01 3.01l1.2-1.2a2 2 0 0 1 2.11-.45c.84.3 1.71.51 2.61.63A2 2 0 0 1 21.33 17v3a2 2 0 0 1-2.18 2A19.8 19.8 0 0 1 3.02 5.85 2 2 0 0 1 5 3.67h3a2 2 0 0 1 1.7 1.72c.12.9.33 1.77.63 2.61a2 2 0 0 1-.45 2.11l-1.2 1.2z"/><path d="M22 2 2 22"/></svg>',
-        mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>',
-        camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
-        screen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.7 13.3a16 16 0 0 0 3 3l1.2-1.2a2 2 0 0 1 2.1-.45c.84.3 1.71.51 2.61.63A2 2 0 0 1 21.33 17v3a2 2 0 0 1-2.18 2A19.8 19.8 0 0 1 3.02 5.85 2 2 0 0 1 5 3.67h3a2 2 0 0 1 1.7 1.72c.12.9.33 1.77.63 2.61a2 2 0 0 1-.45 2.11l-1.2 1.2z"/><path d="M22 2 2 22"/></svg>',
+        mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg>',
+        micOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9V5a3 3 0 0 0-5.94-.6M5 10v2a7 7 0 0 0 11.72 5.15M19 10v2a7 7 0 0 1-.33 2.12M12 19v3M2 2l20 20"/></svg>',
+        camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="14" height="14" rx="3"/><path d="m16 10 6-3v10l-6-3z"/></svg>',
+        cameraOff:
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.7 5H5a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h11V10.3M16 10l6-3v10l-4.2-2.1M2 2l20 20"/></svg>',
+        screen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M8 11l4-4 4 4M12 7v7"/></svg>',
         settings:
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1.82 2 2 0 1 1-3.34 0A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1.82-.33 2 2 0 1 1 0-3.34A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1.82 2 2 0 1 1 3.34 0A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.23.38.43.77.6 1.18a1.65 1.65 0 0 0 1.82.33 2 2 0 1 1 0 3.34A1.65 1.65 0 0 0 19.4 15z"/></svg>',
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.33 1.82H9.67A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.82-.33V9.67A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .33-1.82h4A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.18.31.4.65.6 1 .29.5.97.74 1.82.33v4A1.7 1.7 0 0 0 19.4 15z"/></svg>',
+        chevron:
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>',
+        volume: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12"/></svg>',
+        shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
     };
 
     const state = {
         pc: null,
-        localStream: null,
-        remoteStream: null,
-        remoteAudioStream: null,
-        remoteVideoStream: null,
-        screenStream: null,
-        micContext: null,
-        micGain: null,
-        micDestination: null,
-        rawMicStream: null,
         peerId: null,
         peerName: "Собеседник",
         inCall: false,
+        isInitiator: false,
+        phase: "idle",
+        localStream: null,
+        rawMicStream: null,
+        cameraStream: null,
+        screenStream: null,
+        remoteStream: null,
+        remoteAudioStream: null,
+        remoteVideoStream: null,
+        audioContext: null,
+        audioDestination: null,
+        micGain: null,
+        screenGain: null,
+        audioSender: null,
+        videoSender: null,
         micEnabled: true,
         cameraEnabled: false,
         screenEnabled: false,
         noiseSuppression: true,
         micVolume: 1,
+        screenVolume: 0.8,
         speakerVolume: 1,
-        pendingCandidates: [],
-        meters: [],
         selectedMicId: "",
-        selectedSpeakerId: "",
         selectedCameraId: "",
-        audioSender: null,
-        videoSender: null,
+        selectedSpeakerId: "",
+        pendingCandidates: [],
+        pendingSignals: [],
+        preparingPromise: null,
+        turnAvailable: false,
+        turnRelayDetected: false,
+        iceRestartCount: 0,
+        answerTimer: null,
+        connectTimer: null,
+        durationTimer: null,
+        callStartedAt: 0,
+        meters: [],
         deviceChangeHandler: null,
         remoteMeterStarted: false,
+        localMeterStarted: false,
+        audioUnlocked: false,
     };
 
     const $ = (id) => document.getElementById(id);
     const safe = (value) =>
         window.escapeHtml
-            ? window.escapeHtml(value || "")
-            : String(value || "");
+            ? window.escapeHtml(String(value ?? ""))
+            : String(value ?? "").replace(
+                  /[&<>"']/g,
+                  (char) =>
+                      ({
+                          "&": "&amp;",
+                          "<": "&lt;",
+                          ">": "&gt;",
+                          '"': "&quot;",
+                          "'": "&#39;",
+                      })[char],
+              );
     const safeAttr = (value) =>
         window.escapeAttr
-            ? window.escapeAttr(String(value || ""))
-            : safe(value).replace(/"/g, "&quot;");
+            ? window.escapeAttr(String(value ?? ""))
+            : safe(value);
     const initial = (name) =>
-        safe(name).trim().slice(0, 1).toUpperCase() || "?";
+        String(name || "?")
+            .trim()
+            .slice(0, 1)
+            .toUpperCase() || "?";
     const callPeer = () =>
         window.currentChatPeer || {
             id: window.peerId,
@@ -66,240 +112,342 @@
         };
 
     function send(type, data = {}) {
+        const payload = { ...data };
+        if (state.peerId && !payload.to) payload.to = state.peerId;
+        if (typeof window.sendWsMessage === "function") {
+            return window.sendWsMessage(type, payload);
+        }
         if (!window.ws || window.ws.readyState !== WebSocket.OPEN) return false;
-        window.ws.send(JSON.stringify({ type, data }));
+        window.ws.send(JSON.stringify({ type, data: payload }));
         return true;
     }
 
-    function toast(title, text = "", variant = "success") {
+    function toast(title, text = "", variant = "info") {
         const node = document.createElement("div");
-        node.className = `call-toast ${variant}`;
-        node.innerHTML = `<div class="call-toast-title">${safe(title)}</div><div class="call-toast-text">${safe(text)}</div>`;
+        node.className = `call-toast call-toast--${variant}`;
+        node.innerHTML = `
+            <div class="call-toast__icon">${variant === "danger" ? icons.phoneOff : icons.shield}</div>
+            <div class="call-toast__body">
+                <div class="call-toast__title">${safe(title)}</div>
+                ${text ? `<div class="call-toast__text">${safe(text)}</div>` : ""}
+            </div>`;
         document.body.appendChild(node);
-        setTimeout(() => node.remove(), 4200);
+        requestAnimationFrame(() => node.classList.add("is-visible"));
+        setTimeout(() => {
+            node.classList.remove("is-visible");
+            setTimeout(() => node.remove(), 250);
+        }, 4200);
     }
 
     function addChatSystemMessage(text) {
-        if (typeof window.addSystemMessage === "function")
+        if (typeof window.addSystemMessage === "function") {
             window.addSystemMessage(text);
-        else toast("Звонок", text);
+        } else {
+            toast("Звонок", text);
+        }
+    }
+
+    function assertMediaSupport() {
+        if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+            const error = new Error(
+                "Камера и микрофон доступны только по HTTPS или на localhost.",
+            );
+            error.code = "INSECURE_CONTEXT";
+            throw error;
+        }
+        if (typeof RTCPeerConnection === "undefined") {
+            throw new Error("Этот браузер не поддерживает WebRTC.");
+        }
+    }
+
+    function setBodyCallMode(enabled) {
+        document.body.classList.toggle("call-is-open", enabled);
     }
 
     function createIncomingModal(fromName, fromId) {
         document
             .querySelectorAll(".incoming-call-overlay")
-            .forEach((n) => n.remove());
+            .forEach((node) => node.remove());
         const modal = document.createElement("div");
         modal.className = "incoming-call-overlay";
         modal.innerHTML = `
-            <div class="incoming-call-card">
-                <div class="incoming-call-avatar">${initial(fromName)}</div>
-                <div class="incoming-call-kicker">Входящий звонок</div>
-                <div class="incoming-call-name">${safe(fromName)}</div>
-                <div class="incoming-call-text">Хочет созвониться с вами. Ответьте или сбросьте звонок как на телефоне.</div>
+            <div class="incoming-call-card" role="dialog" aria-modal="true" aria-label="Входящий звонок">
+                <div class="incoming-call-card__glow"></div>
+                <div class="incoming-call-card__badge">Входящий звонок</div>
+                <div class="incoming-call-avatar-wrap">
+                    <div class="incoming-call-avatar-ring"></div>
+                    <div class="incoming-call-avatar">${safe(initial(fromName))}</div>
+                </div>
+                <h2 class="incoming-call-name">${safe(fromName)}</h2>
+                <p class="incoming-call-text">Голосовой вызов в защищённом P2P-чате</p>
                 <div class="incoming-call-actions">
-                    <button class="call-round-btn reject" id="callRejectIncoming" title="Сбросить">${icons.phoneOff}</button>
-                    <button class="call-round-btn accept" id="callAcceptIncoming" title="Ответить">${icons.phone}</button>
+                    <button class="incoming-call-action incoming-call-action--reject" id="callRejectIncoming" type="button">
+                        <span>${icons.phoneOff}</span><b>Отклонить</b>
+                    </button>
+                    <button class="incoming-call-action incoming-call-action--accept" id="callAcceptIncoming" type="button">
+                        <span>${icons.phone}</span><b>Ответить</b>
+                    </button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
+
         $("callRejectIncoming").onclick = () => {
             modal.remove();
             send("call_response", { to: fromId, accepted: false });
-            addChatSystemMessage("Вы сбросили входящий звонок.");
+            addChatSystemMessage("Вы отклонили входящий звонок.");
         };
+
         $("callAcceptIncoming").onclick = async () => {
-            modal.remove();
+            const button = $("callAcceptIncoming");
+            button.disabled = true;
+            button.classList.add("is-loading");
             state.peerId = fromId;
-            state.peerName = fromName;
-            await requestInitialMediaPermissions();
-            send("call_response", { to: fromId, accepted: true });
-            await openCall(false);
+            state.peerName = fromName || "Собеседник";
+            state.isInitiator = false;
+            modal.remove();
+            try {
+                await prepareCall({ phase: "connecting" });
+                send("call_response", { to: fromId, accepted: true });
+                await flushPendingSignals();
+            } catch (error) {
+                console.error("[CALL] Unable to accept call", error);
+                send("call_response", { to: fromId, accepted: false });
+                cleanupActiveCall(false);
+                toast("Не удалось ответить", mediaErrorText(error), "danger");
+            }
         };
     }
 
     function renderCallOverlay() {
-        document.querySelectorAll(".call-overlay").forEach((n) => n.remove());
-        const node = document.createElement("div");
+        document
+            .querySelectorAll(".call-overlay")
+            .forEach((node) => node.remove());
+        const node = document.createElement("section");
         node.className = "call-overlay";
         node.id = "callOverlay";
         node.innerHTML = `
+            <div class="call-ambient call-ambient--one"></div>
+            <div class="call-ambient call-ambient--two"></div>
+
             <header class="call-topbar">
-                <div class="call-brand">
+                <div class="call-topbar__identity">
                     <div class="call-brand-mark">${icons.phone}</div>
-                    <div><div class="call-title">Голосовой канал</div><div class="call-subtitle" id="callSubtitle">Защищённый P2P-звонок с ${safe(state.peerName)}</div></div>
+                    <div class="call-topbar__copy">
+                        <div class="call-title">Звонок с ${safe(state.peerName)}</div>
+                        <div class="call-subtitle"><span class="call-secure-dot"></span><span id="callSubtitle">Подготовка защищённого соединения</span></div>
+                    </div>
                 </div>
-                <div class="call-status-pill" id="callStatusPill">Соединяемся...</div>
+                <div class="call-topbar__status">
+                    <span class="call-status-pill" id="callStatusPill">Подключение</span>
+                    <span class="call-duration" id="callDuration">00:00</span>
+                </div>
             </header>
+
             <main class="call-stage">
-                <section class="call-grid">
-                    ${tileHtml("local", "Вы", true)}
+                <div class="call-media-layout">
                     ${tileHtml("remote", state.peerName, false)}
-                </section>
-                <aside class="call-sidepanel" id="callSettingsPanel">
-                    <h3>Настройки звонка</h3>
-                    <section class="call-settings-section">
-                        <h3>Микрофон</h3>
-                        <label class="call-label" for="callMicSelect">Устройство ввода</label>
-                        <select class="call-select" id="callMicSelect"></select>
-                        <div class="call-device-hint" id="callMicPermissionStatus">Разрешение микрофона ещё не запрошено</div>
-                        <label class="call-label" for="callMicVolume">Громкость микрофона: <span id="callMicVolumeText">100%</span></label>
-                        <input class="call-range" id="callMicVolume" type="range" min="0" max="100" value="100">
-                        <div class="call-test-row"><button class="call-mini-btn" id="callRefreshDevices">Обновить устройства</button><button class="call-mini-btn" id="callTestMic">Проверить</button><div class="call-meter"><div class="call-meter-fill" id="callMicMeter"></div></div></div>
-                    </section>
-                    <section class="call-settings-section">
-                        <h3>Динамики</h3>
-                        <label class="call-label" for="callSpeakerSelect">Устройство вывода</label>
-                        <select class="call-select" id="callSpeakerSelect"></select>
-                        <div class="call-device-hint" id="callSpeakerPermissionStatus">Будет использован системный динамик по умолчанию</div>
-                        <label class="call-label" for="callSpeakerVolume">Громкость динамиков: <span id="callSpeakerVolumeText">100%</span></label>
-                        <input class="call-range" id="callSpeakerVolume" type="range" min="0" max="100" value="100">
-                        <div class="call-test-row"><button class="call-mini-btn" id="callPickSpeaker">Выбрать динамик</button><button class="call-mini-btn" id="callTestSpeaker">Проверить динамик</button><div class="call-meter"><div class="call-meter-fill" id="callSpeakerMeter"></div></div></div>
-                    </section>
-                    <section class="call-settings-section">
-                        <label class="call-toggle-line">Шумоподавление <input id="callNoiseSuppression" type="checkbox" checked></label>
-                    </section>
-                    <section class="call-settings-section">
-                        <h3>Камера</h3>
-                        <label class="call-label" for="callCameraSelect">Устройство камеры</label>
-                        <select class="call-select" id="callCameraSelect"></select>
-                        <div class="call-device-hint" id="callCameraPermissionStatus">Разрешение камеры ещё не запрошено</div>
-                        <div class="call-test-row"><button class="call-mini-btn" id="callTestCamera">Проверить камеру</button><div class="call-meter"><div class="call-meter-fill" id="callCameraMeter"></div></div></div>
-                    </section>
+                    ${tileHtml("local", "Вы", true)}
+                    <button class="call-audio-unlock" id="callAudioUnlock" type="button" hidden>
+                        ${icons.volume}<span>Нажмите, чтобы включить звук собеседника</span>
+                    </button>
+                    <div class="call-connection-banner" id="callConnectionBanner">
+                        <span class="call-connection-spinner"></span>
+                        <span id="callConnectionText">Подготавливаем микрофон и сетевой маршрут…</span>
+                    </div>
+                </div>
+
+                <aside class="call-sidepanel" id="callSidepanel" aria-hidden="true">
+                    <div class="call-sidepanel__header">
+                        <div><span>Настройки</span><small>Устройства и качество</small></div>
+                        <button class="call-panel-close" id="callSettingsClose" type="button" aria-label="Закрыть настройки">×</button>
+                    </div>
+                    <div class="call-sidepanel__content">
+                        <section class="call-settings-card">
+                            <div class="call-settings-card__heading"><span class="call-settings-icon">${icons.mic}</span><div><b>Микрофон</b><small id="callMicPermissionStatus">Разрешение ещё не получено</small></div></div>
+                            <label class="call-label" for="callMicSelect">Устройство ввода</label>
+                            <select class="call-select" id="callMicSelect"></select>
+                            <label class="call-range-label" for="callMicVolume"><span>Громкость микрофона</span><b id="callMicVolumeText">100%</b></label>
+                            <input class="call-range" id="callMicVolume" type="range" min="0" max="200" value="100">
+                            <div class="call-meter"><div class="call-meter-fill" id="callMicMeter"></div></div>
+                            <label class="call-switch-row"><span>Шумоподавление</span><input id="callNoiseSuppression" type="checkbox" checked><i></i></label>
+                        </section>
+
+                        <section class="call-settings-card">
+                            <div class="call-settings-card__heading"><span class="call-settings-icon">${icons.volume}</span><div><b>Динамики</b><small id="callSpeakerPermissionStatus">Системное устройство по умолчанию</small></div></div>
+                            <label class="call-label" for="callSpeakerSelect">Устройство вывода</label>
+                            <select class="call-select" id="callSpeakerSelect"></select>
+                            <label class="call-range-label" for="callSpeakerVolume"><span>Громкость</span><b id="callSpeakerVolumeText">100%</b></label>
+                            <input class="call-range" id="callSpeakerVolume" type="range" min="0" max="100" value="100">
+                            <div class="call-settings-actions">
+                                <button class="call-mini-btn" id="callPickSpeaker" type="button">Выбрать</button>
+                                <button class="call-mini-btn" id="callTestSpeaker" type="button">Проверить</button>
+                            </div>
+                        </section>
+
+                        <section class="call-settings-card">
+                            <div class="call-settings-card__heading"><span class="call-settings-icon">${icons.camera}</span><div><b>Камера</b><small id="callCameraPermissionStatus">Камера выключена</small></div></div>
+                            <label class="call-label" for="callCameraSelect">Устройство камеры</label>
+                            <select class="call-select" id="callCameraSelect"></select>
+                            <button class="call-mini-btn call-mini-btn--wide" id="callTestCamera" type="button">Включить и проверить камеру</button>
+                        </section>
+
+                        <section class="call-settings-card call-diagnostics">
+                            <div class="call-settings-card__heading"><span class="call-settings-icon">${icons.shield}</span><div><b>Соединение</b><small id="callTransportText">Определяем маршрут…</small></div></div>
+                            <div class="call-diagnostic-row"><span>WebRTC</span><b id="callWebRtcState">new</b></div>
+                            <div class="call-diagnostic-row"><span>ICE</span><b id="callIceState">new</b></div>
+                            <div class="call-diagnostic-row"><span>TURN</span><b id="callTurnState">проверяется</b></div>
+                            <button class="call-mini-btn call-mini-btn--wide" id="callRefreshDevices" type="button">Обновить устройства</button>
+                        </section>
+                    </div>
                 </aside>
             </main>
+
             <footer class="call-controls">
-                <button class="call-control active" id="callMicToggle" title="Микрофон">${icons.mic}</button>
-                <button class="call-control" id="callCameraToggle" title="Камера">${icons.camera}</button>
-                <button class="call-control" id="callScreenToggle" title="Демонстрация экрана">${icons.screen}</button>
-                <button class="call-control active" id="callSettingsToggle" title="Настройки">${icons.settings}</button>
-                <button class="call-control end" id="callEndButton" title="Сбросить звонок">${icons.phoneOff}</button>
+                ${controlButton("callMicToggle", "active", icons.mic, "Микрофон")}
+                ${controlButton("callCameraToggle", "", icons.cameraOff, "Камера")}
+                ${controlButton("callScreenToggle", "", icons.screen, "Экран")}
+                ${controlButton("callSettingsToggle", "", icons.settings, "Настройки")}
+                ${controlButton("callEndButton", "end", icons.phoneOff, "Завершить")}
             </footer>`;
         document.body.appendChild(node);
+        setBodyCallMode(true);
+    }
+
+    function controlButton(id, className, icon, label) {
+        return `<button class="call-control ${className}" id="${id}" type="button"><span class="call-control__icon">${icon}</span><span class="call-control__label">${label}</span></button>`;
     }
 
     function tileHtml(kind, name, muted) {
-        return `<article class="call-tile" id="${kind}CallTile">
-            <video id="${kind}CallVideo" ${muted ? "muted" : ""} autoplay playsinline class="is-hidden"></video>
+        const isLocal = kind === "local";
+        return `<article class="call-tile call-tile--${kind}" id="${kind}CallTile">
+            <video id="${kind}CallVideo" ${muted ? "muted" : ""} autoplay playsinline class="call-video is-hidden"></video>
             ${kind === "remote" ? '<audio id="remoteCallAudio" autoplay playsinline></audio>' : ""}
-            <div class="call-empty-camera" id="${kind}CallEmpty"><div><div class="call-avatar">${initial(name)}</div><p>Камера выключена</p></div></div>
-            <div class="call-tile-footer"><div><div class="call-person-name">${safe(name)}</div><div class="call-person-state" id="${kind}CallState">${kind === "local" ? "Готов к разговору" : "Ожидаем видео"}</div></div><span>●</span></div>
+            <div class="call-empty-camera" id="${kind}CallEmpty">
+                <div class="call-avatar-orbit"><span></span><span></span><div class="call-avatar">${safe(initial(name))}</div></div>
+                <h3>${safe(name)}</h3>
+                <p>${isLocal ? "Камера выключена" : "Ожидаем подключение медиа"}</p>
+            </div>
+            <div class="call-tile-footer">
+                <div class="call-person-meta"><b>${safe(name)}</b><span id="${kind}CallState">${isLocal ? "Микрофон включён" : "Подключение…"}</span></div>
+                <div class="call-speaking-indicator"><i></i><i></i><i></i></div>
+            </div>
         </article>`;
     }
 
-    async function openCall(isInitiator) {
-        if (state.inCall) return;
-        state.inCall = true;
-        renderCallOverlay();
-        bindControls();
-        await loadDevices();
-        await requestCallMediaPermissions();
-        await loadDevices();
-        await createPeerConnection();
-        subscribeDeviceChanges();
-        if (isInitiator) await createOffer();
-        toast("Звонок начался", `Вы в звонке с ${state.peerName}`);
-    }
-
-    async function setupLocalMedia() {
-        await requestCallMediaPermissions({ requestCamera: false });
-    }
-
-    async function requestInitialMediaPermissions() {
-        try {
-            await requestMicrophonePermission({ attachToCall: false });
-            await requestCameraPermission({ keepTrack: false });
+    async function prepareCall({ phase = "connecting" } = {}) {
+        if (state.preparingPromise) return state.preparingPromise;
+        state.preparingPromise = (async () => {
+            assertMediaSupport();
+            state.inCall = true;
+            state.phase = phase;
+            renderCallOverlay();
+            bindControls();
+            updatePhase(phase);
             await loadDevices();
-        } catch (error) {
-            console.warn(
-                "[CALL] Initial media permission request failed",
-                error,
-            );
-        }
-    }
+            await ensureMicrophone();
+            await loadDevices();
+            await createPeerConnection();
+            subscribeDeviceChanges();
+            startLocalMeter();
+            armConnectTimeout();
+        })();
 
-    async function requestCallMediaPermissions({ requestCamera = true } = {}) {
-        if (!navigator.mediaDevices?.getUserMedia) {
-            const reason = window.isSecureContext
-                ? "Браузер не поддерживает доступ к микрофону/камере."
-                : "Откройте сайт по HTTPS или localhost: браузер блокирует микрофон и камеру на небезопасных страницах.";
-            setDeviceHint("callMicPermissionStatus", reason, true);
-            setDeviceHint("callCameraPermissionStatus", reason, true);
-            toast("Медиа недоступны", reason, "danger");
-            state.localStream = state.localStream || new MediaStream();
-            return;
-        }
-
-        await requestMicrophonePermission({ attachToCall: true });
-        if (requestCamera) await requestCameraPermission({ keepTrack: false });
-        await loadDevices();
-
-        startVolumeMeter(state.localStream, "localCallTile", (speaking) => {
-            send("call_state", {
-                to: state.peerId,
-                speaking,
-                micEnabled: state.micEnabled,
-                cameraEnabled: state.cameraEnabled,
-                screenEnabled: state.screenEnabled,
-            });
-        });
-    }
-
-    async function requestMicrophonePermission({ attachToCall }) {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: audioConstraints(),
-                video: false,
-            });
-            if (attachToCall) {
-                await setLocalAudioStream(stream);
-                if (!state.screenEnabled) updateLocalPreview();
-            } else {
-                stopTracks(stream);
-            }
-            const track = stream.getAudioTracks()[0];
-            rememberSelectedDevice("audioinput", track);
-            setDeviceHint(
-                "callMicPermissionStatus",
-                `Микрофон разрешён: ${track?.label || "системное устройство по умолчанию"}`,
-            );
-        } catch (error) {
-            console.warn("[CALL] Microphone unavailable", error);
-            const text = mediaErrorText(error, "микрофону");
-            setDeviceHint("callMicPermissionStatus", text, true);
-            toast("Микрофон недоступен", text, "danger");
-            if (attachToCall) {
-                const existingVideoTracks =
-                    state.localStream?.getVideoTracks?.() || [];
-                state.localStream = new MediaStream(existingVideoTracks);
-                await replaceTrack("audio", null);
-            }
+            await state.preparingPromise;
+        } finally {
+            state.preparingPromise = null;
         }
     }
 
-    async function requestCameraPermission({ keepTrack }) {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: videoConstraints(),
-                audio: false,
-            });
-            const track = stream.getVideoTracks()[0];
-            rememberSelectedDevice("videoinput", track);
-            setDeviceHint(
-                "callCameraPermissionStatus",
-                `Камера разрешена: ${track?.label || "системное устройство по умолчанию"}`,
-            );
-            if (!keepTrack) stopTracks(stream);
-            return stream;
-        } catch (error) {
-            console.warn("[CALL] Camera unavailable", error);
-            setDeviceHint(
-                "callCameraPermissionStatus",
-                mediaErrorText(error, "камере"),
-                true,
-            );
-            return null;
+    function updatePhase(phase, detail = "") {
+        state.phase = phase;
+        const pill = $("callStatusPill");
+        const subtitle = $("callSubtitle");
+        const banner = $("callConnectionBanner");
+        const text = $("callConnectionText");
+        const phaseData = {
+            ringing: ["Звоним…", "Ожидаем ответ собеседника"],
+            connecting: ["Подключение", "Устанавливаем защищённый медиаканал"],
+            connected: ["В звонке", "Защищённый WebRTC-канал активен"],
+            reconnecting: ["Восстановление", "Перестраиваем сетевой маршрут"],
+            failed: ["Нет связи", "Не удалось установить медиаканал"],
+        };
+        const [label, description] = phaseData[phase] || [
+            "Звонок",
+            "Подготовка соединения",
+        ];
+        if (pill) {
+            pill.textContent = label;
+            pill.dataset.state = phase;
         }
+        if (subtitle) subtitle.textContent = detail || description;
+        if (text) text.textContent = detail || description;
+        if (banner) banner.classList.toggle("is-hidden", phase === "connected");
+    }
+
+    function bindControls() {
+        $("callMicToggle").onclick = toggleMic;
+        $("callCameraToggle").onclick = () => void toggleCamera();
+        $("callScreenToggle").onclick = () => void toggleScreen();
+        $("callSettingsToggle").onclick = toggleSettings;
+        $("callSettingsClose").onclick = closeSettings;
+        $("callEndButton").onclick = () => endCall(true, "Звонок завершён");
+        $("callAudioUnlock").onclick = () => void unlockRemoteAudio();
+
+        $("callMicVolume").oninput = (event) => {
+            state.micVolume = Number(event.target.value) / 100;
+            $("callMicVolumeText").textContent = `${event.target.value}%`;
+            if (state.micGain) state.micGain.gain.value = state.micVolume;
+        };
+        $("callSpeakerVolume").oninput = (event) => {
+            state.speakerVolume = Number(event.target.value) / 100;
+            $("callSpeakerVolumeText").textContent = `${event.target.value}%`;
+            const remoteAudio = $("remoteCallAudio");
+            if (remoteAudio) remoteAudio.volume = state.speakerVolume;
+        };
+        $("callNoiseSuppression").onchange = async (event) => {
+            state.noiseSuppression = event.target.checked;
+            await ensureMicrophone({ force: true });
+        };
+        $("callMicSelect").onchange = async (event) => {
+            state.selectedMicId = event.target.value;
+            await ensureMicrophone({ force: true });
+        };
+        $("callCameraSelect").onchange = async (event) => {
+            state.selectedCameraId = event.target.value;
+            if (state.cameraEnabled) await startCamera({ force: true });
+        };
+        $("callSpeakerSelect").onchange = async (event) => {
+            state.selectedSpeakerId = event.target.value;
+            await setSpeakerSink();
+        };
+        $("callPickSpeaker").onclick = () => void pickSpeakerOutput();
+        $("callTestSpeaker").onclick = testSpeaker;
+        $("callTestCamera").onclick = () => void toggleCamera(true);
+        $("callRefreshDevices").onclick = async () => {
+            await loadDevices();
+            toast(
+                "Устройства обновлены",
+                "Список камер и аудиоустройств перечитан.",
+                "success",
+            );
+        };
+    }
+
+    function toggleSettings() {
+        const panel = $("callSidepanel");
+        if (!panel) return;
+        const open = !panel.classList.contains("is-open");
+        panel.classList.toggle("is-open", open);
+        panel.setAttribute("aria-hidden", String(!open));
+        $("callSettingsToggle")?.classList.toggle("active", open);
+    }
+
+    function closeSettings() {
+        const panel = $("callSidepanel");
+        panel?.classList.remove("is-open");
+        panel?.setAttribute("aria-hidden", "true");
+        $("callSettingsToggle")?.classList.remove("active");
     }
 
     function audioConstraints() {
@@ -309,6 +457,8 @@
             echoCancellation: true,
             noiseSuppression: state.noiseSuppression,
             autoGainControl: true,
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 48_000 },
         };
     }
 
@@ -318,83 +468,404 @@
             deviceId: deviceId ? { exact: deviceId } : undefined,
             width: { ideal: 1280 },
             height: { ideal: 720 },
+            frameRate: { ideal: 30, max: 30 },
         };
     }
 
-    async function setLocalAudioStream(inputStream) {
-        const existingVideoTracks = state.localStream?.getVideoTracks?.() || [];
-        state.localStream?.getAudioTracks?.().forEach((track) => track.stop());
-        stopTracks(state.rawMicStream);
-        state.rawMicStream = inputStream;
-        state.localStream = new MediaStream([
-            ...inputStream.getAudioTracks(),
-            ...existingVideoTracks,
-        ]);
-        state.localStream
-            .getAudioTracks()
-            .forEach((track) => (track.enabled = state.micEnabled));
-        await replaceTrack("audio", state.localStream.getAudioTracks()[0]);
-    }
-
-    function rememberSelectedDevice(kind, track) {
-        const deviceId = track?.getSettings?.().deviceId;
-        if (!deviceId) return;
-        if (kind === "audioinput" && !state.selectedMicId)
-            state.selectedMicId = deviceId;
-        if (kind === "videoinput" && !state.selectedCameraId)
-            state.selectedCameraId = deviceId;
-    }
-
-    function mediaErrorText(error, deviceName) {
-        if (error?.name === "NotAllowedError")
-            return `Доступ к ${deviceName} запрещён. Разрешите доступ в настройках браузера и нажмите «Обновить устройства».`;
-        if (error?.name === "NotFoundError")
-            return `Браузер не нашёл доступное устройство для ${deviceName}.`;
-        if (error?.name === "NotReadableError")
-            return `Устройство для ${deviceName} занято другой программой или недоступно системе.`;
-        return `Не удалось получить доступ к ${deviceName}: ${error?.message || "неизвестная ошибка"}.`;
-    }
-
-    function setDeviceHint(id, text, isError = false) {
-        const node = $(id);
-        if (!node) return;
-        node.textContent = text;
-        node.classList.toggle("danger", isError);
-    }
-
-    async function getCallIceServers() {
+    async function getUserMediaWithFallback(constraints, kind) {
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 3000);
-            const res = await fetch("/turn-credentials", {
-                signal: controller.signal,
-            });
-            clearTimeout(timeoutId);
-            if (!res.ok) throw new Error(`TURN error ${res.status}`);
-            const { username, credential, urls } = await res.json();
-            if (!urls || !username || !credential) {
-                throw new Error("TURN credentials response is incomplete");
-            }
-            return [{ urls, username, credential }, ...defaultIceServers];
+            return await navigator.mediaDevices.getUserMedia(constraints);
         } catch (error) {
-            console.warn("[CALL] TURN unavailable, using STUN only", error);
-            return [...defaultIceServers];
+            if (
+                error?.name === "OverconstrainedError" &&
+                constraints[kind]?.deviceId
+            ) {
+                const fallback = {
+                    ...constraints,
+                    [kind]: { ...constraints[kind], deviceId: undefined },
+                };
+                return navigator.mediaDevices.getUserMedia(fallback);
+            }
+            throw error;
         }
     }
 
+    async function ensureMicrophone({ force = false } = {}) {
+        if (
+            !force &&
+            state.rawMicStream
+                ?.getAudioTracks()
+                .some((track) => track.readyState === "live")
+        ) {
+            return;
+        }
+        try {
+            const stream = await getUserMediaWithFallback(
+                { audio: audioConstraints(), video: false },
+                "audio",
+            );
+            rememberSelectedDevice("audioinput", stream.getAudioTracks()[0]);
+            stopTracks(state.rawMicStream);
+            state.rawMicStream = stream;
+            await rebuildOutgoingAudio();
+            const track = stream.getAudioTracks()[0];
+            setDeviceHint(
+                "callMicPermissionStatus",
+                track?.label || "Микрофон по умолчанию",
+                false,
+            );
+            setLocalStateText(
+                state.micEnabled ? "Микрофон включён" : "Микрофон выключен",
+            );
+        } catch (error) {
+            console.error("[CALL] Microphone unavailable", error);
+            setDeviceHint(
+                "callMicPermissionStatus",
+                mediaErrorText(error, "микрофону"),
+                true,
+            );
+            toast(
+                "Микрофон недоступен",
+                mediaErrorText(error, "микрофону"),
+                "danger",
+            );
+            if (!state.localStream) state.localStream = new MediaStream();
+        }
+    }
+
+    async function rebuildOutgoingAudio() {
+        const rawMicTrack = state.rawMicStream?.getAudioTracks()[0] || null;
+        const screenAudioTrack =
+            state.screenStream?.getAudioTracks()[0] || null;
+        const oldOutgoingTrack = state.localStream?.getAudioTracks()[0] || null;
+
+        if (state.audioContext) {
+            try {
+                await state.audioContext.close();
+            } catch (_) {}
+        }
+        state.audioContext = null;
+        state.audioDestination = null;
+        state.micGain = null;
+        state.screenGain = null;
+
+        let outgoingTrack = rawMicTrack;
+        if (
+            (rawMicTrack || screenAudioTrack) &&
+            (window.AudioContext || window.webkitAudioContext)
+        ) {
+            try {
+                const AudioContextClass =
+                    window.AudioContext || window.webkitAudioContext;
+                const context = new AudioContextClass();
+                await context.resume().catch(() => {});
+                const destination = context.createMediaStreamDestination();
+
+                if (rawMicTrack) {
+                    const micSource = context.createMediaStreamSource(
+                        new MediaStream([rawMicTrack]),
+                    );
+                    const micGain = context.createGain();
+                    micGain.gain.value = state.micEnabled ? state.micVolume : 0;
+                    micSource.connect(micGain).connect(destination);
+                    state.micGain = micGain;
+                }
+                if (screenAudioTrack) {
+                    const screenSource = context.createMediaStreamSource(
+                        new MediaStream([screenAudioTrack]),
+                    );
+                    const screenGain = context.createGain();
+                    screenGain.gain.value = state.screenVolume;
+                    screenSource.connect(screenGain).connect(destination);
+                    state.screenGain = screenGain;
+                }
+
+                state.audioContext = context;
+                state.audioDestination = destination;
+                outgoingTrack =
+                    destination.stream.getAudioTracks()[0] || rawMicTrack;
+            } catch (error) {
+                console.warn(
+                    "[CALL] Audio mixer unavailable; raw microphone will be used",
+                    error,
+                );
+                outgoingTrack = rawMicTrack || screenAudioTrack;
+            }
+        }
+
+        if (!state.localStream) state.localStream = new MediaStream();
+        state.localStream
+            .getAudioTracks()
+            .forEach((track) => state.localStream.removeTrack(track));
+        if (outgoingTrack) {
+            outgoingTrack.enabled =
+                state.micEnabled || Boolean(screenAudioTrack);
+            state.localStream.addTrack(outgoingTrack);
+        }
+        if (
+            oldOutgoingTrack &&
+            oldOutgoingTrack !== rawMicTrack &&
+            oldOutgoingTrack !== outgoingTrack
+        ) {
+            oldOutgoingTrack.stop();
+        }
+        await replaceTrack("audio", outgoingTrack);
+    }
+
+    async function startCamera({ force = false } = {}) {
+        if (
+            !force &&
+            state.cameraStream
+                ?.getVideoTracks()
+                .some((track) => track.readyState === "live")
+        ) {
+            return;
+        }
+        try {
+            const stream = await getUserMediaWithFallback(
+                { video: videoConstraints(), audio: false },
+                "video",
+            );
+            rememberSelectedDevice("videoinput", stream.getVideoTracks()[0]);
+            stopTracks(state.cameraStream);
+            state.cameraStream = stream;
+            state.cameraEnabled = true;
+            if (!state.screenEnabled) {
+                const track = stream.getVideoTracks()[0];
+                await replaceTrack("video", track);
+                setVideo("localCallVideo", new MediaStream([track]), true);
+                setTileVideoState("local", true);
+            }
+            setDeviceHint(
+                "callCameraPermissionStatus",
+                stream.getVideoTracks()[0]?.label || "Камера включена",
+                false,
+            );
+            updateControlVisuals();
+            broadcastState();
+        } catch (error) {
+            state.cameraEnabled = false;
+            updateControlVisuals();
+            setDeviceHint(
+                "callCameraPermissionStatus",
+                mediaErrorText(error, "камере"),
+                true,
+            );
+            toast(
+                "Камера недоступна",
+                mediaErrorText(error, "камере"),
+                "danger",
+            );
+            throw error;
+        }
+    }
+
+    async function stopCamera() {
+        state.cameraEnabled = false;
+        stopTracks(state.cameraStream);
+        state.cameraStream = null;
+        if (!state.screenEnabled) {
+            await replaceTrack("video", null);
+            setTileVideoState("local", false);
+            setLocalStateText(
+                state.micEnabled ? "Микрофон включён" : "Микрофон выключен",
+            );
+        }
+        setDeviceHint("callCameraPermissionStatus", "Камера выключена", false);
+        updateControlVisuals();
+        broadcastState();
+    }
+
+    async function toggleCamera(forceOn = false) {
+        if (forceOn && state.cameraEnabled) return;
+        if (state.cameraEnabled && !forceOn) {
+            await stopCamera();
+            return;
+        }
+        await startCamera({ force: true });
+    }
+
+    async function toggleScreen() {
+        if (state.screenEnabled) {
+            await stopScreenShare();
+            return;
+        }
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+            toast(
+                "Демонстрация недоступна",
+                "Браузер не поддерживает захват экрана.",
+                "danger",
+            );
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    frameRate: { ideal: 30, max: 30 },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                },
+                audio: true,
+                preferCurrentTab: false,
+                selfBrowserSurface: "exclude",
+                surfaceSwitching: "include",
+                systemAudio: "include",
+            });
+            state.screenStream = stream;
+            state.screenEnabled = true;
+            const videoTrack = stream.getVideoTracks()[0];
+            videoTrack.onended = () =>
+                void stopScreenShare({ fromEnded: true });
+            await replaceTrack("video", videoTrack);
+            await rebuildOutgoingAudio();
+            setVideo("localCallVideo", new MediaStream([videoTrack]), true);
+            setTileVideoState("local", true);
+            setLocalStateText(
+                stream.getAudioTracks().length
+                    ? "Экран и звук демонстрируются"
+                    : "Экран демонстрируется",
+            );
+            updateControlVisuals();
+            broadcastState();
+        } catch (error) {
+            if (
+                error?.name !== "NotAllowedError" &&
+                error?.name !== "AbortError"
+            ) {
+                console.error("[CALL] Screen share failed", error);
+                toast(
+                    "Не удалось показать экран",
+                    mediaErrorText(error, "экрану"),
+                    "danger",
+                );
+            }
+        }
+    }
+
+    async function stopScreenShare({ fromEnded = false } = {}) {
+        if (!state.screenEnabled && !state.screenStream) return;
+        state.screenEnabled = false;
+        const stream = state.screenStream;
+        state.screenStream = null;
+        stopTracks(stream);
+        await rebuildOutgoingAudio();
+        if (state.cameraEnabled && state.cameraStream?.getVideoTracks()[0]) {
+            const cameraTrack = state.cameraStream.getVideoTracks()[0];
+            await replaceTrack("video", cameraTrack);
+            setVideo("localCallVideo", new MediaStream([cameraTrack]), true);
+            setTileVideoState("local", true);
+            setLocalStateText("Камера включена");
+        } else {
+            await replaceTrack("video", null);
+            setTileVideoState("local", false);
+            setLocalStateText(
+                state.micEnabled ? "Микрофон включён" : "Микрофон выключен",
+            );
+        }
+        updateControlVisuals();
+        broadcastState();
+    }
+
+    function toggleMic() {
+        state.micEnabled = !state.micEnabled;
+        state.rawMicStream?.getAudioTracks().forEach((track) => {
+            track.enabled = state.micEnabled;
+        });
+        if (state.micGain)
+            state.micGain.gain.value = state.micEnabled ? state.micVolume : 0;
+        const outgoing = state.localStream?.getAudioTracks()[0];
+        if (outgoing && !state.screenStream?.getAudioTracks().length)
+            outgoing.enabled = state.micEnabled;
+        setLocalStateText(
+            state.micEnabled ? "Микрофон включён" : "Микрофон выключен",
+        );
+        updateControlVisuals();
+        broadcastState();
+    }
+
+    function updateControlVisuals() {
+        const mic = $("callMicToggle");
+        const camera = $("callCameraToggle");
+        const screen = $("callScreenToggle");
+        if (mic) {
+            mic.classList.toggle("active", state.micEnabled);
+            mic.classList.toggle("disabled", !state.micEnabled);
+            mic.querySelector(".call-control__icon").innerHTML =
+                state.micEnabled ? icons.mic : icons.micOff;
+            mic.querySelector(".call-control__label").textContent =
+                state.micEnabled ? "Микрофон" : "Без звука";
+        }
+        if (camera) {
+            camera.classList.toggle("active", state.cameraEnabled);
+            camera.querySelector(".call-control__icon").innerHTML =
+                state.cameraEnabled ? icons.camera : icons.cameraOff;
+        }
+        if (screen) screen.classList.toggle("active", state.screenEnabled);
+    }
+
+    function setLocalStateText(text) {
+        if ($("localCallState")) $("localCallState").textContent = text;
+    }
+
+    async function fetchTurnConfiguration() {
+        let lastError = null;
+        for (const endpoint of TURN_ENDPOINTS) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                const response = await fetch(endpoint, {
+                    signal: controller.signal,
+                    cache: "no-store",
+                    credentials: "same-origin",
+                    headers: { Accept: "application/json" },
+                });
+                clearTimeout(timeoutId);
+                if (!response.ok)
+                    throw new Error(`${endpoint}: HTTP ${response.status}`);
+                const data = await response.json();
+                const urls = data.urls || data.url;
+                if (!urls || !data.username || !data.credential) {
+                    throw new Error(`${endpoint}: неполный ответ TURN`);
+                }
+                state.turnAvailable = true;
+                updateDiagnostic("callTurnState", "доступен", "success");
+                return [
+                    {
+                        urls,
+                        username: data.username,
+                        credential: data.credential,
+                    },
+                ];
+            } catch (error) {
+                lastError = error;
+            }
+        }
+        state.turnAvailable = false;
+        updateDiagnostic("callTurnState", "недоступен", "danger");
+        console.warn(
+            "[CALL] TURN credentials unavailable. Calls may fail behind NAT/firewall.",
+            lastError,
+        );
+        return [];
+    }
+
     async function createPeerConnection() {
-        const iceServers = await getCallIceServers();
-        state.pc = new RTCPeerConnection({
+        if (state.pc) return state.pc;
+        const turnServers = await fetchTurnConfiguration();
+        const iceServers = [...turnServers, ...DEFAULT_STUN_SERVERS];
+        const pc = new RTCPeerConnection({
             iceServers,
             iceCandidatePoolSize: 10,
             iceTransportPolicy: "all",
             bundlePolicy: "max-bundle",
             rtcpMuxPolicy: "require",
         });
+        state.pc = pc;
         state.remoteStream = new MediaStream();
         state.remoteAudioStream = new MediaStream();
         state.remoteVideoStream = new MediaStream();
         state.remoteMeterStarted = false;
+
         const remoteVideo = $("remoteCallVideo");
         if (remoteVideo) {
             remoteVideo.srcObject = state.remoteVideoStream;
@@ -407,274 +878,273 @@
         }
         await setSpeakerSink();
 
-        const audioTransceiver = state.pc.addTransceiver("audio", {
+        const audioTransceiver = pc.addTransceiver("audio", {
+            direction: "sendrecv",
+        });
+        const videoTransceiver = pc.addTransceiver("video", {
             direction: "sendrecv",
         });
         state.audioSender = audioTransceiver.sender;
-        const audioTrack = state.localStream.getAudioTracks()[0];
+        state.videoSender = videoTransceiver.sender;
+        const audioTrack = state.localStream?.getAudioTracks()[0];
         if (audioTrack) await state.audioSender.replaceTrack(audioTrack);
 
-        const videoTransceiver = state.pc.addTransceiver("video", {
-            direction: "sendrecv",
-        });
-        state.videoSender = videoTransceiver.sender;
-        state.pc.ontrack = (event) => {
-            const tracks = event.streams?.[0]?.getTracks?.().length
-                ? event.streams[0].getTracks()
-                : [event.track];
-            tracks.forEach((track) => addRemoteTrack(track));
-            playRemoteMedia();
+        pc.ontrack = (event) => {
+            addRemoteTrack(event.track);
+            void playRemoteMedia();
             updateRemotePreview();
-            if (!state.remoteMeterStarted && state.remoteStream.getAudioTracks().length) {
+            if (
+                !state.remoteMeterStarted &&
+                state.remoteAudioStream.getAudioTracks().length
+            ) {
                 state.remoteMeterStarted = true;
-                startVolumeMeter(state.remoteStream, "remoteCallTile");
+                startVolumeMeter(state.remoteAudioStream, "remoteCallTile");
             }
         };
-        state.pc.onicecandidate = (event) => {
-            if (event.candidate)
-                send("call_signal", {
-                    to: state.peerId,
-                    signal_type: "candidate",
-                    candidate: event.candidate,
-                });
+
+        pc.onicecandidate = (event) => {
+            if (!event.candidate) return;
+            if (event.candidate.type === "relay") {
+                state.turnRelayDetected = true;
+                updateDiagnostic("callTurnState", "relay найден", "success");
+            }
+            send("call_signal", {
+                signal_type: "candidate",
+                candidate: event.candidate.toJSON
+                    ? event.candidate.toJSON()
+                    : event.candidate,
+            });
         };
-        state.pc.onconnectionstatechange = () => {
-            const pill = $("callStatusPill");
-            if (pill)
-                pill.textContent =
-                    state.pc.connectionState === "connected"
-                        ? "В звонке"
-                        : `Статус: ${state.pc.connectionState}`;
+
+        pc.onicecandidateerror = (event) => {
+            console.warn("[CALL] ICE candidate error", {
+                url: event.url,
+                errorCode: event.errorCode,
+                errorText: event.errorText,
+            });
+            updateDiagnostic(
+                "callTransportText",
+                `ICE ${event.errorCode || "error"}`,
+                "danger",
+            );
         };
+
+        pc.oniceconnectionstatechange = () => {
+            updateDiagnostic(
+                "callIceState",
+                pc.iceConnectionState,
+                stateClass(pc.iceConnectionState),
+            );
+            if (["connected", "completed"].includes(pc.iceConnectionState)) {
+                markConnected();
+            } else if (pc.iceConnectionState === "failed") {
+                void recoverIce("ice-failed");
+            } else if (pc.iceConnectionState === "disconnected") {
+                updatePhase("reconnecting", "Соединение временно потеряно");
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            updateDiagnostic(
+                "callWebRtcState",
+                pc.connectionState,
+                stateClass(pc.connectionState),
+            );
+            if (pc.connectionState === "connected") {
+                markConnected();
+            } else if (pc.connectionState === "failed") {
+                void recoverIce("connection-failed");
+            } else if (pc.connectionState === "closed") {
+                updatePhase("failed", "Медиасоединение закрыто");
+            }
+        };
+
+        pc.onsignalingstatechange = () => {
+            console.debug("[CALL] signalingState", pc.signalingState);
+        };
+
+        await flushPendingSignals();
+        return pc;
     }
 
-    async function createOffer() {
-        const offer = await state.pc.createOffer();
-        await state.pc.setLocalDescription(offer);
+    async function createOffer({ iceRestart = false } = {}) {
+        const pc = await createPeerConnection();
+        if (pc.signalingState !== "stable" && !iceRestart) return;
+        const offer = await pc.createOffer({ iceRestart });
+        await pc.setLocalDescription(offer);
         send("call_signal", {
-            to: state.peerId,
             signal_type: "offer",
-            sdp: state.pc.localDescription,
+            sdp: pc.localDescription,
+            ice_restart: iceRestart,
         });
     }
 
     async function handleOffer(sdp, from) {
+        if (from) state.peerId = from;
         if (!state.inCall) {
-            state.peerId = from;
-            state.peerName = callPeer()?.nickname || "Собеседник";
-            await openCall(false);
+            state.peerName = callPeer()?.nickname || state.peerName;
+            state.isInitiator = false;
+            await prepareCall({ phase: "connecting" });
+        } else if (!state.pc) {
+            state.pendingSignals.push({ signal_type: "offer", sdp, from });
+            return;
         }
-        await state.pc.setRemoteDescription(sdp);
+        const pc = state.pc;
+        if (pc.signalingState !== "stable") {
+            await pc.setLocalDescription({ type: "rollback" }).catch(() => {});
+        }
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
         await flushCandidates();
-        const answer = await state.pc.createAnswer();
-        await state.pc.setLocalDescription(answer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
         send("call_signal", {
-            to: state.peerId,
             signal_type: "answer",
-            sdp: state.pc.localDescription,
+            sdp: pc.localDescription,
         });
     }
 
     async function handleAnswer(sdp) {
-        await state.pc?.setRemoteDescription(sdp);
+        if (!state.pc) {
+            state.pendingSignals.push({ signal_type: "answer", sdp });
+            return;
+        }
+        if (state.pc.signalingState !== "have-local-offer") return;
+        await state.pc.setRemoteDescription(new RTCSessionDescription(sdp));
         await flushCandidates();
     }
 
     async function handleCandidate(candidate) {
+        if (!candidate) return;
         if (!state.pc?.remoteDescription) {
             state.pendingCandidates.push(candidate);
             return;
         }
-        await state.pc.addIceCandidate(candidate);
+        await state.pc.addIceCandidate(new RTCIceCandidate(candidate));
     }
 
     async function flushCandidates() {
         while (state.pendingCandidates.length && state.pc?.remoteDescription) {
-            await state.pc.addIceCandidate(state.pendingCandidates.shift());
+            const candidate = state.pendingCandidates.shift();
+            await state.pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
     }
 
-    function bindControls() {
-        $("callMicToggle").onclick = toggleMic;
-        $("callCameraToggle").onclick = toggleCamera;
-        $("callScreenToggle").onclick = toggleScreen;
-        $("callSettingsToggle").onclick = () =>
-            $("callOverlay").classList.toggle("call-settings-panel-hidden");
-        $("callEndButton").onclick = () => endCall(true, "Звонок завершён");
-        $("callMicVolume").oninput = (e) => {
-            state.micVolume = Number(e.target.value) / 100;
-            $("callMicVolumeText").textContent = `${e.target.value}%`;
-        };
-        $("callSpeakerVolume").oninput = (e) => {
-            state.speakerVolume = Number(e.target.value) / 100;
-            const remote = $("remoteCallAudio");
-            if (remote) remote.volume = state.speakerVolume;
-            $("callSpeakerVolumeText").textContent = `${e.target.value}%`;
-        };
-        $("callNoiseSuppression").onchange = async (e) => {
-            state.noiseSuppression = e.target.checked;
-            await setupLocalMedia();
-        };
-        $("callMicSelect").onchange = async (e) => {
-            state.selectedMicId = e.target.value;
-            await setupLocalMedia();
-        };
-        $("callCameraSelect").onchange = async (e) => {
-            state.selectedCameraId = e.target.value;
-            if (state.cameraEnabled) await restartCamera();
-        };
-        $("callSpeakerSelect").onchange = async (e) => {
-            state.selectedSpeakerId = e.target.value;
-            await setSpeakerSink();
-        };
-        $("callRefreshDevices").onclick = async () => {
-            await requestCallMediaPermissions();
-        };
-        $("callTestMic").onclick = () =>
-            toast(
-                "Проверка микрофона",
-                "Говорите — индикатор рядом показывает входящий уровень.",
-            );
-        $("callPickSpeaker").onclick = pickSpeakerOutput;
-        $("callTestSpeaker").onclick = testSpeaker;
-        $("callTestCamera").onclick = async () => {
-            if (!state.cameraEnabled) await toggleCamera();
-            toast(
-                "Проверка камеры",
-                "Если вы видите себя в плитке — камера работает.",
-            );
-        };
+    async function flushPendingSignals() {
+        if (!state.pc || !state.pendingSignals.length) return;
+        const signals = state.pendingSignals.splice(0);
+        for (const signal of signals) {
+            if (signal.signal_type === "offer")
+                await handleOffer(signal.sdp, signal.from);
+            if (signal.signal_type === "answer") await handleAnswer(signal.sdp);
+            if (signal.signal_type === "candidate")
+                await handleCandidate(signal.candidate);
+        }
     }
 
-    function toggleMic() {
-        state.micEnabled = !state.micEnabled;
-        state.localStream
-            ?.getAudioTracks()
-            .forEach((t) => (t.enabled = state.micEnabled));
-        $("callMicToggle").classList.toggle("disabled", !state.micEnabled);
-        $("localCallState").textContent = state.micEnabled
-            ? "Микрофон включён"
-            : "Микрофон выключен";
-        send("call_state", {
-            to: state.peerId,
-            micEnabled: state.micEnabled,
-            cameraEnabled: state.cameraEnabled,
-            screenEnabled: state.screenEnabled,
-        });
-    }
-
-    async function toggleCamera() {
-        state.cameraEnabled = !state.cameraEnabled;
-        $("callCameraToggle").classList.toggle("active", state.cameraEnabled);
-        $("callCameraToggle").classList.toggle(
-            "disabled",
-            !state.cameraEnabled,
+    async function recoverIce(reason) {
+        if (!state.inCall || !state.pc) return;
+        if (state.iceRestartCount >= MAX_ICE_RESTARTS) {
+            updatePhase(
+                "failed",
+                state.turnAvailable
+                    ? "TURN доступен, но медиамаршрут не установился"
+                    : "TURN недоступен — проверьте сервер и открытые порты",
+            );
+            toast(
+                "Не удалось восстановить звонок",
+                state.turnAvailable
+                    ? "Проверьте сеть и повторите звонок."
+                    : "Сервер TURN не выдал relay-кандидат. На разных сетях звонок без TURN часто невозможен.",
+                "danger",
+            );
+            return;
+        }
+        state.iceRestartCount += 1;
+        updatePhase(
+            "reconnecting",
+            `Перезапуск ICE: попытка ${state.iceRestartCount}`,
         );
-        if (state.cameraEnabled) await restartCamera();
-        else {
-            const old = state.localStream?.getVideoTracks()[0];
-            if (old) old.stop();
-            state.localStream?.removeTrack(old);
-            if (!state.screenEnabled) await replaceTrack("video", null);
-        }
-        if (!state.screenEnabled) updateLocalPreview();
-        send("call_state", {
-            to: state.peerId,
-            micEnabled: state.micEnabled,
-            cameraEnabled: state.cameraEnabled,
-            screenEnabled: state.screenEnabled,
-        });
-    }
-
-    async function restartCamera() {
-        const deviceId = $("callCameraSelect")?.value;
-        const cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraints(),
-            audio: false,
-        });
-        const newTrack = cameraStream.getVideoTracks()[0];
-        const old = state.localStream.getVideoTracks()[0];
-        if (old) {
-            old.stop();
-            state.localStream.removeTrack(old);
-        }
-        state.localStream.addTrack(newTrack);
-        if (!state.screenEnabled) {
-            await replaceTrack("video", newTrack);
-            updateLocalPreview();
-        }
-    }
-
-    async function toggleScreen() {
-        if (!state.screenEnabled) {
-            state.screenStream = await navigator.mediaDevices.getDisplayMedia({
-                video: true,
-                audio: false,
-            });
-            const track = state.screenStream.getVideoTracks()[0];
-            track.onended = () => {
-                if (state.screenEnabled) toggleScreen();
-            };
-            state.screenEnabled = true;
-            await replaceTrack("video", track);
-            setVideo("localCallVideo", new MediaStream([track]), true);
-            setTileVideoState("local", true);
-            $("localCallState").textContent = "Показываете экран";
+        if (state.isInitiator) {
+            state.pc.restartIce?.();
+            await createOffer({ iceRestart: true });
         } else {
-            stopTracks(state.screenStream);
-            state.screenStream = null;
-            state.screenEnabled = false;
-            if (state.cameraEnabled) await restartCamera();
-            else await replaceTrack("video", null);
-            updateLocalPreview();
+            send("call_signal", { signal_type: "restart_request", reason });
         }
-        $("callScreenToggle").classList.toggle("active", state.screenEnabled);
-        send("call_state", {
-            to: state.peerId,
-            micEnabled: state.micEnabled,
-            cameraEnabled: state.cameraEnabled,
-            screenEnabled: state.screenEnabled,
-        });
+    }
+
+    function markConnected() {
+        if (!state.inCall) return;
+        clearTimeout(state.connectTimer);
+        state.connectTimer = null;
+        state.iceRestartCount = 0;
+        updatePhase("connected");
+        updateDiagnostic(
+            "callTransportText",
+            state.turnAvailable ? "P2P / TURN fallback" : "P2P / STUN only",
+            state.turnAvailable ? "success" : "warning",
+        );
+        if (!state.callStartedAt) {
+            state.callStartedAt = Date.now();
+            startDurationTimer();
+            addChatSystemMessage(`Звонок с ${state.peerName} начался.`);
+        }
+        void playRemoteMedia();
+    }
+
+    function armConnectTimeout() {
+        clearTimeout(state.connectTimer);
+        state.connectTimer = setTimeout(() => {
+            if (
+                !state.inCall ||
+                ["connected", "closed"].includes(state.pc?.connectionState)
+            )
+                return;
+            updatePhase(
+                "failed",
+                state.turnAvailable
+                    ? "Соединение устанавливается слишком долго"
+                    : "TURN недоступен: прямой P2P-маршрут не найден",
+            );
+        }, CALL_CONNECT_TIMEOUT_MS);
+    }
+
+    function startDurationTimer() {
+        clearInterval(state.durationTimer);
+        const update = () => {
+            const elapsed = Math.max(0, Date.now() - state.callStartedAt);
+            const totalSeconds = Math.floor(elapsed / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const value = hours
+                ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+                : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+            if ($("callDuration")) $("callDuration").textContent = value;
+        };
+        update();
+        state.durationTimer = setInterval(update, 1000);
     }
 
     async function replaceTrack(kind, track) {
         if (!state.pc) return;
         const sender = kind === "audio" ? state.audioSender : state.videoSender;
-        if (sender) {
-            await sender.replaceTrack(track || null);
-            return;
-        }
-        if (track) {
-            const stream =
-                kind === "video" && state.screenEnabled
-                    ? state.screenStream
-                    : state.localStream;
-            const newSender = state.pc.addTrack(
-                track,
-                stream || state.localStream,
-            );
-            if (kind === "audio") state.audioSender = newSender;
-            if (kind === "video") state.videoSender = newSender;
-        }
-    }
-
-    function updateLocalPreview() {
-        const videoTrack = state.localStream?.getVideoTracks()[0];
-        if (videoTrack)
-            setVideo("localCallVideo", new MediaStream([videoTrack]), true);
-        setTileVideoState("local", Boolean(videoTrack));
+        if (sender) await sender.replaceTrack(track || null);
     }
 
     function addRemoteTrack(track) {
-        const targetStream =
-            track.kind === "audio" ? state.remoteAudioStream : state.remoteVideoStream;
-        [state.remoteStream, targetStream].forEach((stream) => {
-            if (stream && !stream.getTracks().some((t) => t.id === track.id)) {
+        const target =
+            track.kind === "audio"
+                ? state.remoteAudioStream
+                : state.remoteVideoStream;
+        [state.remoteStream, target].forEach((stream) => {
+            if (
+                stream &&
+                !stream.getTracks().some((item) => item.id === track.id)
+            )
                 stream.addTrack(track);
-            }
         });
         track.onunmute = () => {
-            playRemoteMedia();
+            void playRemoteMedia();
             updateRemotePreview();
         };
         track.onmute = updateRemotePreview;
@@ -686,35 +1156,62 @@
         };
     }
 
-    function playRemoteMedia() {
+    async function playRemoteMedia() {
         const remoteAudio = $("remoteCallAudio");
+        const remoteVideo = $("remoteCallVideo");
         if (remoteAudio) {
             remoteAudio.srcObject = state.remoteAudioStream;
             remoteAudio.volume = state.speakerVolume;
-            remoteAudio.play?.().catch((error) =>
-                console.warn("[CALL] remote audio autoplay blocked", error),
-            );
+            try {
+                await remoteAudio.play();
+                state.audioUnlocked = true;
+                if ($("callAudioUnlock")) $("callAudioUnlock").hidden = true;
+            } catch (error) {
+                console.warn("[CALL] Remote audio autoplay blocked", error);
+                state.audioUnlocked = false;
+                if ($("callAudioUnlock")) $("callAudioUnlock").hidden = false;
+            }
         }
-        const remoteVideo = $("remoteCallVideo");
         if (remoteVideo) {
             remoteVideo.srcObject = state.remoteVideoStream;
             remoteVideo.muted = true;
-            remoteVideo.play?.().catch(() => {});
+            await remoteVideo.play().catch(() => {});
+        }
+    }
+
+    async function unlockRemoteAudio() {
+        const remoteAudio = $("remoteCallAudio");
+        if (!remoteAudio) return;
+        try {
+            await remoteAudio.play();
+            state.audioUnlocked = true;
+            $("callAudioUnlock").hidden = true;
+            toast(
+                "Звук включён",
+                "Аудио собеседника теперь воспроизводится.",
+                "success",
+            );
+        } catch (error) {
+            toast(
+                "Звук заблокирован",
+                "Разрешите воспроизведение звука в настройках браузера.",
+                "danger",
+            );
         }
     }
 
     function updateRemotePreview() {
-        const hasLiveVideo = state.remoteVideoStream
+        const hasVideo = state.remoteVideoStream
             ?.getVideoTracks()
-            .some((track) => track.readyState === "live" && track.enabled);
-        const hasLiveAudio = state.remoteAudioStream
+            .some((track) => track.readyState === "live" && !track.muted);
+        const hasAudio = state.remoteAudioStream
             ?.getAudioTracks()
-            .some((track) => track.readyState === "live" && track.enabled);
-        setTileVideoState("remote", Boolean(hasLiveVideo));
+            .some((track) => track.readyState === "live");
+        setTileVideoState("remote", Boolean(hasVideo));
         if ($("remoteCallState")) {
-            $("remoteCallState").textContent = hasLiveVideo
+            $("remoteCallState").textContent = hasVideo
                 ? "Видео подключено"
-                : hasLiveAudio
+                : hasAudio
                   ? "Аудио подключено"
                   : "Ожидаем медиа";
         }
@@ -725,13 +1222,15 @@
         if (!video) return;
         video.srcObject = stream;
         video.muted = muted;
-        video.play?.().catch(() => {});
+        video.play().catch(() => {});
     }
 
     function setTileVideoState(kind, hasVideo) {
-        $(`${kind}CallVideo`)?.classList.toggle("is-hidden", !hasVideo);
+        const video = $(`${kind}CallVideo`);
         const empty = $(`${kind}CallEmpty`);
-        if (empty) empty.style.display = hasVideo ? "none" : "grid";
+        video?.classList.toggle("is-hidden", !hasVideo);
+        if (empty) empty.hidden = hasVideo;
+        $(`${kind}CallTile`)?.classList.toggle("has-video", hasVideo);
     }
 
     async function loadDevices() {
@@ -740,21 +1239,21 @@
             const devices = await navigator.mediaDevices.enumerateDevices();
             fillSelect(
                 "callMicSelect",
-                devices.filter((d) => d.kind === "audioinput"),
+                devices.filter((device) => device.kind === "audioinput"),
                 "Микрофон",
                 state.selectedMicId,
                 (value) => (state.selectedMicId = value),
             );
             fillSelect(
                 "callSpeakerSelect",
-                devices.filter((d) => d.kind === "audiooutput"),
+                devices.filter((device) => device.kind === "audiooutput"),
                 "Динамик",
                 state.selectedSpeakerId,
                 (value) => (state.selectedSpeakerId = value),
             );
             fillSelect(
                 "callCameraSelect",
-                devices.filter((d) => d.kind === "videoinput"),
+                devices.filter((device) => device.kind === "videoinput"),
                 "Камера",
                 state.selectedCameraId,
                 (value) => (state.selectedCameraId = value),
@@ -769,37 +1268,50 @@
         const select = $(id);
         if (!select) return;
         const previous = selectedId || select.value || "";
-        const options = [
-            `<option value="">${fallback} по умолчанию</option>`,
+        select.innerHTML = [
+            `<option value="">${safe(fallback)} по умолчанию</option>`,
             ...devices.map(
-                (d, i) =>
-                    `<option value="${safeAttr(d.deviceId)}">${safe(d.label || `${fallback} ${i + 1}`)}</option>`,
+                (device, index) =>
+                    `<option value="${safeAttr(device.deviceId)}">${safe(device.label || `${fallback} ${index + 1}`)}</option>`,
             ),
-        ];
-        select.innerHTML = options.join("");
-        if (previous && devices.some((d) => d.deviceId === previous)) {
+        ].join("");
+        if (
+            previous &&
+            devices.some((device) => device.deviceId === previous)
+        ) {
             select.value = previous;
         }
         onSelected?.(select.value);
     }
 
     async function setSpeakerSink() {
-        const remote = $("remoteCallAudio");
-        const deviceId = $("callSpeakerSelect")?.value || "";
-        if (!remote?.setSinkId) {
-            if ($("callSpeakerSelect")) $("callSpeakerSelect").disabled = true;
+        const remoteAudio = $("remoteCallAudio");
+        const select = $("callSpeakerSelect");
+        const deviceId = select?.value || state.selectedSpeakerId || "";
+        if (!remoteAudio?.setSinkId) {
+            if (select) select.disabled = true;
+            setDeviceHint(
+                "callSpeakerPermissionStatus",
+                "Выбор динамика не поддерживается браузером",
+                false,
+            );
             return;
         }
         try {
-            await remote.setSinkId(deviceId);
+            await remoteAudio.setSinkId(deviceId);
             setDeviceHint(
                 "callSpeakerPermissionStatus",
                 deviceId
-                    ? "Выбран отдельный динамик для звонка"
-                    : "Будет использован системный динамик по умолчанию",
+                    ? "Выбрано отдельное устройство вывода"
+                    : "Системное устройство по умолчанию",
+                false,
             );
         } catch (error) {
-            console.warn("[CALL] setSinkId failed", error);
+            setDeviceHint(
+                "callSpeakerPermissionStatus",
+                "Не удалось выбрать динамик",
+                true,
+            );
         }
     }
 
@@ -807,8 +1319,8 @@
         if (!navigator.mediaDevices?.selectAudioOutput) {
             toast(
                 "Выбор динамика недоступен",
-                "Ваш браузер не поддерживает отдельное окно выбора устройства вывода. Используется системный динамик по умолчанию.",
-                "danger",
+                "Используется системное устройство вывода.",
+                "info",
             );
             return;
         }
@@ -819,23 +1331,102 @@
             if ($("callSpeakerSelect"))
                 $("callSpeakerSelect").value = device.deviceId;
             await setSpeakerSink();
-            setDeviceHint(
-                "callSpeakerPermissionStatus",
-                `Динамик выбран: ${device.label || "устройство вывода"}`,
-            );
         } catch (error) {
             console.warn("[CALL] selectAudioOutput failed", error);
-            setDeviceHint(
-                "callSpeakerPermissionStatus",
-                "Выбор динамика отменён или запрещён браузером.",
-                true,
-            );
         }
+    }
+
+    function testSpeaker() {
+        const AudioContextClass =
+            window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const context = new AudioContextClass();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const destination = context.createMediaStreamDestination();
+        const audio = new Audio();
+        oscillator.frequency.value = 660;
+        gain.gain.value = Math.max(0.02, state.speakerVolume * 0.15);
+        oscillator.connect(gain).connect(destination);
+        audio.srcObject = destination.stream;
+        audio.volume = state.speakerVolume;
+        const deviceId = $("callSpeakerSelect")?.value || "";
+        if (audio.setSinkId) audio.setSinkId(deviceId).catch(() => {});
+        audio.play().catch(() => {});
+        oscillator.start();
+        setTimeout(() => {
+            oscillator.stop();
+            audio.pause();
+            context.close();
+        }, 500);
+    }
+
+    function startLocalMeter() {
+        if (state.localMeterStarted) return;
+        const sourceStream = state.rawMicStream || state.localStream;
+        if (!sourceStream?.getAudioTracks().length) return;
+        state.localMeterStarted = true;
+        startVolumeMeter(sourceStream, "localCallTile", (speaking) => {
+            send("call_state", {
+                speaking,
+                micEnabled: state.micEnabled,
+                cameraEnabled: state.cameraEnabled,
+                screenEnabled: state.screenEnabled,
+            });
+        });
+    }
+
+    function startVolumeMeter(stream, tileId, onSpeakingChange) {
+        if (!stream?.getAudioTracks().length) return;
+        const AudioContextClass =
+            window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const context = new AudioContextClass();
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        context.createMediaStreamSource(stream).connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let rafId = 0;
+        let lastSpeaking = false;
+        let lastSentAt = 0;
+        const tick = () => {
+            if (!state.inCall) {
+                cancelAnimationFrame(rafId);
+                context.close().catch(() => {});
+                return;
+            }
+            analyser.getByteFrequencyData(data);
+            const average =
+                data.reduce((sum, value) => sum + value, 0) / data.length;
+            const speaking = average > 16;
+            $(tileId)?.classList.toggle("speaking", speaking);
+            if (tileId === "localCallTile" && $("callMicMeter")) {
+                $("callMicMeter").style.width =
+                    `${Math.min(100, average * 2.8)}%`;
+            }
+            if (speaking !== lastSpeaking && Date.now() - lastSentAt > 250) {
+                lastSpeaking = speaking;
+                lastSentAt = Date.now();
+                onSpeakingChange?.(speaking);
+            }
+            rafId = requestAnimationFrame(tick);
+        };
+        tick();
+        state.meters.push({ context, rafId });
+    }
+
+    function broadcastState(extra = {}) {
+        send("call_state", {
+            micEnabled: state.micEnabled,
+            cameraEnabled: state.cameraEnabled,
+            screenEnabled: state.screenEnabled,
+            ...extra,
+        });
     }
 
     function subscribeDeviceChanges() {
         if (!navigator.mediaDevices || state.deviceChangeHandler) return;
-        state.deviceChangeHandler = () => loadDevices();
+        state.deviceChangeHandler = () => void loadDevices();
         navigator.mediaDevices.addEventListener?.(
             "devicechange",
             state.deviceChangeHandler,
@@ -851,64 +1442,49 @@
         state.deviceChangeHandler = null;
     }
 
-    function testSpeaker() {
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        const destination = ctx.createMediaStreamDestination();
-        const audio = new Audio();
-        osc.frequency.value = 660;
-        gain.gain.value = state.speakerVolume * 0.18;
-        osc.connect(gain).connect(destination);
-        audio.srcObject = destination.stream;
-        audio.volume = state.speakerVolume;
-        const deviceId = $("callSpeakerSelect")?.value || "";
-        if (audio.setSinkId) audio.setSinkId(deviceId).catch(() => {});
-        audio.play().catch(() => {});
-        osc.start();
-        setTimeout(() => {
-            osc.stop();
-            audio.pause();
-            ctx.close();
-        }, 450);
-        const meter = $("callSpeakerMeter");
-        if (meter) {
-            meter.style.width = "100%";
-            setTimeout(() => (meter.style.width = "0%"), 500);
-        }
+    function rememberSelectedDevice(kind, track) {
+        const deviceId = track?.getSettings?.().deviceId;
+        if (!deviceId) return;
+        if (kind === "audioinput") state.selectedMicId = deviceId;
+        if (kind === "videoinput") state.selectedCameraId = deviceId;
     }
 
-    function startVolumeMeter(stream, tileId, onSpeakingChange) {
-        if (!stream?.getAudioTracks().length) return;
-        const ctx = new AudioContext();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        ctx.createMediaStreamSource(stream).connect(analyser);
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        let lastSpeaking = false;
-        let lastSent = 0;
-        const tick = () => {
-            if (!state.inCall) {
-                ctx.close();
-                return;
-            }
-            analyser.getByteFrequencyData(data);
-            const avg = data.reduce((a, b) => a + b, 0) / data.length;
-            const speaking = avg > 18;
-            $(tileId)?.classList.toggle("speaking", speaking);
-            if (tileId === "localCallTile")
-                $("callMicMeter") &&
-                    ($("callMicMeter").style.width =
-                        `${Math.min(100, avg * 2.5)}%`);
-            if (speaking !== lastSpeaking && Date.now() - lastSent > 220) {
-                lastSpeaking = speaking;
-                lastSent = Date.now();
-                onSpeakingChange?.(speaking);
-            }
-            requestAnimationFrame(tick);
-        };
-        tick();
-        state.meters.push(ctx);
+    function setDeviceHint(id, text, isError = false) {
+        const node = $(id);
+        if (!node) return;
+        node.textContent = text;
+        node.classList.toggle("is-error", isError);
+    }
+
+    function updateDiagnostic(id, text, className = "") {
+        const node = $(id);
+        if (!node) return;
+        node.textContent = text;
+        node.dataset.state = className;
+    }
+
+    function stateClass(value) {
+        if (["connected", "completed", "stable"].includes(value))
+            return "success";
+        if (["failed", "closed"].includes(value)) return "danger";
+        if (["disconnected"].includes(value)) return "warning";
+        return "pending";
+    }
+
+    function mediaErrorText(error, deviceName = "устройству") {
+        if (error?.code === "INSECURE_CONTEXT") return error.message;
+        if (error?.name === "NotAllowedError") {
+            return `Доступ к ${deviceName} запрещён. Разрешите его в настройках сайта.`;
+        }
+        if (error?.name === "NotFoundError")
+            return `Устройство для доступа к ${deviceName} не найдено.`;
+        if (error?.name === "NotReadableError")
+            return `Устройство для доступа к ${deviceName} занято другой программой.`;
+        if (error?.name === "OverconstrainedError")
+            return `Выбранное устройство для доступа к ${deviceName} недоступно.`;
+        if (error?.name === "AbortError")
+            return `Операция доступа к ${deviceName} отменена.`;
+        return error?.message || `Не удалось получить доступ к ${deviceName}.`;
     }
 
     function stopTracks(stream) {
@@ -916,50 +1492,100 @@
     }
 
     function endCall(notifyPeer, reason = "Звонок завершён") {
-        if (notifyPeer && state.peerId)
-            send("call_ended", { to: state.peerId, reason });
+        if (notifyPeer && state.peerId) send("call_ended", { reason });
         cleanupActiveCall(false);
         addChatSystemMessage(reason);
     }
 
     function cleanupActiveCall(showMessage = true) {
-        state.inCall = false;
+        clearTimeout(state.answerTimer);
+        clearTimeout(state.connectTimer);
+        clearInterval(state.durationTimer);
+        state.answerTimer = null;
+        state.connectTimer = null;
+        state.durationTimer = null;
         unsubscribeDeviceChanges();
-        state.pc?.close?.();
+
+        try {
+            state.pc
+                ?.getSenders?.()
+                .forEach((sender) => sender.replaceTrack(null).catch(() => {}));
+            state.pc?.close?.();
+        } catch (_) {}
+
         stopTracks(state.localStream);
         stopTracks(state.rawMicStream);
-        stopTracks(state.remoteStream);
+        stopTracks(state.cameraStream);
         stopTracks(state.screenStream);
-        state.meters.forEach((ctx) => ctx.close?.());
-        state.micContext?.close?.();
+        stopTracks(state.remoteStream);
+        state.meters.forEach(({ context, rafId }) => {
+            cancelAnimationFrame(rafId);
+            context?.close?.().catch(() => {});
+        });
+        state.audioContext?.close?.().catch(() => {});
+
         document
             .querySelectorAll(".call-overlay,.incoming-call-overlay")
-            .forEach((n) => n.remove());
+            .forEach((node) => node.remove());
+        setBodyCallMode(false);
+
+        const preserved = {
+            selectedMicId: state.selectedMicId,
+            selectedCameraId: state.selectedCameraId,
+            selectedSpeakerId: state.selectedSpeakerId,
+            noiseSuppression: state.noiseSuppression,
+            micVolume: state.micVolume,
+            speakerVolume: state.speakerVolume,
+        };
         Object.assign(state, {
             pc: null,
+            peerId: null,
+            peerName: "Собеседник",
+            inCall: false,
+            isInitiator: false,
+            phase: "idle",
             localStream: null,
+            rawMicStream: null,
+            cameraStream: null,
+            screenStream: null,
             remoteStream: null,
             remoteAudioStream: null,
             remoteVideoStream: null,
-            screenStream: null,
-            micContext: null,
+            audioContext: null,
+            audioDestination: null,
             micGain: null,
-            micDestination: null,
-            rawMicStream: null,
-            inCall: false,
+            screenGain: null,
+            audioSender: null,
+            videoSender: null,
+            micEnabled: true,
             cameraEnabled: false,
             screenEnabled: false,
             pendingCandidates: [],
+            pendingSignals: [],
+            preparingPromise: null,
+            turnAvailable: false,
+            turnRelayDetected: false,
+            iceRestartCount: 0,
+            callStartedAt: 0,
             meters: [],
-            audioSender: null,
-            videoSender: null,
             remoteMeterStarted: false,
+            localMeterStarted: false,
+            audioUnlocked: false,
+            ...preserved,
         });
         if (showMessage)
             addChatSystemMessage("Звонок завершён. Вы вернулись в чат.");
     }
 
-    window.startOutgoingCall = async function () {
+    window.startOutgoingCall = async function startOutgoingCall() {
+        if (state.inCall) {
+            toast(
+                "Звонок уже активен",
+                "Завершите текущий вызов перед новым.",
+                "info",
+            );
+            return;
+        }
         const peer = callPeer();
         if (!peer?.id) {
             toast(
@@ -971,49 +1597,100 @@
         }
         state.peerId = peer.id;
         state.peerName = peer.nickname || "Собеседник";
-        await requestInitialMediaPermissions();
-        send("call_request", { to: state.peerId });
-        toast("Исходящий звонок", `Звоним пользователю ${state.peerName}...`);
+        state.isInitiator = true;
+        try {
+            await prepareCall({ phase: "ringing" });
+            send("call_request", {});
+            updatePhase("ringing", `Звоним пользователю ${state.peerName}…`);
+            state.answerTimer = setTimeout(() => {
+                if (state.phase !== "ringing") return;
+                send("call_ended", { reason: "Нет ответа" });
+                cleanupActiveCall(false);
+                addChatSystemMessage("Собеседник не ответил на звонок.");
+            }, CALL_ANSWER_TIMEOUT_MS);
+        } catch (error) {
+            console.error("[CALL] Unable to start call", error);
+            cleanupActiveCall(false);
+            toast("Звонок недоступен", mediaErrorText(error), "danger");
+        }
     };
 
-    window.handleCallMessage = async function (msg) {
-        const data = msg.data || {};
+    window.handleCallMessage = async function handleCallMessage(msg) {
+        const data = msg?.data || {};
         try {
             if (msg.type === "call_request") {
+                if (state.inCall) {
+                    send("call_response", {
+                        to: data.from,
+                        accepted: false,
+                        reason: "busy",
+                    });
+                    return;
+                }
                 createIncomingModal(
                     data.from_nickname || callPeer()?.nickname || "Собеседник",
                     data.from,
                 );
-            } else if (msg.type === "call_response") {
+                return;
+            }
+
+            if (msg.type === "call_response") {
+                clearTimeout(state.answerTimer);
+                state.answerTimer = null;
                 if (!data.accepted) {
-                    addChatSystemMessage("Собеседник сбросил звонок.");
-                    toast(
-                        "Звонок сброшен",
-                        "Собеседник отклонил вызов.",
-                        "danger",
+                    cleanupActiveCall(false);
+                    addChatSystemMessage(
+                        data.reason === "busy"
+                            ? "Собеседник уже разговаривает."
+                            : "Собеседник отклонил звонок.",
                     );
-                } else {
-                    await openCall(true);
+                    return;
                 }
-            } else if (msg.type === "call_signal") {
+                state.isInitiator = true;
+                updatePhase("connecting");
+                await createOffer();
+                return;
+            }
+
+            if (msg.type === "call_signal") {
+                const signal = {
+                    signal_type: data.signal_type,
+                    sdp: data.sdp,
+                    candidate: data.candidate,
+                    from: data.from,
+                };
+                if (!state.pc && state.preparingPromise) {
+                    state.pendingSignals.push(signal);
+                    return;
+                }
                 if (data.signal_type === "offer")
                     await handleOffer(data.sdp, data.from);
                 if (data.signal_type === "answer") await handleAnswer(data.sdp);
                 if (data.signal_type === "candidate")
                     await handleCandidate(data.candidate);
-            } else if (msg.type === "call_ended") {
+                if (data.signal_type === "restart_request") {
+                    state.isInitiator = true;
+                    await createOffer({ iceRestart: true });
+                }
+                return;
+            }
+
+            if (msg.type === "call_ended") {
                 cleanupActiveCall(false);
                 addChatSystemMessage(
                     data.reason || "Собеседник завершил звонок.",
                 );
-            } else if (msg.type === "call_state") {
+                return;
+            }
+
+            if (msg.type === "call_state") {
                 $("remoteCallTile")?.classList.toggle(
                     "speaking",
                     Boolean(data.speaking),
                 );
                 if ($("remoteCallState")) {
                     $("remoteCallState").textContent = data.screenEnabled
-                        ? "Показывает экран"
+                        ? "Демонстрирует экран"
                         : data.cameraEnabled
                           ? "Камера включена"
                           : data.micEnabled === false
@@ -1022,14 +1699,20 @@
                 }
             }
         } catch (error) {
-            console.error("[CALL] handleCallMessage failed", error);
+            console.error("[CALL] handleCallMessage failed", error, msg);
             toast(
                 "Ошибка звонка",
-                error.message || "Не удалось обработать событие звонка",
+                error?.message || "Не удалось обработать сигнал звонка.",
                 "danger",
             );
         }
     };
 
     window.cleanupActiveCall = cleanupActiveCall;
+
+    window.addEventListener("beforeunload", () => {
+        if (state.inCall && state.peerId)
+            send("call_ended", { reason: "Собеседник покинул страницу" });
+        cleanupActiveCall(false);
+    });
 })();

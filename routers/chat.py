@@ -1,13 +1,17 @@
 import asyncio
-import uuid
+import base64
+import hashlib
+import hmac
 import json
+import os
 import time
+import uuid
 from collections import defaultdict, deque
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from config import config
-from routers.call_signaling import is_call_signal_type
+from routers.call_signaling import is_call_signal_type, validate_call_payload
 from security import (
     normalize_allowed_origins,
     websocket_origin_allowed,
@@ -35,6 +39,80 @@ RELAY_MAX_BYTES_PER_WINDOW = config.RELAY_MAX_BYTES_PER_WINDOW
 ROOM_CREATE_WINDOW_SECONDS = 60
 ROOM_CREATE_MAX_PER_WINDOW = 8
 MOBILE_RECONNECT_GRACE_SECONDS = 180
+
+
+
+def _config_value(name: str, default=None):
+    value = getattr(config, name, None)
+    if value in (None, ""):
+        value = os.getenv(name, default)
+    return value
+
+
+def _parse_turn_urls(value) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not value:
+        return []
+    text = str(value).strip()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+@router.get("/turn-credentials")
+async def get_turn_credentials(request: Request):
+    """Return short-lived coturn REST credentials for WebRTC clients."""
+    urls = _parse_turn_urls(_config_value("TURN_URLS"))
+    shared_secret = str(_config_value("TURN_SHARED_SECRET", "") or "")
+    static_username = str(_config_value("TURN_USERNAME", "") or "")
+    static_credential = str(_config_value("TURN_CREDENTIAL", "") or "")
+    ttl = int(_config_value("TURN_CREDENTIAL_TTL", 3600) or 3600)
+
+    if not urls:
+        raise HTTPException(status_code=503, detail="TURN_URLS is not configured")
+
+    if shared_secret:
+        expires_at = int(time.time()) + max(300, min(ttl, 86_400))
+        client_ip = request.client.host if request.client else "unknown"
+        if config.TRUST_PROXY_HEADERS:
+            forwarded_for = request.headers.get("x-forwarded-for", "")
+            if forwarded_for:
+                client_ip = forwarded_for.split(",", 1)[0].strip() or client_ip
+        client_token = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()[:12]
+        username = f"{expires_at}:{client_token}"
+        digest = hmac.new(
+            shared_secret.encode("utf-8"),
+            username.encode("utf-8"),
+            hashlib.sha1,
+        ).digest()
+        credential = base64.b64encode(digest).decode("ascii")
+    elif static_username and static_credential:
+        username = static_username
+        credential = static_credential
+    else:
+        raise HTTPException(
+            status_code=503,
+            detail="Configure TURN_SHARED_SECRET or TURN_USERNAME/TURN_CREDENTIAL",
+        )
+
+    return JSONResponse(
+        {
+            "urls": urls,
+            "username": username,
+            "credential": credential,
+            "ttl": ttl,
+        },
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 async def safe_send_json(ws, message):
     try:
@@ -460,6 +538,28 @@ async def lobby_ws(websocket: WebSocket):
                 "relay_message",
                 "transport_state",
             ] or is_call_signal_type(msg_type):
+                if not isinstance(payload, dict):
+                    await safe_send_json(
+                        websocket,
+                        {
+                            "type": "request_failed",
+                            "data": {"reason": "Некорректный формат сигнального сообщения"},
+                        },
+                    )
+                    continue
+
+                if is_call_signal_type(msg_type):
+                    valid, validation_error = validate_call_payload(msg_type, payload)
+                    if not valid:
+                        await safe_send_json(
+                            websocket,
+                            {
+                                "type": "request_failed",
+                                "data": {"reason": validation_error},
+                            },
+                        )
+                        continue
+
                 target_id = payload.get("to")
                 if target_id in clients and clients[target_id].get("connected", True):
                     sender_room_id = clients[client_id].get("room_id")
