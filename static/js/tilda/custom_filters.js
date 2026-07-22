@@ -42,16 +42,35 @@
         panel.append(options);
         select.after(button, panel);
 
+        const iconSvg = (name) => {
+            if (!name) return "";
+            const paths = {
+                camera: '<rect x="4" y="5" width="16" height="14" rx="4"></rect><circle cx="12" cy="12" r="3.5"></circle><path d="M16.5 8.5h.01"></path>',
+                music: '<path d="M14 4v10.5a3.5 3.5 0 1 1-2-3.16V6l6-1.5v8a3.5 3.5 0 1 1-2-3.16V4.5L14 5"></path>',
+                "paper-plane":
+                    '<path d="M21 3 10 14"></path><path d="m21 3-7 18-4-7-7-4 18-7Z"></path>',
+                vk: '<path d="M4 8c.12 5.35 2.78 8.56 7.44 8.56h.27v-3.06c1.7.17 2.98 1.42 3.49 3.06H18c-.66-2.45-2.39-3.78-3.47-4.29 1.08-.63 2.6-2.16 2.96-4.27h-2.54c-.47 1.7-1.87 3.23-3.24 3.38V8H9.17v5.92C7.74 13.56 5.93 11.9 5.85 8H4Z"></path>',
+                chat: '<path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.4-5.1A8 8 0 1 1 21 12Z"></path>',
+                minus: '<path d="M5 12h14"></path>',
+            };
+            return `<svg class="custom-filter__icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.chat}</svg>`;
+        };
+
+        const optionLabelHtml = (option) =>
+            `${iconSvg(option.dataset.icon || "")}<span>${option.textContent || "Все"}</span>`;
+
         const sync = () => {
             const selected = select.selectedOptions[0];
-            button.textContent = selected?.textContent || "Все";
+            button.innerHTML = selected
+                ? optionLabelHtml(selected)
+                : "<span>Все</span>";
             options.replaceChildren(
                 ...Array.from(select.options).map((option) => {
                     const optionButton = document.createElement("button");
                     optionButton.type = "button";
                     optionButton.className = "custom-filter__option";
                     optionButton.dataset.value = option.value;
-                    optionButton.textContent = option.textContent;
+                    optionButton.innerHTML = optionLabelHtml(option);
                     optionButton.setAttribute("role", "option");
                     const isSelected = option.value === select.value;
                     optionButton.setAttribute(
@@ -288,7 +307,7 @@
             .addEventListener("click", () => {
                 applyDateValue("");
             });
-        
+
         input.addEventListener("input", sync);
         input.addEventListener("change", sync);
         document.addEventListener("tilda:filters-reset", sync);

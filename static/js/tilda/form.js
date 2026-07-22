@@ -21,6 +21,7 @@
         "[data-product-type-filter]",
     );
     const colorFilter = document.querySelector("[data-color-filter]");
+    const socialFilter = document.querySelector("[data-social-filter]");
     const visibleCount = document.querySelector("[data-visible-count]");
     const daysTable = document.querySelector("[data-days-table]");
     const sizesTable = document.querySelector("[data-sizes-table]");
@@ -62,6 +63,53 @@
         ["pink", "Розовый", /\bроз\w*\b/i],
         ["cyan", "Голубой", /\bголу\w*\b/i],
     ];
+
+    const socialNetworkMeta = {
+        instagram: { label: "Instagram", icon: "camera" },
+        tiktok: { label: "TikTok", icon: "music" },
+        telegram: { label: "Telegram", icon: "paper-plane" },
+        vk: { label: "ВКонтакте", icon: "vk" },
+        max: { label: "MAX", icon: "chat" },
+        none: { label: "Без соц. сети", icon: "minus" },
+    };
+
+    function socialNetworkInfo(value) {
+        const key = String(value || "")
+            .trim()
+            .toLowerCase();
+        return socialNetworkMeta[key]
+            ? { key, ...socialNetworkMeta[key] }
+            : { key: "none", ...socialNetworkMeta.none };
+    }
+
+    function parseCookieString(value) {
+        return String(value || "")
+            .split(";")
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .reduce((acc, part) => {
+                const separator = part.indexOf("=");
+                if (separator === -1) return acc;
+                const key = part.slice(0, separator).trim();
+                const rawValue = part.slice(separator + 1).trim();
+                try {
+                    acc[key] = decodeURIComponent(rawValue);
+                } catch {
+                    acc[key] = rawValue;
+                }
+                return acc;
+            }, {});
+    }
+
+    function submissionSocialNetwork(submission) {
+        const payloadCookies = parseCookieString(submission.payload?.COOKIES);
+        const requestCookies = submission.cookies || {};
+        const value =
+            payloadCookies.social_network ||
+            requestCookies.social_network ||
+            "";
+        return socialNetworkInfo(value === "myself" ? "" : value);
+    }
 
     const deliveryPatterns = [
         /Доставка в ПВЗ СДЭК:\s*([\d.,]+)/i,
@@ -424,6 +472,7 @@
                 payment.sys ||
                     firstValue(payload, ["paymentsystem", "paymentSystem"]),
             );
+            const socialNetwork = submissionSocialNetwork(submission);
             const products = normalizeProducts(payload, rawText);
             const rows = products.length
                 ? products
@@ -482,6 +531,9 @@
                     deliveryZip: delivery.deliveryZip,
                     deliveryComment: delivery.deliveryComment,
                     orderSumTotal,
+                    socialNetwork: socialNetwork.key,
+                    socialNetworkLabel: socialNetwork.label,
+                    socialNetworkIcon: socialNetwork.icon,
                     source: submission,
                 };
                 // Оптимизация: поисковая строка считается один раз при
@@ -502,6 +554,7 @@
                     row.deliveryAddress,
                     row.deliveryCity,
                     row.deliveryFio,
+                    row.socialNetworkLabel,
                 ]
                     .join(" ")
                     .toLowerCase();
@@ -518,6 +571,7 @@
         const size = sizeFilter?.value || "all";
         const productType = productTypeFilter?.value || "all";
         const color = colorFilter?.value || "all";
+        const social = socialFilter?.value || "all";
         return (
             (!query || row._search.includes(query)) &&
             (!from || row.date >= from) &&
@@ -525,7 +579,8 @@
             (delivery === "all" || row.deliveryType === delivery) &&
             (productType === "all" || row.productType === productType) &&
             (size === "all" || row.size === size) &&
-            (color === "all" || row.color === color)
+            (color === "all" || row.color === color) &&
+            (social === "all" || row.socialNetwork === social)
         );
     }
 
@@ -767,6 +822,7 @@
                 ${renderKeyValue("Email", first.email)}
                 ${renderKeyValue("ФИО доставки", first.deliveryFio)}
                 ${renderKeyValue("Согласие", firstValue(payload, ["Checkbox", "checkbox"]))}
+                ${renderKeyValue("Соц. сеть", first.socialNetworkLabel)}
             </div>
         </section>`;
     }
@@ -1076,6 +1132,7 @@
                                 <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
                                 <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
+                                ${first.socialNetworkLabel ? `<span class="badge social-badge" data-social-icon="${escapeHtml(first.socialNetworkIcon)}">${escapeHtml(first.socialNetworkLabel)}</span>` : ""}
                                 ${renderEmailBadges(submission)}
                             </div>
                         </div>
@@ -1107,6 +1164,7 @@
         const selectedSize = sizeFilter.value;
         const selectedProductType = productTypeFilter.value;
         const selectedColor = colorFilter.value;
+        const selectedSocial = socialFilter.value;
         const sizes = [
             ...new Set(orderRows.map((row) => row.size).filter(Boolean)),
         ].sort();
@@ -1120,6 +1178,19 @@
         ]
             .filter(([key]) => key)
             .sort((a, b) => a[1].localeCompare(b[1]));
+        const socialNetworks = [
+            ...new Map(
+                orderRows.map((row) => [
+                    row.socialNetwork,
+                    {
+                        label: row.socialNetworkLabel,
+                        icon: row.socialNetworkIcon,
+                    },
+                ]),
+            ).entries(),
+        ]
+            .filter(([key]) => key)
+            .sort((a, b) => a[1].label.localeCompare(b[1].label));
         sizeFilter.innerHTML =
             '<option value="all">Все размеры</option>' +
             sizes
@@ -1144,11 +1215,21 @@
                         `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`,
                 )
                 .join("");
+        socialFilter.innerHTML =
+            '<option value="all">Все соц. сети</option>' +
+            socialNetworks
+                .map(
+                    ([key, item]) =>
+                        `<option value="${escapeHtml(key)}" data-icon="${escapeHtml(item.icon)}">${escapeHtml(item.label)}</option>`,
+                )
+                .join("");
         if (sizes.includes(selectedSize)) sizeFilter.value = selectedSize;
         if (productTypes.includes(selectedProductType))
             productTypeFilter.value = selectedProductType;
         if (colors.some(([key]) => key === selectedColor))
             colorFilter.value = selectedColor;
+        if (socialNetworks.some(([key]) => key === selectedSocial))
+            socialFilter.value = selectedSocial;
         document.dispatchEvent(
             new CustomEvent("tilda:filters-options-updated"),
         );
@@ -1162,6 +1243,7 @@
         if (sizeFilter) sizeFilter.value = "all";
         if (productTypeFilter) productTypeFilter.value = "all";
         if (colorFilter) colorFilter.value = "all";
+        if (socialFilter) socialFilter.value = "all";
         document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
         render();
     }
@@ -1289,6 +1371,7 @@
         productTypeFilter,
         sizeFilter,
         colorFilter,
+        socialFilter,
     ].forEach((element) => {
         element?.addEventListener("change", render);
     });

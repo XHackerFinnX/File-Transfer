@@ -984,3 +984,13 @@ td {
 .email-send-button {
     padding-inline: 16px;
 }
+
+.social-badge::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: currentColor;
+    display: inline-block;
+    margin-right: 6px;
+}

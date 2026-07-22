@@ -72,7 +72,7 @@ async def get_turn_credentials(request: Request):
     shared_secret = str(_config_value("TURN_SHARED_SECRET", "") or "")
     static_username = str(_config_value("TURN_USERNAME", "") or "")
     static_credential = str(_config_value("TURN_CREDENTIAL", "") or "")
-    ttl = int(_config_value("TURN_CREDENTIAL_TTL", 3600) or 3600)
+    ttl = 3600
 
     if not urls:
         raise HTTPException(status_code=503, detail="TURN_URLS is not configured")

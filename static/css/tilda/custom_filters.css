@@ -100,6 +100,7 @@
 }
 
 .custom-filter__option {
+    display: flex;
     width: 100%;
     border: 0;
     border-radius: 6px;
@@ -281,4 +282,21 @@ button.custom-calendar__day:hover {
         width: 100%;
         right: 0;
     }
+}
+
+.custom-filter__button,
+.custom-filter__option {
+    align-items: center;
+    gap: 8px;
+}
+
+.custom-filter__icon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }

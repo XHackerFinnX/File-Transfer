@@ -46,7 +46,7 @@ def _configured_cdek_accounts() -> dict[str, dict[str, Any]]:
     """Return named CDEK credentials.
 
     CDEK_ACCOUNTS_JSON example:
-    {"shop": {"client_id": "...", "client_secret": "...", "sender_location": {"address": "..."}}}
+    {"shop": {"client_id": "...", "client_secret": "...", "prefix_number": "apex", "sender_location": {"address": "..."}}}
     """
     if not config.CDEK_ACCOUNTS_JSON.strip():
         raise ValueError("CDEK_ACCOUNTS_JSON is required")
@@ -80,6 +80,7 @@ def _configured_cdek_accounts() -> dict[str, dict[str, Any]]:
             "client_id": client_id,
             "client_secret": client_secret,
             "sender_location": sender_location,
+            "prefix_number": str(credentials.get("prefix_number") or "").strip(),
         }
     return accounts
 

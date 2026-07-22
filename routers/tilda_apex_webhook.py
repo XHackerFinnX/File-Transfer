@@ -20,6 +20,7 @@ from db.tilda_orders import (
     update_tilda_submission_im_number,
 )
 from services.tilda_cdek import (
+    cdek_credentials,
     cdek_get_token,
     find_cdek_order,
     send_customer_email,
@@ -547,6 +548,117 @@ def _build_order_email(
     return subject, body, body_html
 
 
+def _money_text(value: Any) -> str:
+    if value in (None, ""):
+        return "—"
+    try:
+        amount = float(str(value).replace(" ", "").replace(",", "."))
+    except ValueError:
+        return str(value)
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " RUB"
+
+
+def _order_id_from_payload(payload: dict[str, Any]) -> str:
+    payment = _payment_payload(payload)
+    return str(
+        payment.get("orderid")
+        or payment.get("order_id")
+        or payload.get("orderid")
+        or payload.get("order_id")
+        or ""
+    ).strip()
+
+
+def _email_request_from_submission(
+    submission_id: str, payload: dict[str, Any], site_name: str
+) -> TildaEmailSendRequest | None:
+    payment = _payment_payload(payload)
+    to_email = (
+        str(_first_value(payload, ["Email", "email", "Почта"]) or "").strip().lower()
+    )
+    if not to_email or "@" not in to_email:
+        return None
+    return TildaEmailSendRequest(
+        submission_id=submission_id,
+        message_type="order_notification",
+        to_email=to_email,
+        customer_name=str(
+            _first_value(payload, ["Name", "name", "Full name", "Имя", "ФИО", "fio"])
+            or ""
+        ),
+        order_id=_order_id_from_payload(payload) or submission_id,
+        order_sum=_money_text(
+            payment.get("amount")
+            or _first_value(payload, ["amount", "total", "sum", "Сумма"])
+        ),
+        delivery_sum=_money_text(
+            payment.get("delivery_price")
+            or _first_value(payload, ["delivery_sum", "Стоимость доставки"])
+        ),
+        delivery_text=str(
+            payment.get("delivery")
+            or _first_value(payload, ["delivery", "Доставка"])
+            or "Доставка не указана"
+        ),
+    )
+
+
+async def _send_order_notification_for_submission(
+    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    email_payload = _email_request_from_submission(submission_id, payload, site_name)
+    if not email_payload:
+        return None
+    submission = {"id": submission_id, "payload": payload}
+    subject, body, body_html = _build_order_email(email_payload, site_name, submission)
+    send_customer_email(email_payload.to_email, subject, body, body_html)
+    return await save_tilda_email_message(
+        database_target,
+        {
+            "id": f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}",
+            "submission_id": submission_id,
+            "site": site_name,
+            "created_at": _now_utc().isoformat(),
+            "message_type": "order_notification",
+            "to_email": email_payload.to_email,
+            "subject": subject,
+            "body": body,
+            "body_html": body_html,
+            "status": "sent",
+        },
+    )
+
+
+def _cdek_im_number_prefix(account_name: str) -> str:
+    credentials = cdek_credentials(account_name)
+    prefix = str(credentials.get("prefix_number") or "").strip()
+    if not prefix:
+        return ""
+    return prefix if prefix.endswith("_") else f"{prefix}_"
+
+
+async def _auto_update_cdek_im_number(
+    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+) -> str | None:
+    order_id = _order_id_from_payload(payload)
+    if not order_id:
+        return None
+    cdek_account = _cdek_account_or_404(site_name)
+    new_im_number = f"{_cdek_im_number_prefix(cdek_account)}{order_id}"
+    if new_im_number == order_id:
+        return None
+    token = cdek_get_token(cdek_account)
+    order = find_cdek_order(order_id, token, by="im_number")
+    order_uuid = str(order.get("uuid") or "")
+    if not order_uuid:
+        return None
+    update_cdek_order_number(order_uuid, new_im_number, token)
+    await update_tilda_submission_im_number(
+        database_target, site_name, submission_id, order_id, new_im_number
+    )
+    return new_im_number
+
+
 def _build_custom_email(payload: TildaEmailSendRequest) -> tuple[str, str, str]:
     subject = (payload.custom_subject or "Сообщение по вашему заказу").strip()
     body = (payload.custom_body or "").strip()
@@ -579,9 +691,38 @@ async def tilda_webhook(name: str, request: Request):
             {"ok": True, "site": site_name, "message": "Tilda webhook test received"}
         )
 
+    database_target = _database_target_or_404(site_name)
     submission_id = await _save_submission(site_name, request, payload, payload_type)
     print(f"Данные записаны: Проект {name} {site_name}. submission_id: {submission_id}")
-    return JSONResponse({"ok": True, "site": site_name, "submission_id": submission_id})
+    auto_actions: dict[str, Any] = {"email_sent": False, "im_number_updated": False}
+    try:
+        email_message = await _send_order_notification_for_submission(
+            database_target, site_name, submission_id, payload
+        )
+        auto_actions["email_sent"] = bool(email_message)
+    except Exception as exc:
+        auto_actions["email_error"] = str(exc)
+        print(f"Не удалось автоматически отправить письмо: {exc}")
+
+    try:
+        new_im_number = await _auto_update_cdek_im_number(
+            database_target, site_name, submission_id, payload
+        )
+        auto_actions["im_number_updated"] = bool(new_im_number)
+        if new_im_number:
+            auto_actions["new_im_number"] = new_im_number
+    except Exception as exc:
+        auto_actions["im_number_error"] = str(exc)
+        print(f"Не удалось автоматически изменить Номер ИМ: {exc}")
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "site": site_name,
+            "submission_id": submission_id,
+            "auto_actions": auto_actions,
+        }
+    )
 
 
 @router.get("/tilda/{name}/form", response_class=HTMLResponse)
