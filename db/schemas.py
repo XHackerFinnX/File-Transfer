@@ -19,11 +19,47 @@ def _create_tilda_submissions_schema(database_name: str) -> None:
             cookies JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             client JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             headers JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            im_number TEXT NOT NULL DEFAULT ''
+            im_number TEXT NOT NULL DEFAULT '',
+            webhook_key TEXT NOT NULL DEFAULT ''
         );
         
         ALTER TABLE {table}
             ADD COLUMN IF NOT EXISTS im_number TEXT NOT NULL DEFAULT '';
+            
+        ALTER TABLE {table}
+            ADD COLUMN IF NOT EXISTS webhook_key TEXT NOT NULL DEFAULT '';
+
+        WITH existing_orders AS (
+            SELECT DISTINCT ON (site, order_id) id, order_id
+            FROM (
+                SELECT
+                    id,
+                    site,
+                    created_at,
+                    COALESCE(
+                        payload #>> '{{payment,orderid}}',
+                        payload #>> '{{payment,order_id}}',
+                        payload #>> '{{Payment,orderid}}',
+                        payload #>> '{{Payment,order_id}}',
+                        payload ->> 'orderid',
+                        payload ->> 'order_id',
+                        payload ->> 'Order ID',
+                        payload ->> 'Номер заказа'
+                    ) AS order_id
+                FROM {table}
+            ) submissions
+            WHERE order_id IS NOT NULL AND order_id <> ''
+            ORDER BY site, order_id, created_at ASC
+        )
+        UPDATE {table} submissions
+        SET webhook_key = 'order:' || existing_orders.order_id
+        FROM existing_orders
+        WHERE submissions.id = existing_orders.id
+          AND submissions.webhook_key = '';
+
+        CREATE UNIQUE INDEX IF NOT EXISTS {webhook_key_idx}
+            ON {table} (site, webhook_key)
+            WHERE webhook_key <> '';
 
         CREATE INDEX IF NOT EXISTS {site_created_idx}
             ON {table} (site, created_at DESC);
@@ -48,6 +84,9 @@ def _create_tilda_submissions_schema(database_name: str) -> None:
         email_table=sql.Identifier(TILDA_EMAIL_MESSAGES_TABLE),
         site_created_idx=sql.Identifier(
             f"{TILDA_SUBMISSIONS_TABLE}_site_created_at_idx"
+        ),
+        webhook_key_idx=sql.Identifier(
+            f"{TILDA_SUBMISSIONS_TABLE}_site_webhook_key_idx"
         ),
         email_submission_created_idx=sql.Identifier(
             f"{TILDA_EMAIL_MESSAGES_TABLE}_submission_created_at_idx"

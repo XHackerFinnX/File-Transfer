@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 from datetime import datetime
 from typing import Any
 
@@ -31,6 +33,17 @@ def _extract_order_id(payload: dict[str, Any]) -> str:
     return str(value).strip()
 
 
+def _webhook_key(payload: dict[str, Any]) -> str:
+    """Return a stable identity for retries of the same Tilda webhook."""
+    order_id = _extract_order_id(payload)
+    if order_id:
+        return f"order:{order_id}"
+    canonical_payload = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return f"payload:{hashlib.sha256(canonical_payload.encode('utf-8')).hexdigest()}"
+
+
 def _with_database_retry(database_name: str, operation):
     """Run a database operation and retry once if the pooled connection is stale."""
     pool = get_pool(database_name)
@@ -43,15 +56,20 @@ def _with_database_retry(database_name: str, operation):
             return operation(conn)
 
 
-def _save_tilda_submission(database_name: str, submission: dict[str, Any]) -> None:
+def _save_tilda_submission(
+    database_name: str, submission: dict[str, Any]
+) -> tuple[str, bool]:
     query = f"""
         INSERT INTO {TILDA_SUBMISSIONS_TABLE} (
-            id, site, created_at, payload_type, payload, cookies, client, headers, im_number
+            id, site, created_at, payload_type, payload, cookies, client, headers,
+            im_number, webhook_key
         ) VALUES (
             %(id)s, %(site)s, %(created_at)s, %(payload_type)s,
             %(payload)s::jsonb, %(cookies)s::jsonb, %(client)s::jsonb, %(headers)s::jsonb,
-            %(im_number)s
+            %(im_number)s, %(webhook_key)s
         )
+        ON CONFLICT (site, webhook_key) WHERE webhook_key <> '' DO NOTHING
+        RETURNING id
     """
     params = {
         **submission,
@@ -60,16 +78,29 @@ def _save_tilda_submission(database_name: str, submission: dict[str, Any]) -> No
         "client": Jsonb(submission.get("client", {})),
         "headers": Jsonb(submission.get("headers", {})),
         "im_number": _extract_order_id(submission.get("payload", {})),
+        "webhook_key": _webhook_key(submission.get("payload", {})),
     }
     
     def execute_insert(conn):
-        conn.execute(query, params)
+        inserted = conn.execute(query, params).fetchone()
+        if inserted:
+            return str(inserted[0]), True
+        existing = conn.execute(
+            f"""
+            SELECT id FROM {TILDA_SUBMISSIONS_TABLE}
+            WHERE site = %(site)s AND webhook_key = %(webhook_key)s
+            """,
+            params,
+        ).fetchone()
+        return str(existing[0]), False
         
-    _with_database_retry(database_name, execute_insert)
+    return _with_database_retry(database_name, execute_insert)
 
 
-async def save_tilda_submission(database_name: str, submission: dict[str, Any]) -> None:
-    await asyncio.to_thread(_save_tilda_submission, database_name, submission)
+async def save_tilda_submission(
+    database_name: str, submission: dict[str, Any]
+) -> tuple[str, bool]:
+    return await asyncio.to_thread(_save_tilda_submission, database_name, submission)
 
 
 def _read_tilda_submissions(

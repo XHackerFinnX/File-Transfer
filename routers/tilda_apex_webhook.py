@@ -243,7 +243,7 @@ async def _save_submission(
     request: Request,
     payload: dict[str, Any],
     payload_type: str,
-) -> str:
+) -> tuple[str, bool]:
     created_at = _now_utc()
     submission_id = f"{created_at.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
 
@@ -264,8 +264,7 @@ async def _save_submission(
             if key.lower() not in {"authorization"}
         },
     }
-    await save_tilda_submission(_database_target_or_404(name), meta)
-    return submission_id
+    return await save_tilda_submission(_database_target_or_404(name), meta)
 
 
 async def _read_submissions(name: str) -> list[dict[str, Any]]:
@@ -692,7 +691,22 @@ async def tilda_webhook(name: str, request: Request):
         )
 
     database_target = _database_target_or_404(site_name)
-    submission_id = await _save_submission(site_name, request, payload, payload_type)
+    submission_id, created = await _save_submission(
+        site_name, request, payload, payload_type
+    )
+    if not created:
+        print(
+            f"Повтор webhook пропущен: Проект {name} {site_name}. "
+            f"submission_id: {submission_id}"
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "site": site_name,
+                "submission_id": submission_id,
+                "duplicate": True,
+            }
+        )
     print(f"Данные записаны: Проект {name} {site_name}. submission_id: {submission_id}")
     auto_actions: dict[str, Any] = {"email_sent": False, "im_number_updated": False}
     try:
