@@ -65,11 +65,12 @@
     ];
 
     const socialNetworkMeta = {
-        instagram: { label: "Instagram", icon: "camera" },
-        tiktok: { label: "TikTok", icon: "music" },
-        telegram: { label: "Telegram", icon: "paper-plane" },
+        instagram: { label: "Instagram", icon: "instagram" },
+        tiktok: { label: "TikTok", icon: "tiktok" },
+        telegram: { label: "Telegram", icon: "telegram" },
         vk: { label: "ВКонтакте", icon: "vk" },
-        max: { label: "MAX", icon: "chat" },
+        max: { label: "MAX", icon: "max" },
+        youtube: { label: "YouTube", icon: "youtube" },
         none: { label: "Без соц. сети", icon: "minus" },
     };
 
@@ -1329,6 +1330,7 @@
 
     async function loadSubmissions() {
         status.textContent = "Загружаем заявки...";
+        refresh.textContent = refresh.dataset.loadingLabel || "Загрузка";
         refresh.disabled = true;
         renderLoadingSkeleton();
         try {
@@ -1357,6 +1359,7 @@
             status.textContent = "Не удалось загрузить заявки";
             list.innerHTML = `<div class="empty-state">Ошибка загрузки: ${escapeHtml(error.message)}</div>`;
         } finally {
+            refresh.textContent = refresh.dataset.idleLabel || "Обновить";
             refresh.disabled = false;
         }
     }
