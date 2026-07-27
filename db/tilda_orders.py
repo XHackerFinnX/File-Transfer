@@ -106,7 +106,7 @@ async def save_tilda_submission(
 def _read_tilda_submissions(
     database_name: str,
     site: str,
-    limit: int,
+    limit: int | None,
 ) -> list[dict[str, Any]]:
     query = f"""
         SELECT
@@ -141,7 +141,7 @@ def _read_tilda_submissions(
         FROM {TILDA_SUBMISSIONS_TABLE}
         WHERE site = %(site)s
         ORDER BY created_at DESC
-        LIMIT %(limit)s
+        {"LIMIT %(limit)s" if limit is not None else ""}
     """
     
     def fetch_rows(conn):
@@ -168,7 +168,7 @@ def _read_tilda_submissions(
 async def read_tilda_submissions(
     database_name: str,
     site: str,
-    limit: int,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     return await asyncio.to_thread(_read_tilda_submissions, database_name, site, limit)
 

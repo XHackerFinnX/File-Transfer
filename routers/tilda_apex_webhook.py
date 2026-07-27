@@ -32,7 +32,6 @@ router = APIRouter()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 MAX_BODY_BYTES = 2 * 1024 * 1024
-MAX_SUBMISSIONS_IN_LIST = 500
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -271,7 +270,6 @@ async def _read_submissions(name: str) -> list[dict[str, Any]]:
     submissions = await read_tilda_submissions(
         _database_target_or_404(name),
         _site_name_or_404(name),
-        MAX_SUBMISSIONS_IN_LIST,
     )
     return [_submission_summary(submission) for submission in submissions]
 

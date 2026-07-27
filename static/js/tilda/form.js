@@ -23,6 +23,7 @@
     const colorFilter = document.querySelector("[data-color-filter]");
     const socialFilter = document.querySelector("[data-social-filter]");
     const visibleCount = document.querySelector("[data-visible-count]");
+    const paginationContainers = document.querySelectorAll("[data-pagination]");
     const daysTable = document.querySelector("[data-days-table]");
     const sizesTable = document.querySelector("[data-sizes-table]");
     const colorsTable = document.querySelector("[data-colors-table]");
@@ -52,6 +53,8 @@
     let submissions = [];
     let orderRows = [];
     let visibleRows = [];
+    let currentPage = 1;
+    let pageSize = 10;
 
     const colorRules = [
         ["white", "Белые", /\bбел\w*\b/i],
@@ -1246,7 +1249,38 @@
         if (colorFilter) colorFilter.value = "all";
         if (socialFilter) socialFilter.value = "all";
         document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
+        currentPage = 1;
         render();
+    }
+
+    function renderPagination(totalItems) {
+        const totalPages = pageSize === "all"
+            ? 1
+            : Math.max(1, Math.ceil(totalItems / pageSize));
+        currentPage = Math.min(currentPage, totalPages);
+        const pageButtons = Array.from({ length: totalPages }, (_, index) => {
+            const page = index + 1;
+            return `<button class="pagination-page${page === currentPage ? " is-active" : ""}" type="button" data-page="${page}"${page === currentPage ? ' aria-current="page"' : ""}>${page}</button>`;
+        }).join("");
+        const markup = `
+            <div class="pagination-pages" aria-label="Страницы">
+                ${pageButtons}
+            </div>
+            <label class="pagination-size custom-filter" data-custom-select-filter>
+                <span>Показывать</span>
+                <select data-page-size data-custom-select aria-label="Количество заявок на странице">
+                    ${[10, 20, 30, 50].map((size) => `<option value="${size}"${pageSize === size ? " selected" : ""}>${size}</option>`).join("")}
+                    <option value="all"${pageSize === "all" ? " selected" : ""}>Все</option>
+                </select>
+            </label>`;
+        paginationContainers.forEach((container) => {
+            container.innerHTML = markup;
+        });
+        document.dispatchEvent(
+            new CustomEvent("tilda:custom-filters-init", {
+                detail: { root: root },
+            }),
+        );
     }
 
     function render() {
@@ -1257,11 +1291,16 @@
         const visibleSubmissions = submissions.filter((submission) =>
             visibleSubmissionIds.has(submission.id),
         );
+        renderPagination(visibleSubmissions.length);
+        const start = pageSize === "all" ? 0 : (currentPage - 1) * pageSize;
+        const paginatedSubmissions = pageSize === "all"
+            ? visibleSubmissions
+            : visibleSubmissions.slice(start, start + pageSize);
         renderStats(visibleRows);
         visibleCount.textContent = `${fmtInt(visibleSubmissions.length)} заявок / ${fmtInt(visibleRows.length)} строк товаров`;
         status.textContent = `Показано: ${fmtInt(visibleSubmissions.length)} заявок, ${fmtInt(visibleRows.length)} товарных строк`;
-        list.innerHTML = visibleSubmissions.length
-            ? visibleSubmissions.map(renderSubmission).join("")
+        list.innerHTML = paginatedSubmissions.length
+            ? paginatedSubmissions.map(renderSubmission).join("")
             : '<div class="empty-state">Заявок пока нет или ничего не найдено.</div>';
     }
 
@@ -1364,7 +1403,11 @@
         }
     }
 
-    const debouncedRender = debounce(render, 200);
+    const renderFromFirstPage = () => {
+        currentPage = 1;
+        render();
+    };
+    const debouncedRender = debounce(renderFromFirstPage, 200);
     // Текстовый поиск — с debounce, остальные фильтры — мгновенно
     search?.addEventListener("input", debouncedRender);
     [
@@ -1376,7 +1419,27 @@
         colorFilter,
         socialFilter,
     ].forEach((element) => {
-        element?.addEventListener("change", render);
+        element?.addEventListener("change", renderFromFirstPage);
+    });
+    paginationContainers.forEach((container) => {
+        container.addEventListener("click", (event) => {
+            const pageButton = event.target.closest("[data-page]");
+            if (!pageButton) return;
+            currentPage = Number(pageButton.dataset.page);
+            render();
+            document.querySelector('[data-pagination="top"]')?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+            });
+        });
+        container.addEventListener("change", (event) => {
+            if (!event.target.matches("[data-page-size]")) return;
+            pageSize = event.target.value === "all"
+                ? "all"
+                : Number(event.target.value);
+            currentPage = 1;
+            render();
+        });
     });
     refresh?.addEventListener("click", loadSubmissions);
     list?.addEventListener("click", (event) => {

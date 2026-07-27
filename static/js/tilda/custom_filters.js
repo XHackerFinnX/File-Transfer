@@ -314,15 +314,28 @@
         sync();
     }
 
-    document
-        .querySelectorAll("[data-custom-select-filter]")
-        .forEach((filter) => {
+    function initCustomFilters(scope = document) {
+        scope.querySelectorAll("[data-custom-select-filter]").forEach((filter) => {
+            if (filter.dataset.customFilterReady === "true") return;
             const select = filter.querySelector("[data-custom-select]");
-            if (select) buildSelect(filter, select);
+            if (select) {
+                filter.dataset.customFilterReady = "true";
+                buildSelect(filter, select);
+            }
         });
-    document.querySelectorAll("[data-custom-date-filter]").forEach((filter) => {
-        const input = filter.querySelector("[data-custom-date]");
-        if (input) buildDate(filter, input);
+        scope.querySelectorAll("[data-custom-date-filter]").forEach((filter) => {
+            if (filter.dataset.customFilterReady === "true") return;
+            const input = filter.querySelector("[data-custom-date]");
+            if (input) {
+                filter.dataset.customFilterReady = "true";
+                buildDate(filter, input);
+            }
+        });
+    }
+
+    initCustomFilters();
+    document.addEventListener("tilda:custom-filters-init", (event) => {
+        initCustomFilters(event.detail?.root || document);
     });
     document.addEventListener("click", (event) => {
         if (!event.target.closest(".custom-filter")) closeAll();
