@@ -902,10 +902,7 @@
     function renderEmailBadges(submission) {
         const stats = emailStats(submission);
         if (!stats.total) return "";
-        return `
-            <span class="badge email-sent">Писем: ${escapeHtml(fmtInt(stats.total))}</span>
-            <span class="badge email-order">Заказ: ${escapeHtml(fmtInt(stats.orderCount))}</span>
-            <span class="badge email-custom">Сообщений: ${escapeHtml(fmtInt(stats.customCount))}</span>`;
+        return `<span class="badge email-sent">Писем: ${escapeHtml(fmtInt(stats.total))}</span>`;
     }
 
     function renderEmailHistory(submission) {
@@ -1130,23 +1127,26 @@
                             <h2 class="submission-title">${escapeHtml(title)}</h2>
                             <div class="submission-meta">
                                 <span class="badge">${escapeHtml(formatDate(submission.created_at))}</span>
-                                <span class="badge">${escapeHtml(first.phone || submission.contact || "Без контакта")}</span>
-                                <span class="badge">${escapeHtml(first.orderId ? `Заказ ${first.orderId}` : submission.id)}</span>
-                                ${imNumber ? `<span class="badge ${isCustomImNumber ? "im-custom" : ""}">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                                 <span class="badge">${escapeHtml(fmtMoney(orderSum))}</span>
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
-                                <span class="badge">${escapeHtml(first.deliveryText || first.deliveryType || "Доставка не указана")}</span>
                                 ${first.socialNetworkLabel ? `<span class="badge social-badge" data-social-icon="${escapeHtml(first.socialNetworkIcon)}">${escapeHtml(first.socialNetworkLabel)}</span>` : ""}
                                 ${renderEmailBadges(submission)}
+                                ${imNumber ? `<span class="badge ${isCustomImNumber ? "im-custom" : ""}">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                             </div>
                         </div>
                         <span class="submission-actions">
-                            ${email ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
-                            ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
                             <span class="toggle-hint">Подробнее</span>
                         </span>
                     </summary>
                     <div class="submission-body pretty-body">
+                        ${
+                            email || imNumber
+                                ? `<div class="submission-actions submission-body-actions">
+                                ${email ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
+                                ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
+                            </div>`
+                                : ""
+                        }
                         ${renderCustomerSection(submission, rows)}
                         ${renderPaymentSection(rows)}
                         <section class="pretty-section wide"><h3>Товары</h3>${renderProductsTable(rows)}</section>
@@ -1157,12 +1157,6 @@
                 </details>
             </article>`;
     }
-
-    // <span class="submission-actions">
-    //     ${emailHref ? `<a class="action-button" href="${emailHref}">Написать на почту</a>` : ""}
-    //     ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
-    //     <span class="toggle-hint">Подробнее</span>
-    // </span>
 
     function updateFilterOptions() {
         const selectedSize = sizeFilter.value;
@@ -1254,9 +1248,10 @@
     }
 
     function renderPagination(totalItems) {
-        const totalPages = pageSize === "all"
-            ? 1
-            : Math.max(1, Math.ceil(totalItems / pageSize));
+        const totalPages =
+            pageSize === "all"
+                ? 1
+                : Math.max(1, Math.ceil(totalItems / pageSize));
         currentPage = Math.min(currentPage, totalPages);
         const pageButtons = Array.from({ length: totalPages }, (_, index) => {
             const page = index + 1;
@@ -1293,9 +1288,10 @@
         );
         renderPagination(visibleSubmissions.length);
         const start = pageSize === "all" ? 0 : (currentPage - 1) * pageSize;
-        const paginatedSubmissions = pageSize === "all"
-            ? visibleSubmissions
-            : visibleSubmissions.slice(start, start + pageSize);
+        const paginatedSubmissions =
+            pageSize === "all"
+                ? visibleSubmissions
+                : visibleSubmissions.slice(start, start + pageSize);
         renderStats(visibleRows);
         visibleCount.textContent = `${fmtInt(visibleSubmissions.length)} заявок / ${fmtInt(visibleRows.length)} строк товаров`;
         status.textContent = `Показано: ${fmtInt(visibleSubmissions.length)} заявок, ${fmtInt(visibleRows.length)} товарных строк`;
@@ -1434,9 +1430,10 @@
         });
         container.addEventListener("change", (event) => {
             if (!event.target.matches("[data-page-size]")) return;
-            pageSize = event.target.value === "all"
-                ? "all"
-                : Number(event.target.value);
+            pageSize =
+                event.target.value === "all"
+                    ? "all"
+                    : Number(event.target.value);
             currentPage = 1;
             render();
         });

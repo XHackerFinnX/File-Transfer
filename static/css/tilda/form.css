@@ -835,6 +835,10 @@ td {
     justify-content: flex-end;
 }
 
+.submission-body-actions {
+    grid-column: 1 / -1;
+}
+
 .action-button {
     display: inline-flex;
     align-items: center;
