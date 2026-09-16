@@ -32,7 +32,8 @@ async def lifespan(app: FastAPI):
     tilda_database_targets = {
         config.TILDA_APEX_DATABASE_TARGET,
         config.TILDA_REAL_BABY_DATABASE_TARGET,
-        config.TILDA_AMA_LIVING_DATABASE_TARGET
+        config.TILDA_AMA_LIVING_DATABASE_TARGET,
+        config.TILDA_WAYFS_DATABASE_TARGET
     }
     await asyncio.to_thread(open_database_pools, *tilda_database_targets)
     for database_target in tilda_database_targets:

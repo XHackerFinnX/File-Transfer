@@ -18,9 +18,11 @@ class Settings(BaseSettings):
     POSTGRESQL_DATABASE_APEX: str
     POSTGRESQL_DATABASE_REAL_BABY: str
     POSTGRESQL_DATABASE_AMA_LIVING: str
+    POSTGRESQL_DATABASE_WAYFS: str
     TILDA_APEX_DATABASE_TARGET: str = "apex"
     TILDA_REAL_BABY_DATABASE_TARGET: str = "real_baby"
     TILDA_AMA_LIVING_DATABASE_TARGET: str = "ama_living"
+    TILDA_WAYFS_DATABASE_TARGET: str = "wayfs"
     POSTGRESQL_SSLMODE: str = "disable"
     
     SMTP_PASSWORD: SecretStr
