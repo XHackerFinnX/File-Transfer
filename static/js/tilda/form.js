@@ -649,10 +649,20 @@
         const orders = [...uniqueOrders.values()].map((order) => {
             const fallbackTotal = order.productsSum + order.deliverySum;
             const total = order.orderSumTotal || fallbackTotal;
+
+            // Если сумма товаров уже равна итоговой сумме,
+            // значит доставка передана отдельно и из итога её вычитать не нужно.
+            const productsEqualTotal =
+                Math.abs(order.productsSum - total) < 0.01;
+
+            const productsSum = productsEqualTotal
+                ? order.productsSum
+                : Math.max(total - order.deliverySum, 0);
+
             return {
                 ...order,
                 orderSumTotal: total,
-                productsSum: Math.max(total - order.deliverySum, 0),
+                productsSum,
             };
         });
         const stats = {
