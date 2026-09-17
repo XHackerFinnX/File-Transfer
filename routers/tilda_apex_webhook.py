@@ -1,7 +1,12 @@
+import hashlib
 import html
 import json
+import logging
+import os
 import re
+import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +40,239 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# ---------------------------------------------------------------------------
+# Подробное логирование Tilda webhook
+# ---------------------------------------------------------------------------
+WEBHOOK_LOGGER = logging.getLogger("tilda.webhook")
+WEBHOOK_LOGGER.setLevel(logging.INFO)
+WEBHOOK_LOGGER.propagate = False
+
+if not WEBHOOK_LOGGER.handlers:
+    _webhook_handler = logging.StreamHandler()
+    _webhook_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+        )
+    )
+    WEBHOOK_LOGGER.addHandler(_webhook_handler)
+
+# Полный payload может содержать ФИО, телефон, email и другие персональные данные.
+# По умолчанию он не пишется целиком. Для временной отладки можно включить:
+# TILDA_WEBHOOK_LOG_PAYLOAD=1
+LOG_WEBHOOK_PAYLOAD = os.getenv("TILDA_WEBHOOK_LOG_PAYLOAD", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+_SENSITIVE_LOG_KEYS = {
+    "authorization",
+    "cookie",
+    "cookies",
+    "secret",
+    "token",
+    "key",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "x-tilda-form-secret",
+}
+
+
+def _redact_for_log(value: Any) -> Any:
+    """Рекурсивно скрывает секреты перед выводом структуры в лог."""
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key)
+            normalized = key.strip().lower()
+            if normalized in _SENSITIVE_LOG_KEYS or any(
+                part in normalized
+                for part in ("password", "passwd", "authorization", "secret", "token")
+            ):
+                result[key] = "***REDACTED***"
+            else:
+                result[key] = _redact_for_log(raw_value)
+        return result
+    if isinstance(value, list):
+        return [_redact_for_log(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_for_log(item) for item in value]
+    return value
+
+
+def _mask_email_for_log(value: str) -> str:
+    """Частично скрывает email, оставляя его узнаваемым для диагностики."""
+    email = str(value or "").strip()
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    if len(local) == 1:
+        masked_local = f"{local[0]}***"
+    elif len(local) == 2:
+        masked_local = f"{local[0]}***{local[-1]}"
+    else:
+        masked_local = f"{local[:2]}***{local[-1]}"
+    return f"{masked_local}@{domain}"
+
+
+def _mask_phone_for_log(value: str) -> str:
+    """Частично скрывает телефон, оставляя последние цифры для диагностики."""
+    phone = str(value or "").strip()
+    digits = re.sub(r"\D", "", phone)
+    if not digits:
+        return ""
+    if len(digits) <= 4:
+        return "***" + digits[-2:]
+    prefix = "+" if phone.startswith("+") else ""
+    return f"{prefix}{digits[:1]}***{digits[-4:]}"
+
+
+def _customer_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Возвращает бизнес-контекст заявки для логов.
+
+    customer_ref — стабильный псевдоним клиента на основе email или телефона.
+    Один и тот же email/телефон будет давать одинаковый customer_ref,
+    в отличие от submission_id, который относится к конкретной заявке.
+    """
+    def first(keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        return ""
+
+    payment = payload.get("payment") or payload.get("Payment") or payload.get("Оплата")
+    payment = payment if isinstance(payment, dict) else {}
+
+    customer_name = str(
+        first(("Name", "name", "Full name", "Имя", "ФИО", "fio")) or ""
+    ).strip()
+    email = str(first(("Email", "email", "Почта")) or "").strip().lower()
+    phone = str(first(("Phone", "phone", "Телефон")) or "").strip()
+    order_id = str(
+        payment.get("orderid")
+        or payment.get("order_id")
+        or payload.get("orderid")
+        or payload.get("order_id")
+        or ""
+    ).strip()
+
+    phone_digits = re.sub(r"\D", "", phone)
+    stable_customer_source = email or phone_digits
+    customer_ref = (
+        hashlib.sha256(stable_customer_source.encode("utf-8")).hexdigest()[:12]
+        if stable_customer_source
+        else ""
+    )
+
+    fields: dict[str, Any] = {}
+    if customer_name:
+        fields["customer_name"] = customer_name
+    if customer_ref:
+        fields["customer_ref"] = customer_ref
+    if email:
+        fields["customer_email"] = _mask_email_for_log(email)
+    if phone:
+        fields["customer_phone"] = _mask_phone_for_log(phone)
+    if order_id:
+        fields["order_id"] = order_id
+    return fields
+
+
+_WEBHOOK_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+    "tilda_webhook_log_context",
+    default={},
+)
+
+
+def _update_webhook_log_context(**fields: Any) -> None:
+    """Добавляет поля в контекст текущего webhook-запроса."""
+    context = dict(_WEBHOOK_LOG_CONTEXT.get())
+    for key, value in fields.items():
+        if value not in (None, ""):
+            context[key] = value
+    _WEBHOOK_LOG_CONTEXT.set(context)
+
+
+def _log_webhook(
+    level: int,
+    trace_id: str,
+    event: str,
+    **fields: Any,
+) -> None:
+    """Пишет одно структурированное событие webhook в одну строку."""
+    context = {
+        key: _redact_for_log(value)
+        for key, value in _WEBHOOK_LOG_CONTEXT.get().items()
+    }
+    record = {
+        **context,
+        "trace_id": trace_id,
+        "event": event,
+        "timestamp_local": datetime.now().astimezone().isoformat(),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        **{key: _redact_for_log(value) for key, value in fields.items()},
+    }
+    WEBHOOK_LOGGER.log(
+        level,
+        json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")),
+    )
+
+
+def _log_webhook_exception(
+    trace_id: str,
+    event: str,
+    exc: Exception,
+    **fields: Any,
+) -> None:
+    """Пишет ошибку webhook вместе с traceback."""
+    context = {
+        key: _redact_for_log(value)
+        for key, value in _WEBHOOK_LOG_CONTEXT.get().items()
+    }
+    record = {
+        **context,
+        "trace_id": trace_id,
+        "event": event,
+        "timestamp_local": datetime.now().astimezone().isoformat(),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        **{key: _redact_for_log(value) for key, value in fields.items()},
+    }
+    WEBHOOK_LOGGER.exception(
+        json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":"))
+    )
+
+
+def _payload_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Безопасная сводка payload для обычного режима логирования."""
+    result: dict[str, Any] = {
+        "payload_keys": list(payload.keys()),
+        "payload_fields_count": len(payload),
+    }
+
+    payment = payload.get("payment") or payload.get("Payment") or payload.get("Оплата")
+    if isinstance(payment, dict):
+        result["payment_keys"] = list(payment.keys())
+        products = payment.get("products")
+        if isinstance(products, list):
+            result["products_count"] = len(products)
+        order_id = payment.get("orderid") or payment.get("order_id")
+        if order_id not in (None, ""):
+            result["order_id"] = str(order_id)
+
+    if LOG_WEBHOOK_PAYLOAD:
+        result["payload"] = _redact_for_log(payload)
+
+    return result
 
 class CdekImNumberUpdateRequest(BaseModel):
     current_im_number: str
@@ -192,33 +430,116 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _extract_payload(request: Request) -> tuple[dict[str, Any], str]:
+async def _extract_payload(
+    request: Request,
+    trace_id: str = "-",
+) -> tuple[dict[str, Any], str]:
     content_type = request.headers.get("content-type", "").lower()
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "payload.read.start",
+        content_type=content_type or None,
+        declared_content_length=request.headers.get("content-length"),
+    )
+
+    started = time.perf_counter()
     body = await request.body()
+    body_read_ms = round((time.perf_counter() - started) * 1000, 2)
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "payload.read.done",
+        body_bytes=len(body),
+        elapsed_ms=body_read_ms,
+    )
 
     if len(body) > MAX_BODY_BYTES:
+        _log_webhook(
+            logging.WARNING,
+            trace_id,
+            "payload.rejected.too_large",
+            body_bytes=len(body),
+            max_body_bytes=MAX_BODY_BYTES,
+        )
         return {"_error": "payload_too_large", "size": len(body)}, "too_large"
 
     if "application/json" in content_type:
+        _log_webhook(logging.INFO, trace_id, "payload.parse.json.start")
         try:
             parsed = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            fields: dict[str, Any] = {
+                "line": exc.lineno,
+                "column": exc.colno,
+                "position": exc.pos,
+            }
+            if LOG_WEBHOOK_PAYLOAD:
+                fields["body_preview"] = body.decode(
+                    "utf-8", errors="replace"
+                )[:2000]
+            _log_webhook(
+                logging.WARNING,
+                trace_id,
+                "payload.parse.json.invalid",
+                **fields,
+            )
             return {"_raw": body.decode("utf-8", errors="replace")}, "invalid_json"
+
         if isinstance(parsed, dict):
-            return {
+            payload = {
                 str(key): _json_safe(value) for key, value in parsed.items()
-            }, "json"
-        return {"value": _json_safe(parsed)}, "json"
+            }
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "payload.parse.json.done",
+                **_payload_log_fields(payload),
+            )
+            return payload, "json"
+
+        payload = {"value": _json_safe(parsed)}
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "payload.parse.json.done",
+            root_type=type(parsed).__name__,
+            **_payload_log_fields(payload),
+        )
+        return payload, "json"
 
     if "application/x-www-form-urlencoded" in content_type or not content_type:
+        _log_webhook(logging.INFO, trace_id, "payload.parse.form.start")
         parsed = parse_qs(
-            body.decode("utf-8", errors="replace"), keep_blank_values=True
+            body.decode("utf-8", errors="replace"),
+            keep_blank_values=True,
         )
-        return _normalize_form_mapping(parsed), "form"
+        payload = _normalize_form_mapping(parsed)
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "payload.parse.form.done",
+            **_payload_log_fields(payload),
+        )
+        return payload, "form"
 
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "payload.parse.multipart.start",
+        content_type=content_type,
+    )
     try:
         form = await request.form()
-    except Exception:
+    except Exception as exc:
+        _log_webhook_exception(
+            trace_id,
+            "payload.parse.multipart.failed",
+            exc,
+            content_type=content_type,
+        )
         return {"_raw": body.decode("utf-8", errors="replace")}, "raw"
 
     payload: dict[str, Any] = {}
@@ -230,6 +551,13 @@ async def _extract_payload(request: Request) -> tuple[dict[str, Any], str]:
             payload[key].append(str(value))
         else:
             payload[key] = str(value)
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "payload.parse.multipart.done",
+        **_payload_log_fields(payload),
+    )
     return payload, "multipart"
 
 
@@ -242,13 +570,31 @@ async def _save_submission(
     request: Request,
     payload: dict[str, Any],
     payload_type: str,
+    trace_id: str = "-",
 ) -> tuple[str, bool]:
     created_at = _now_utc()
-    submission_id = f"{created_at.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
+    submission_id = (
+        f"{created_at.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
+    )
+
+    site_name = _site_name_or_404(name)
+    database_target = _database_target_or_404(name)
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "database.submission.prepare",
+        site=site_name,
+        database_target=database_target,
+        submission_id=submission_id,
+        payload_type=payload_type,
+        **_customer_log_fields(payload),
+        **_payload_log_fields(payload),
+    )
 
     meta = {
         "id": submission_id,
-        "site": _site_name_or_404(name),
+        "site": site_name,
         "created_at": created_at.isoformat(),
         "payload_type": payload_type,
         "payload": payload,
@@ -263,7 +609,35 @@ async def _save_submission(
             if key.lower() not in {"authorization"}
         },
     }
-    return await save_tilda_submission(_database_target_or_404(name), meta)
+
+    started = time.perf_counter()
+    try:
+        result = await save_tilda_submission(database_target, meta)
+    except Exception as exc:
+        _log_webhook_exception(
+            trace_id,
+            "database.submission.failed",
+            exc,
+            site=site_name,
+            database_target=database_target,
+            submission_id=submission_id,
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+
+    saved_submission_id, created = result
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "database.submission.done",
+        site=site_name,
+        database_target=database_target,
+        submission_id=saved_submission_id,
+        created=created,
+        duplicate=not created,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+    return saved_submission_id, created
 
 
 async def _read_submissions(name: str) -> list[dict[str, Any]]:
@@ -601,29 +975,164 @@ def _email_request_from_submission(
 
 
 async def _send_order_notification_for_submission(
-    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+    database_target: str,
+    site_name: str,
+    submission_id: str,
+    payload: dict[str, Any],
+    trace_id: str = "-",
 ) -> dict[str, Any] | None:
-    email_payload = _email_request_from_submission(submission_id, payload, site_name)
-    if not email_payload:
-        return None
-    submission = {"id": submission_id, "payload": payload}
-    subject, body, body_html = _build_order_email(email_payload, site_name, submission)
-    send_customer_email(email_payload.to_email, subject, body, body_html)
-    return await save_tilda_email_message(
-        database_target,
-        {
-            "id": f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}",
-            "submission_id": submission_id,
-            "site": site_name,
-            "created_at": _now_utc().isoformat(),
-            "message_type": "order_notification",
-            "to_email": email_payload.to_email,
-            "subject": subject,
-            "body": body,
-            "body_html": body_html,
-            "status": "sent",
-        },
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.auto.prepare.start",
+        site=site_name,
+        submission_id=submission_id,
     )
+
+    email_payload = _email_request_from_submission(
+        submission_id, payload, site_name
+    )
+    if not email_payload:
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "email.auto.skipped",
+            site=site_name,
+            submission_id=submission_id,
+            reason="customer_email_missing_or_invalid",
+        )
+        return None
+
+    submission = {"id": submission_id, "payload": payload}
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.auto.build.start",
+        site=site_name,
+        submission_id=submission_id,
+    )
+    build_started = time.perf_counter()
+    try:
+        subject, body, body_html = _build_order_email(
+            email_payload, site_name, submission
+        )
+    except Exception as exc:
+        _log_webhook_exception(
+            trace_id,
+            "email.auto.build.failed",
+            exc,
+            site=site_name,
+            submission_id=submission_id,
+            elapsed_ms=round((time.perf_counter() - build_started) * 1000, 2),
+        )
+        raise
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.auto.build.done",
+        site=site_name,
+        submission_id=submission_id,
+        subject=subject,
+        text_length=len(body),
+        html_length=len(body_html),
+        elapsed_ms=round((time.perf_counter() - build_started) * 1000, 2),
+    )
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.auto.send.start",
+        site=site_name,
+        submission_id=submission_id,
+        to_email=_mask_email_for_log(email_payload.to_email),
+        subject=subject,
+    )
+
+    started = time.perf_counter()
+    try:
+        send_customer_email(
+            email_payload.to_email,
+            subject,
+            body,
+            body_html,
+        )
+    except Exception as exc:
+        _log_webhook_exception(
+            trace_id,
+            "email.auto.send.failed",
+            exc,
+            site=site_name,
+            submission_id=submission_id,
+            to_email=_mask_email_for_log(email_payload.to_email),
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.auto.send.done",
+        site=site_name,
+        submission_id=submission_id,
+        to_email=_mask_email_for_log(email_payload.to_email),
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
+    message_meta = {
+        "id": (
+            f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_"
+            f"{uuid.uuid4().hex[:8]}"
+        ),
+        "submission_id": submission_id,
+        "site": site_name,
+        "created_at": _now_utc().isoformat(),
+        "message_type": "order_notification",
+        "to_email": email_payload.to_email,
+        "subject": subject,
+        "body": body,
+        "body_html": body_html,
+        "status": "sent",
+    }
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.database.save.start",
+        site=site_name,
+        submission_id=submission_id,
+        message_id=message_meta["id"],
+    )
+
+    started = time.perf_counter()
+    try:
+        message = await save_tilda_email_message(
+            database_target,
+            message_meta,
+        )
+    except Exception as exc:
+        _log_webhook_exception(
+            trace_id,
+            "email.database.save.failed",
+            exc,
+            site=site_name,
+            submission_id=submission_id,
+            message_id=message_meta["id"],
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "email.database.save.done",
+        site=site_name,
+        submission_id=submission_id,
+        message_id=message_meta["id"],
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+    return message
 
 
 def _cdek_im_number_prefix(account_name: str) -> str:
@@ -635,23 +1144,175 @@ def _cdek_im_number_prefix(account_name: str) -> str:
 
 
 async def _auto_update_cdek_im_number(
-    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+    database_target: str,
+    site_name: str,
+    submission_id: str,
+    payload: dict[str, Any],
+    trace_id: str = "-",
 ) -> str | None:
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.auto.start",
+        site=site_name,
+        submission_id=submission_id,
+    )
+
     order_id = _order_id_from_payload(payload)
     if not order_id:
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "cdek.auto.skipped",
+            site=site_name,
+            submission_id=submission_id,
+            reason="order_id_missing",
+        )
         return None
+
     cdek_account = _cdek_account_or_404(site_name)
-    new_im_number = f"{_cdek_im_number_prefix(cdek_account)}{order_id}"
+    prefix = _cdek_im_number_prefix(cdek_account)
+    new_im_number = f"{prefix}{order_id}"
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.auto.number.calculated",
+        site=site_name,
+        submission_id=submission_id,
+        cdek_account=cdek_account,
+        order_id=order_id,
+        prefix=prefix,
+        new_im_number=new_im_number,
+    )
+
     if new_im_number == order_id:
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "cdek.auto.skipped",
+            site=site_name,
+            submission_id=submission_id,
+            order_id=order_id,
+            reason="new_im_number_equals_order_id",
+        )
         return None
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.token.start",
+        site=site_name,
+        submission_id=submission_id,
+        cdek_account=cdek_account,
+    )
+    started = time.perf_counter()
     token = cdek_get_token(cdek_account)
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.token.done",
+        site=site_name,
+        submission_id=submission_id,
+        cdek_account=cdek_account,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.order.search.start",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        search_by="im_number",
+    )
+    started = time.perf_counter()
     order = find_cdek_order(order_id, token, by="im_number")
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.order.search.done",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        found=bool(order),
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
     order_uuid = str(order.get("uuid") or "")
     if not order_uuid:
+        _log_webhook(
+            logging.WARNING,
+            trace_id,
+            "cdek.auto.skipped",
+            site=site_name,
+            submission_id=submission_id,
+            order_id=order_id,
+            reason="order_uuid_missing",
+        )
         return None
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.order.update.start",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        order_uuid=order_uuid,
+        new_im_number=new_im_number,
+    )
+    started = time.perf_counter()
     update_cdek_order_number(order_uuid, new_im_number, token)
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.order.update.done",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        order_uuid=order_uuid,
+        new_im_number=new_im_number,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.database.update.start",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        new_im_number=new_im_number,
+    )
+    started = time.perf_counter()
     await update_tilda_submission_im_number(
-        database_target, site_name, submission_id, order_id, new_im_number
+        database_target,
+        site_name,
+        submission_id,
+        order_id,
+        new_im_number,
+    )
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.database.update.done",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        new_im_number=new_im_number,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "cdek.auto.done",
+        site=site_name,
+        submission_id=submission_id,
+        order_id=order_id,
+        new_im_number=new_im_number,
     )
     return new_im_number
 
@@ -668,73 +1329,360 @@ def _build_custom_email(payload: TildaEmailSendRequest) -> tuple[str, str, str]:
 
 
 @router.options("/tilda/{name}/webhook")
-async def tilda_webhook_options(name: str):
-    _site_name_or_404(name)
-    return Response(status_code=204)
+async def tilda_webhook_options(name: str, request: Request):
+    trace_id = uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "webhook.options.received",
+        raw_site=name,
+        method=request.method,
+        path=request.url.path,
+        client_host=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        origin=request.headers.get("origin"),
+    )
+
+    try:
+        site_name = _site_name_or_404(name)
+    except HTTPException as exc:
+        _log_webhook(
+            logging.WARNING,
+            trace_id,
+            "webhook.options.rejected",
+            raw_site=name,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+
+    _log_webhook(
+        logging.INFO,
+        trace_id,
+        "webhook.options.response",
+        site=site_name,
+        status_code=204,
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+    return Response(status_code=204, headers={"X-Trace-ID": trace_id})
 
 
 @router.post("/tilda/{name}/webhook")
 async def tilda_webhook(name: str, request: Request):
-    site_name = _site_name_or_404(name)
-    payload, payload_type = await _extract_payload(request)
+    trace_id = uuid.uuid4().hex[:12]
+    request_started = time.perf_counter()
 
-    if payload_type == "too_large":
-        return JSONResponse(
-            {"ok": False, "error": "payload_too_large"}, status_code=413
+    # ContextVar безопасен для параллельных async-запросов: контекст одного
+    # webhook не смешивается с другим.
+    log_context_token = _WEBHOOK_LOG_CONTEXT.set({"raw_site": name})
+
+    try:
+        client_host = request.client.host if request.client else None
+        client_port = request.client.port if request.client else None
+
+        _log_webhook(
+            logging.INFO,
+            trace_id,
+            "webhook.received",
+            method=request.method,
+            path=request.url.path,
+            query_keys=list(request.query_params.keys()),
+            client_host=client_host,
+            client_port=client_port,
+            content_type=request.headers.get("content-type"),
+            content_length=request.headers.get("content-length"),
+            user_agent=request.headers.get("user-agent"),
+            forwarded_for=request.headers.get("x-forwarded-for"),
+            request_id_header=(
+                request.headers.get("x-request-id")
+                or request.headers.get("x-correlation-id")
+            ),
         )
 
-    if _is_tilda_test(payload):
-        return JSONResponse(
-            {"ok": True, "site": site_name, "message": "Tilda webhook test received"}
-        )
+        try:
+            site_name = _site_name_or_404(name)
+            _update_webhook_log_context(site=site_name)
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.site.validated",
+            )
 
-    database_target = _database_target_or_404(site_name)
-    submission_id, created = await _save_submission(
-        site_name, request, payload, payload_type
-    )
-    if not created:
-        print(
-            f"Повтор webhook пропущен: Проект {name} {site_name}. "
-            f"submission_id: {submission_id}"
-        )
-        return JSONResponse(
-            {
-                "ok": True,
-                "site": site_name,
-                "submission_id": submission_id,
-                "duplicate": True,
+            payload, payload_type = await _extract_payload(
+                request,
+                trace_id=trace_id,
+            )
+
+            # После разбора payload весь дальнейший лог автоматически получает
+            # customer_name/customer_ref/email/phone/order_id.
+            customer_fields = _customer_log_fields(payload)
+            _update_webhook_log_context(**customer_fields)
+
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.payload.ready",
+                payload_type=payload_type,
+                **_payload_log_fields(payload),
+            )
+
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.customer.detected",
+                customer_detected=bool(customer_fields),
+            )
+
+            if payload_type == "too_large":
+                elapsed_ms = round(
+                    (time.perf_counter() - request_started) * 1000,
+                    2,
+                )
+                _log_webhook(
+                    logging.WARNING,
+                    trace_id,
+                    "webhook.response",
+                    status_code=413,
+                    result="payload_too_large",
+                    elapsed_ms=elapsed_ms,
+                )
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "payload_too_large",
+                        "trace_id": trace_id,
+                    },
+                    status_code=413,
+                    headers={"X-Trace-ID": trace_id},
+                )
+
+            is_test = _is_tilda_test(payload)
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.test.checked",
+                is_test=is_test,
+            )
+
+            if is_test:
+                elapsed_ms = round(
+                    (time.perf_counter() - request_started) * 1000,
+                    2,
+                )
+                _log_webhook(
+                    logging.INFO,
+                    trace_id,
+                    "webhook.response",
+                    status_code=200,
+                    result="tilda_test_received",
+                    elapsed_ms=elapsed_ms,
+                )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "site": site_name,
+                        "message": "Tilda webhook test received",
+                        "trace_id": trace_id,
+                    },
+                    headers={"X-Trace-ID": trace_id},
+                )
+
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "database.target.resolve.start",
+            )
+            database_target = _database_target_or_404(site_name)
+            _update_webhook_log_context(database_target=database_target)
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "database.target.resolve.done",
+            )
+
+            submission_id, created = await _save_submission(
+                site_name,
+                request,
+                payload,
+                payload_type,
+                trace_id=trace_id,
+            )
+
+            # submission_id относится к конкретной сохранённой заявке, а не к
+            # клиенту. С этого момента он автоматически присутствует во всех
+            # последующих событиях данного webhook.
+            _update_webhook_log_context(submission_id=submission_id)
+
+            if not created:
+                elapsed_ms = round(
+                    (time.perf_counter() - request_started) * 1000,
+                    2,
+                )
+                _log_webhook(
+                    logging.INFO,
+                    trace_id,
+                    "webhook.duplicate",
+                )
+                _log_webhook(
+                    logging.INFO,
+                    trace_id,
+                    "webhook.response",
+                    status_code=200,
+                    result="duplicate",
+                    elapsed_ms=elapsed_ms,
+                )
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "site": site_name,
+                        "submission_id": submission_id,
+                        "duplicate": True,
+                        "trace_id": trace_id,
+                    },
+                    headers={"X-Trace-ID": trace_id},
+                )
+
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.submission.created",
+            )
+
+            auto_actions: dict[str, Any] = {
+                "email_sent": False,
+                "im_number_updated": False,
             }
-        )
-    print(f"Данные записаны: Проект {name} {site_name}. submission_id: {submission_id}")
-    auto_actions: dict[str, Any] = {"email_sent": False, "im_number_updated": False}
-    try:
-        email_message = await _send_order_notification_for_submission(
-            database_target, site_name, submission_id, payload
-        )
-        auto_actions["email_sent"] = bool(email_message)
-    except Exception as exc:
-        auto_actions["email_error"] = str(exc)
-        print(f"Не удалось автоматически отправить письмо: {exc}")
 
-    try:
-        new_im_number = await _auto_update_cdek_im_number(
-            database_target, site_name, submission_id, payload
-        )
-        auto_actions["im_number_updated"] = bool(new_im_number)
-        if new_im_number:
-            auto_actions["new_im_number"] = new_im_number
-    except Exception as exc:
-        auto_actions["im_number_error"] = str(exc)
-        print(f"Не удалось автоматически изменить Номер ИМ: {exc}")
+            # ---------------------------------------------------------------
+            # Автоматическое письмо клиенту
+            # ---------------------------------------------------------------
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "email.auto.action.start",
+            )
+            try:
+                email_message = await _send_order_notification_for_submission(
+                    database_target,
+                    site_name,
+                    submission_id,
+                    payload,
+                    trace_id=trace_id,
+                )
+                auto_actions["email_sent"] = bool(email_message)
+                _log_webhook(
+                    logging.INFO,
+                    trace_id,
+                    "email.auto.action.done",
+                    email_sent=auto_actions["email_sent"],
+                )
+            except Exception as exc:
+                auto_actions["email_error"] = str(exc)
+                _log_webhook_exception(
+                    trace_id,
+                    "email.auto.action.failed",
+                    exc,
+                )
 
-    return JSONResponse(
-        {
-            "ok": True,
-            "site": site_name,
-            "submission_id": submission_id,
-            "auto_actions": auto_actions,
-        }
-    )
+            # ---------------------------------------------------------------
+            # Автоматическое изменение номера ИМ в СДЭК
+            # ---------------------------------------------------------------
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "cdek.auto.action.start",
+            )
+            try:
+                new_im_number = await _auto_update_cdek_im_number(
+                    database_target,
+                    site_name,
+                    submission_id,
+                    payload,
+                    trace_id=trace_id,
+                )
+                auto_actions["im_number_updated"] = bool(new_im_number)
+                if new_im_number:
+                    auto_actions["new_im_number"] = new_im_number
+                    _update_webhook_log_context(new_im_number=new_im_number)
+
+                _log_webhook(
+                    logging.INFO,
+                    trace_id,
+                    "cdek.auto.action.done",
+                    im_number_updated=auto_actions["im_number_updated"],
+                )
+            except Exception as exc:
+                auto_actions["im_number_error"] = str(exc)
+                _log_webhook_exception(
+                    trace_id,
+                    "cdek.auto.action.failed",
+                    exc,
+                )
+
+            elapsed_ms = round(
+                (time.perf_counter() - request_started) * 1000,
+                2,
+            )
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.completed",
+                auto_actions=auto_actions,
+                elapsed_ms=elapsed_ms,
+            )
+            _log_webhook(
+                logging.INFO,
+                trace_id,
+                "webhook.response",
+                status_code=200,
+                result="success",
+                elapsed_ms=elapsed_ms,
+            )
+
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "site": site_name,
+                    "submission_id": submission_id,
+                    "auto_actions": auto_actions,
+                    "trace_id": trace_id,
+                },
+                headers={"X-Trace-ID": trace_id},
+            )
+
+        except HTTPException as exc:
+            elapsed_ms = round(
+                (time.perf_counter() - request_started) * 1000,
+                2,
+            )
+            _log_webhook(
+                logging.WARNING,
+                trace_id,
+                "webhook.http_error",
+                status_code=exc.status_code,
+                detail=exc.detail,
+                elapsed_ms=elapsed_ms,
+            )
+            raise
+
+        except Exception as exc:
+            elapsed_ms = round(
+                (time.perf_counter() - request_started) * 1000,
+                2,
+            )
+            _log_webhook_exception(
+                trace_id,
+                "webhook.unhandled_error",
+                exc,
+                elapsed_ms=elapsed_ms,
+            )
+            raise
+
+    finally:
+        _WEBHOOK_LOG_CONTEXT.reset(log_context_token)
 
 
 @router.get("/tilda/{name}/form", response_class=HTMLResponse)
