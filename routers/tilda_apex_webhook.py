@@ -580,6 +580,11 @@ async def _save_submission(
     site_name = _site_name_or_404(name)
     database_target = _database_target_or_404(name)
 
+    # Объединяем словари заранее. Так одинаковые ключи (например order_id)
+    # не передаются в _log_webhook дважды как keyword-аргументы.
+    submission_log_fields = _payload_log_fields(payload)
+    submission_log_fields.update(_customer_log_fields(payload))
+
     _log_webhook(
         logging.INFO,
         trace_id,
@@ -588,8 +593,7 @@ async def _save_submission(
         database_target=database_target,
         submission_id=submission_id,
         payload_type=payload_type,
-        **_customer_log_fields(payload),
-        **_payload_log_fields(payload),
+        **submission_log_fields,
     )
 
     meta = {
