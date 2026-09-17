@@ -1,8 +1,6 @@
-import hashlib
 import html
 import json
 import logging
-import os
 import re
 import time
 import uuid
@@ -42,7 +40,7 @@ TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # ---------------------------------------------------------------------------
-# Подробное логирование Tilda webhook
+# Компактное логирование Tilda webhook
 # ---------------------------------------------------------------------------
 WEBHOOK_LOGGER = logging.getLogger("tilda.webhook")
 WEBHOOK_LOGGER.setLevel(logging.INFO)
@@ -51,112 +49,133 @@ WEBHOOK_LOGGER.propagate = False
 if not WEBHOOK_LOGGER.handlers:
     _webhook_handler = logging.StreamHandler()
     _webhook_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-        )
+        logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     )
     WEBHOOK_LOGGER.addHandler(_webhook_handler)
 
-# Полный payload может содержать ФИО, телефон, email и другие персональные данные.
-# По умолчанию он не пишется целиком. Для временной отладки можно включить:
-# TILDA_WEBHOOK_LOG_PAYLOAD=1
-LOG_WEBHOOK_PAYLOAD = os.getenv("TILDA_WEBHOOK_LOG_PAYLOAD", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
+
+# В журнале оставляем только идентификаторы, необходимые для поиска заявки.
+# Все персональные данные, payload, заголовки, адреса, email и телефоны
+# намеренно не выводятся.
+_WEBHOOK_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+    "tilda_webhook_log_context",
+    default={},
+)
+
+
+# Русские названия шагов. Английские event-коды остаются только внутри кода,
+# в сам журнал они не попадают.
+_WEBHOOK_STEP_NAMES: dict[str, str] = {
+    "payload.read.start": "Чтение данных запроса",
+    "payload.read.done": "Данные запроса получены",
+    "payload.rejected.too_large": "Запрос отклонён: слишком большой размер данных",
+    "payload.parse.json.start": "Разбор JSON",
+    "payload.parse.json.invalid": "Ошибка: некорректный JSON",
+    "payload.parse.json.done": "JSON успешно разобран",
+    "payload.parse.form.start": "Разбор данных формы",
+    "payload.parse.form.done": "Данные формы успешно разобраны",
+    "payload.parse.multipart.start": "Разбор multipart-формы",
+    "payload.parse.multipart.failed": "Ошибка разбора multipart-формы",
+    "payload.parse.multipart.done": "Multipart-форма успешно разобрана",
+    "database.submission.prepare": "Подготовка заказа к сохранению",
+    "database.submission.failed": "Ошибка сохранения заказа в базе",
+    "database.submission.done": "Заказ сохранён в базе",
+    "email.auto.prepare.start": "Подготовка автоматического письма",
+    "email.auto.skipped": "Автоматическое письмо пропущено",
+    "email.auto.build.start": "Формирование письма клиенту",
+    "email.auto.build.failed": "Ошибка формирования письма клиенту",
+    "email.auto.build.done": "Письмо клиенту сформировано",
+    "email.auto.send.start": "Отправка письма клиенту",
+    "email.auto.send.failed": "Ошибка отправки письма клиенту",
+    "email.auto.send.done": "Письмо клиенту отправлено",
+    "email.database.save.start": "Сохранение информации об отправленном письме",
+    "email.database.save.failed": "Ошибка сохранения информации о письме",
+    "email.database.save.done": "Информация об отправленном письме сохранена",
+    "cdek.auto.start": "Начата обработка заказа в СДЭК",
+    "cdek.auto.skipped": "Обработка СДЭК пропущена",
+    "cdek.auto.number.calculated": "Новый номер ИМ для СДЭК сформирован",
+    "cdek.token.start": "Получение токена СДЭК",
+    "cdek.token.done": "Токен СДЭК получен",
+    "cdek.order.search.start": "Поиск заказа в СДЭК",
+    "cdek.order.search.done": "Поиск заказа в СДЭК завершён",
+    "cdek.order.update.start": "Изменение номера ИМ в СДЭК",
+    "cdek.order.update.done": "Номер ИМ в СДЭК изменён",
+    "cdek.database.update.start": "Сохранение нового номера ИМ в базе",
+    "cdek.database.update.done": "Новый номер ИМ сохранён в базе",
+    "cdek.auto.done": "Обработка заказа в СДЭК завершена",
+    "webhook.options.received": "Получен OPTIONS-запрос webhook",
+    "webhook.options.rejected": "OPTIONS-запрос webhook отклонён",
+    "webhook.options.response": "Ответ на OPTIONS-запрос отправлен",
+    "webhook.received": "Получен POST-запрос в webhook",
+    "webhook.site.validated": "Сайт webhook определён",
+    "webhook.payload.ready": "Данные заказа подготовлены",
+    "webhook.customer.detected": "Номер заказа определён",
+    "webhook.test.checked": "Проверка тестового запроса Tilda выполнена",
+    "database.target.resolve.start": "Определение базы данных",
+    "database.target.resolve.done": "База данных определена",
+    "webhook.duplicate": "Повторный заказ обнаружен",
+    "webhook.submission.created": "Новая заявка создана",
+    "email.auto.action.start": "Запущена автоматическая отправка письма",
+    "email.auto.action.done": "Автоматическая отправка письма завершена",
+    "email.auto.action.failed": "Ошибка автоматической отправки письма",
+    "cdek.auto.action.start": "Запущено автоматическое обновление СДЭК",
+    "cdek.auto.action.done": "Автоматическое обновление СДЭК завершено",
+    "cdek.auto.action.failed": "Ошибка автоматического обновления СДЭК",
+    "webhook.completed": "Обработка webhook завершена",
+    "webhook.response": "Ответ webhook отправлен",
+    "webhook.http_error": "HTTP-ошибка webhook",
+    "webhook.unhandled_error": "Внутренняя ошибка webhook",
 }
 
-_SENSITIVE_LOG_KEYS = {
-    "authorization",
-    "cookie",
-    "cookies",
-    "secret",
-    "token",
-    "key",
-    "password",
-    "passwd",
-    "api_key",
-    "apikey",
-    "x-tilda-form-secret",
+
+# Эти технические события слишком мелкие для обычного журнала.
+# Они продолжают выполняться в коде, но отдельной строкой не печатаются.
+_WEBHOOK_HIDDEN_EVENTS = {
+    "payload.read.start",
+    "payload.read.done",
+    "payload.parse.json.start",
+    "payload.parse.form.start",
+    "payload.parse.multipart.start",
+    "webhook.site.validated",
+    "webhook.payload.ready",
+    "webhook.customer.detected",
+    "webhook.test.checked",
+    "database.target.resolve.start",
+    "database.target.resolve.done",
+    "webhook.submission.created",
+    "email.auto.prepare.start",
+    "email.auto.build.start",
+    "email.auto.build.done",
+    "email.database.save.start",
+    "email.database.save.done",
+    "email.auto.action.start",
+    "email.auto.action.done",
+    "cdek.auto.start",
+    "cdek.auto.number.calculated",
+    "cdek.token.start",
+    "cdek.order.update.start",
+    "cdek.database.update.start",
+    "cdek.auto.done",
+    "cdek.auto.action.start",
+    "cdek.auto.action.done",
+    "webhook.completed",
 }
 
 
-def _redact_for_log(value: Any) -> Any:
-    """Рекурсивно скрывает секреты перед выводом структуры в лог."""
-    if isinstance(value, dict):
-        result: dict[str, Any] = {}
-        for raw_key, raw_value in value.items():
-            key = str(raw_key)
-            normalized = key.strip().lower()
-            if normalized in _SENSITIVE_LOG_KEYS or any(
-                part in normalized
-                for part in ("password", "passwd", "authorization", "secret", "token")
-            ):
-                result[key] = "***REDACTED***"
-            else:
-                result[key] = _redact_for_log(raw_value)
-        return result
-    if isinstance(value, list):
-        return [_redact_for_log(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_for_log(item) for item in value]
-    return value
+# Ошибки этих внутренних email-шагов затем всё равно попадают в
+# email.auto.action.failed. Не печатаем одну и ту же ошибку дважды.
+_WEBHOOK_HIDDEN_ERROR_EVENTS = {
+    "email.auto.build.failed",
+    "email.auto.send.failed",
+    "email.database.save.failed",
+}
 
 
-def _mask_email_for_log(value: str) -> str:
-    """Частично скрывает email, оставляя его узнаваемым для диагностики."""
-    email = str(value or "").strip()
-    if "@" not in email:
-        return "***"
-    local, domain = email.split("@", 1)
-    if not local:
-        return f"***@{domain}"
-    if len(local) == 1:
-        masked_local = f"{local[0]}***"
-    elif len(local) == 2:
-        masked_local = f"{local[0]}***{local[-1]}"
-    else:
-        masked_local = f"{local[:2]}***{local[-1]}"
-    return f"{masked_local}@{domain}"
-
-
-def _mask_phone_for_log(value: str) -> str:
-    """Частично скрывает телефон, оставляя последние цифры для диагностики."""
-    phone = str(value or "").strip()
-    digits = re.sub(r"\D", "", phone)
-    if not digits:
-        return ""
-    if len(digits) <= 4:
-        return "***" + digits[-2:]
-    prefix = "+" if phone.startswith("+") else ""
-    return f"{prefix}{digits[:1]}***{digits[-4:]}"
-
-
-def _customer_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    Возвращает бизнес-контекст заявки для логов.
-
-    customer_ref — стабильный псевдоним клиента на основе email или телефона.
-    Один и тот же email/телефон будет давать одинаковый customer_ref,
-    в отличие от submission_id, который относится к конкретной заявке.
-    """
-    def first(keys: tuple[str, ...]) -> Any:
-        for key in keys:
-            value = payload.get(key)
-            if value not in (None, ""):
-                return value
-        return ""
-
+def _order_id_for_log(payload: dict[str, Any]) -> str:
+    """Возвращает только номер заказа, без остальных данных клиента."""
     payment = payload.get("payment") or payload.get("Payment") or payload.get("Оплата")
     payment = payment if isinstance(payment, dict) else {}
-
-    customer_name = str(
-        first(("Name", "name", "Full name", "Имя", "ФИО", "fio")) or ""
-    ).strip()
-    email = str(first(("Email", "email", "Почта")) or "").strip().lower()
-    phone = str(first(("Phone", "phone", "Телефон")) or "").strip()
-    order_id = str(
+    return str(
         payment.get("orderid")
         or payment.get("order_id")
         or payload.get("orderid")
@@ -164,41 +183,74 @@ def _customer_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
         or ""
     ).strip()
 
-    phone_digits = re.sub(r"\D", "", phone)
-    stable_customer_source = email or phone_digits
-    customer_ref = (
-        hashlib.sha256(stable_customer_source.encode("utf-8")).hexdigest()[:12]
-        if stable_customer_source
-        else ""
-    )
 
-    fields: dict[str, Any] = {}
-    if customer_name:
-        fields["customer_name"] = customer_name
-    if customer_ref:
-        fields["customer_ref"] = customer_ref
-    if email:
-        fields["customer_email"] = _mask_email_for_log(email)
-    if phone:
-        fields["customer_phone"] = _mask_phone_for_log(phone)
-    if order_id:
-        fields["order_id"] = order_id
-    return fields
-
-
-_WEBHOOK_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
-    "tilda_webhook_log_context",
-    default={},
-)
+def _payload_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Минимальный контекст payload для журнала."""
+    order_id = _order_id_for_log(payload)
+    return {"order_id": order_id} if order_id else {}
 
 
 def _update_webhook_log_context(**fields: Any) -> None:
-    """Добавляет поля в контекст текущего webhook-запроса."""
+    """Сохраняет контекст текущего webhook-запроса."""
     context = dict(_WEBHOOK_LOG_CONTEXT.get())
     for key, value in fields.items():
         if value not in (None, ""):
             context[key] = value
     _WEBHOOK_LOG_CONTEXT.set(context)
+
+
+def _webhook_step_text(event: str, fields: dict[str, Any]) -> str:
+    """Формирует короткое русское описание шага."""
+    if event == "database.submission.done" and fields.get("duplicate"):
+        return "Заказ уже существует в базе"
+
+    if event == "webhook.response":
+        status_code = fields.get("status_code")
+        if status_code:
+            return f"Ответ webhook отправлен: HTTP {status_code}"
+
+    if event == "webhook.options.response":
+        status_code = fields.get("status_code")
+        if status_code:
+            return f"Ответ на OPTIONS-запрос отправлен: HTTP {status_code}"
+
+    if event == "email.auto.action.done" and not fields.get("email_sent", True):
+        return "Автоматическая отправка письма завершена: письмо не отправлено"
+
+    if event == "cdek.auto.action.done" and not fields.get("im_number_updated", True):
+        return "Обработка СДЭК завершена: номер ИМ не изменён"
+
+    return _WEBHOOK_STEP_NAMES.get(event, event)
+
+
+def _compact_error_message(event: str, exc: Exception) -> str:
+    """Возвращает короткую ошибку без traceback, путей файлов и кусков кода."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    reason = str(getattr(response, "reason", "") or "").strip()
+
+    if status_code:
+        status_text = f"HTTP {status_code}" + (f" {reason}" if reason else "")
+        if event.startswith("cdek."):
+            return f"СДЭК вернул {status_text}"
+        if event.startswith("email."):
+            return f"Почтовый сервис вернул {status_text}"
+        return status_text
+
+    message = " ".join(str(exc).split())
+    # Убираем длинные URL из текстов исключений.
+    message = re.sub(r"https?://\S+", "[URL]", message)
+    if len(message) > 180:
+        message = message[:177] + "..."
+
+    if not message:
+        message = type(exc).__name__
+
+    if event.startswith("cdek."):
+        return f"СДЭК: {message}"
+    if event.startswith("email."):
+        return f"Email: {message}"
+    return message
 
 
 def _log_webhook(
@@ -207,19 +259,37 @@ def _log_webhook(
     event: str,
     **fields: Any,
 ) -> None:
-    """Пишет одно структурированное событие webhook в одну строку."""
-    context = {
-        key: _redact_for_log(value)
-        for key, value in _WEBHOOK_LOG_CONTEXT.get().items()
-    }
+    """Пишет компактный шаг webhook одной строкой."""
+    if event in _WEBHOOK_HIDDEN_EVENTS:
+        return
+
+    context = _WEBHOOK_LOG_CONTEXT.get()
+
+    raw_site = str(
+        context.get("raw_site")
+        or fields.get("raw_site")
+        or fields.get("site")
+        or ""
+    )
+    order_id = str(context.get("order_id") or fields.get("order_id") or "")
+    submission_id = str(
+        context.get("submission_id") or fields.get("submission_id") or ""
+    )
+
     record = {
-        **context,
+        "raw_site": raw_site,
+        "order_id": order_id,
+        "submission_id": submission_id,
         "trace_id": trace_id,
-        "event": event,
-        "timestamp_local": datetime.now().astimezone().isoformat(),
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        **{key: _redact_for_log(value) for key, value in fields.items()},
+        "шаг": _webhook_step_text(event, fields),
     }
+
+    if event in {"webhook.http_error", "webhook.options.rejected"}:
+        status_code = fields.get("status_code")
+        detail = str(fields.get("detail") or "").strip()
+        if status_code:
+            record["ошибка"] = f"HTTP {status_code}" + (f": {detail}" if detail else "")
+
     WEBHOOK_LOGGER.log(
         level,
         json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")),
@@ -232,47 +302,38 @@ def _log_webhook_exception(
     exc: Exception,
     **fields: Any,
 ) -> None:
-    """Пишет ошибку webhook вместе с traceback."""
-    context = {
-        key: _redact_for_log(value)
-        for key, value in _WEBHOOK_LOG_CONTEXT.get().items()
-    }
+    """Пишет одну короткую строку ошибки без traceback."""
+    if event in _WEBHOOK_HIDDEN_ERROR_EVENTS:
+        return
+
+    context = _WEBHOOK_LOG_CONTEXT.get()
+
+    raw_site = str(
+        context.get("raw_site")
+        or fields.get("raw_site")
+        or fields.get("site")
+        or ""
+    )
+    order_id = str(context.get("order_id") or fields.get("order_id") or "")
+    submission_id = str(
+        context.get("submission_id") or fields.get("submission_id") or ""
+    )
+
     record = {
-        **context,
+        "raw_site": raw_site,
+        "order_id": order_id,
+        "submission_id": submission_id,
         "trace_id": trace_id,
-        "event": event,
-        "timestamp_local": datetime.now().astimezone().isoformat(),
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "error_type": type(exc).__name__,
-        "error": str(exc),
-        **{key: _redact_for_log(value) for key, value in fields.items()},
+        "шаг": _WEBHOOK_STEP_NAMES.get(event, "Ошибка webhook"),
+        "ошибка": _compact_error_message(event, exc),
     }
-    WEBHOOK_LOGGER.exception(
+
+    # ВАЖНО: .error(), а не .exception().
+    # Поэтому logging не печатает traceback и строки исходного кода.
+    WEBHOOK_LOGGER.error(
         json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":"))
     )
 
-
-def _payload_log_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Безопасная сводка payload для обычного режима логирования."""
-    result: dict[str, Any] = {
-        "payload_keys": list(payload.keys()),
-        "payload_fields_count": len(payload),
-    }
-
-    payment = payload.get("payment") or payload.get("Payment") or payload.get("Оплата")
-    if isinstance(payment, dict):
-        result["payment_keys"] = list(payment.keys())
-        products = payment.get("products")
-        if isinstance(products, list):
-            result["products_count"] = len(products)
-        order_id = payment.get("orderid") or payment.get("order_id")
-        if order_id not in (None, ""):
-            result["order_id"] = str(order_id)
-
-    if LOG_WEBHOOK_PAYLOAD:
-        result["payload"] = _redact_for_log(payload)
-
-    return result
 
 class CdekImNumberUpdateRequest(BaseModel):
     current_im_number: str
@@ -296,7 +357,7 @@ class TildaEmailSendRequest(BaseModel):
     
 
 def _project_config_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    """Build project -> secret/database/CDEK maps from TILDA_PROJECTS_JSON.
+    """Build project -> secret/database/СДЭК maps from TILDA_PROJECTS_JSON.
 
     Example:
     {"new_shop":{"secret":"...","database_target":"apex","cdek_account":"shop_cdek"}}
@@ -471,22 +532,16 @@ async def _extract_payload(
         try:
             parsed = json.loads(body.decode("utf-8") or "{}")
         except json.JSONDecodeError as exc:
-            fields: dict[str, Any] = {
-                "line": exc.lineno,
-                "column": exc.colno,
-                "position": exc.pos,
-            }
-            if LOG_WEBHOOK_PAYLOAD:
-                fields["body_preview"] = body.decode(
-                    "utf-8", errors="replace"
-                )[:2000]
             _log_webhook(
                 logging.WARNING,
                 trace_id,
-                "payload.parse.json.invalid",
-                **fields,
+                "Ошибка разбора JSON",
+                ошибка=f"Некорректный JSON: строка {exc.lineno}, колонка {exc.colno}",
             )
-            return {"_raw": body.decode("utf-8", errors="replace")}, "invalid_json"
+
+            return {
+                "_raw": body.decode("utf-8", errors="replace")
+            }, "invalid_json"
 
         if isinstance(parsed, dict):
             payload = {
@@ -580,10 +635,8 @@ async def _save_submission(
     site_name = _site_name_or_404(name)
     database_target = _database_target_or_404(name)
 
-    # Объединяем словари заранее. Так одинаковые ключи (например order_id)
-    # не передаются в _log_webhook дважды как keyword-аргументы.
+    # В лог передаём только номер заказа, без payload и данных клиента.
     submission_log_fields = _payload_log_fields(payload)
-    submission_log_fields.update(_customer_log_fields(payload))
 
     _log_webhook(
         logging.INFO,
@@ -1050,7 +1103,6 @@ async def _send_order_notification_for_submission(
         "email.auto.send.start",
         site=site_name,
         submission_id=submission_id,
-        to_email=_mask_email_for_log(email_payload.to_email),
         subject=subject,
     )
 
@@ -1069,7 +1121,6 @@ async def _send_order_notification_for_submission(
             exc,
             site=site_name,
             submission_id=submission_id,
-            to_email=_mask_email_for_log(email_payload.to_email),
             elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
         )
         raise
@@ -1080,7 +1131,6 @@ async def _send_order_notification_for_submission(
         "email.auto.send.done",
         site=site_name,
         submission_id=submission_id,
-        to_email=_mask_email_for_log(email_payload.to_email),
         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
     )
 
@@ -1420,24 +1470,15 @@ async def tilda_webhook(name: str, request: Request):
                 trace_id=trace_id,
             )
 
-            # После разбора payload весь дальнейший лог автоматически получает
-            # customer_name/customer_ref/email/phone/order_id.
-            customer_fields = _customer_log_fields(payload)
-            _update_webhook_log_context(**customer_fields)
+            # После разбора payload сохраняем только номер заказа.
+            order_fields = _payload_log_fields(payload)
+            _update_webhook_log_context(**order_fields)
 
             _log_webhook(
                 logging.INFO,
                 trace_id,
                 "webhook.payload.ready",
-                payload_type=payload_type,
-                **_payload_log_fields(payload),
-            )
-
-            _log_webhook(
-                logging.INFO,
-                trace_id,
-                "webhook.customer.detected",
-                customer_detected=bool(customer_fields),
+                **order_fields,
             )
 
             if payload_type == "too_large":
@@ -1515,9 +1556,7 @@ async def tilda_webhook(name: str, request: Request):
                 trace_id=trace_id,
             )
 
-            # submission_id относится к конкретной сохранённой заявке, а не к
-            # клиенту. С этого момента он автоматически присутствует во всех
-            # последующих событиях данного webhook.
+            # С этого момента submission_id добавляется во все следующие логи.
             _update_webhook_log_context(submission_id=submission_id)
 
             if not created:
@@ -1673,17 +1712,20 @@ async def tilda_webhook(name: str, request: Request):
             raise
 
         except Exception as exc:
-            elapsed_ms = round(
-                (time.perf_counter() - request_started) * 1000,
-                2,
-            )
             _log_webhook_exception(
                 trace_id,
                 "webhook.unhandled_error",
                 exc,
-                elapsed_ms=elapsed_ms,
             )
-            raise
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "internal_error",
+                    "trace_id": trace_id,
+                },
+                status_code=500,
+                headers={"X-Trace-ID": trace_id},
+            )
 
     finally:
         _WEBHOOK_LOG_CONTEXT.reset(log_context_token)
