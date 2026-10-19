@@ -1,6 +1,13 @@
 /* Loaded after the original game styles: actual touch capability, safe areas
    and the visual viewport determine layout in both orientations. */
+:root { --safe-left: env(safe-area-inset-left, 0px); --safe-right: env(safe-area-inset-right, 0px); --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }
 html, body { height: var(--viewport-height, 100dvh); }
+.player-ping, .network-health { display: none; }
+.online-mode .player-ping { display: block; width: max-content; margin-top: 4px; font-size: 12px; padding: 3px 6px; background: rgba(255,255,255,.92); border: 1px solid currentColor; }
+.online-mode .network-health { display: block; position: fixed; top: 84px; left: 50%; transform: translateX(-50%); max-width: 70vw; background: rgba(255,255,255,.92); font-size: 11px; padding: 3px 6px; z-index: 15; pointer-events: auto; }
+[data-quality=good] { color: #175c2c; }
+[data-quality=fair] { color: #8a5300; }
+[data-quality=poor] { color: #a80000; }
 #gameCanvas { position: fixed; top: 0; left: 0; }
 .online-screen { height: var(--viewport-height, 100dvh); }
 .online-card { max-height: calc(var(--viewport-height, 100dvh) - 40px); }
@@ -51,6 +58,8 @@ body[data-mobile=true] .online-primary { min-height: 44px; font-size: 13px; }
 body[data-mobile=true] .small-button { min-height: 40px; }
 body[data-mobile=true] .role-tag { font-size: 10px; padding: 6px; }
 body[data-mobile=true] .match-hint { display: none; }
+body[data-mobile=true] .player-ping { font-size: 10px; padding: 2px 4px; }
+body[data-mobile=true] .network-health { top: calc(max(8px, env(safe-area-inset-top)) + 47px); font-size: 10px; white-space: nowrap; max-width: 92vw; }
 body[data-mobile=true] .menu-btn-wrapper { top: max(8px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); }
 body[data-mobile=true] #menuBtn { min-width: 44px; min-height: 44px; opacity: 1; }
 body[data-mobile=true] .scoreboard-wrapper { top: max(8px, env(safe-area-inset-top)); }
@@ -69,7 +78,7 @@ body[data-mobile=true] .close-settings { width: 40px; height: 40px; }
 body[data-mobile=true] .menu-box, body[data-mobile=true] .victory-screen-content { max-height: calc(var(--viewport-height, 100dvh) - 24px); }
 
 body[data-mobile=true][data-orientation=portrait].match-active #rotateHint {
-  display: block; position: fixed; z-index: 40; top: max(96px, env(safe-area-inset-top));
+  display: block; position: fixed; z-index: 40; top: max(112px, env(safe-area-inset-top));
   left: 10%; width: 80%; margin: 0; padding: 8px; border: 1px solid #000;
   background: rgba(255,255,255,.9); font-size: 11px; pointer-events: none;
 }

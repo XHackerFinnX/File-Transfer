@@ -113,6 +113,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
                     "VOLLEYBALL_ENABLED": "true", "VOLLEYBALL_MAX_ROOMS": "1", "VOLLEYBALL_MAX_CONNECTIONS_PER_IP": "6"})
         for suffix in ("", "_APEX", "_REAL_BABY", "_AMA_LIVING", "_WAYFS", "_FERALRU"):
             env["POSTGRESQL_DATABASE"+suffix] = "unused_test_database"
+        self.test_env = env
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -254,7 +255,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_assets_and_private_file_denial(self):
         for path in ["/volleyball/online/", "/volleyball/online", "/volleyball/online/config.js", "/volleyball/online/online.js",
                      "/volleyball/online/online.css", "/volleyball/online/mobile.css", "/volleyball/online/shared/prediction.js",
-                     "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js"]:
+                     "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js", "/volleyball/online/shared/snapshots.js"]:
             with urlopen(self.base+path) as response:
                 self.assertEqual(response.status, 200)
                 body = response.read().decode()
@@ -266,6 +267,50 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
                 urlopen(self.base+path)
             self.assertEqual(err.exception.code, 404)
             err.exception.close()
+
+    async def test_network_round_trips_are_measured_for_both_players(self):
+        host, guest, _, _ = await self.pair()
+        await host.send(type="ping", id=100)
+        await guest.send(type="ping", id=200)
+        self.assertTrue((await host.wait("pong"))["probe"])
+        await guest.wait("pong")
+        await guest.send(type="pong_ack", id=100)  # another player's ID cannot set its RTT
+        await asyncio.sleep(.03)
+        await host.send(type="pong_ack", id=100)
+        await guest.send(type="pong_ack", id=200)
+        packet = await host.wait("network", lambda p: all(v is not None for v in p["rtt"]))
+        self.assertGreaterEqual(min(packet["rtt"]), 25)
+        self.assertLess(max(packet["rtt"]), 1000)
+        self.assertGreaterEqual(packet["serverLag"], 0)
+        self.assertEqual((await guest.wait("network", lambda p: all(v is not None for v in p["rtt"])))['rtt'], packet['rtt'])
+        await host.send(type="start")
+        state = await host.wait("state", lambda p: p["state"]["phase"] == "playing")
+        self.assertIsInstance(state["serverTime"], float)
+
+    async def test_slow_writer_retains_only_latest_snapshot_and_reliable_controls(self):
+        code = '''
+from services.volleyball import VolleyballServer, Connection, SNAPSHOT
+server = VolleyballServer()
+conn = Connection(None, "127.0.0.1")
+server.queue_text(conn, "room-created")
+for seq in range(1000):
+    server.queue_text(conn, str(seq), latest=True)
+server.queue_text(conn, "pause")
+assert conn.queue.qsize() == 3
+assert not conn.closing
+assert conn.queue.get_nowait() == "room-created"
+assert conn.queue.get_nowait() is SNAPSHOT
+assert conn.latest_state == "999"
+assert conn.queue.get_nowait() == "pause"
+'''
+        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code], cwd=ROOT,
+                                         env=self.test_env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    async def test_shop_http_and_smtp_do_not_freeze_game_simulation(self):
+        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "tests.check_tilda_nonblocking"],
+                                         cwd=ROOT, env=self.test_env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

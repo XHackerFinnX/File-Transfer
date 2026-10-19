@@ -8,7 +8,7 @@ from security import normalize_allowed_origins, websocket_origin_allowed
 from services.volleyball import GAME_ROOT, volleyball_server
 
 router = APIRouter(prefix="/volleyball", tags=["volleyball"])
-PUBLIC_FILES = {"index.html", "config.js", "online.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js"}
+PUBLIC_FILES = {"index.html", "config.js", "online.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js", "shared/snapshots.js"}
 
 
 @router.get("/healthz")

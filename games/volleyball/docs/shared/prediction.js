@@ -22,10 +22,11 @@ export class PlayerPrediction {
     if (this.history.length > 120) this.history.shift();
   }
 
-  receive(state, index, settings, ack, now, rtt) {
+  receive(state, index, settings, ack, now, rtt, snapshotAge = null) {
     const signature = JSON.stringify([state.round, state.phase, settings]);
     const discontinuity = signature !== this.signature;
-    const previous = this.player && !discontinuity ? this.render(now, this.mask) : null;
+    const previousAt = this.lastFrame !== null && now-this.lastFrame>100 ? this.lastFrame : now;
+    const previous = this.player && !discontinuity ? this.render(previousAt, this.mask) : null;
     this.signature = signature;
     this.index = index;
     this.settings = settings;
@@ -36,10 +37,10 @@ export class PlayerPrediction {
 
     // A snapshot is approximately half an RTT old. Replay pending commands in
     // timestamp order instead of applying a newly pressed key to the whole RTT.
-    const age = this.active ? clamp(rtt/2, 0, 150) : 0;
+    const age = this.active ? clamp(snapshotAge ?? rtt/2, 0, 250) : 0;
     this.time = now-age;
     this.remainder = 0;
-    this.advance(now, this.mask);
+    this.advance(now, this.mask, 250);
     this.offset = { x: 0, y: 0 };
     const target = this.pose(this.mask);
     if (previous && Math.hypot(previous.x-target.x, previous.y-target.y) < 120) {
@@ -58,8 +59,8 @@ export class PlayerPrediction {
     return mask;
   }
 
-  advance(now, fallback) {
-    const elapsed = clamp(now-this.time, 0, 100);
+  advance(now, fallback, maximum = 100) {
+    const elapsed = clamp(now-this.time, 0, maximum);
     this.time = now;
     if (!this.active) return;
     const tempo = this.settings.tempo/100;

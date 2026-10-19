@@ -21,6 +21,7 @@ GAME_ROOT = Path(__file__).resolve().parents[1] / "games" / "volleyball"
 logger = logging.getLogger(__name__)
 CODE = re.compile(r"[1-9][0-9]{3}\Z")
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+SNAPSHOT = object()
 
 
 class Bucket:
@@ -68,6 +69,12 @@ class Connection:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=16))
     messages: Bucket = field(default_factory=lambda: Bucket(120, 1))
     controls: Bucket = field(default_factory=lambda: Bucket(12, 10))
+    latest_state: str | None = None
+    state_queued: bool = False
+    probe_id: int | None = None
+    probe_started: float = 0
+    rtt_ms: float | None = None
+    rtt_at: float = 0
 
 
 @dataclass
@@ -120,6 +127,7 @@ class VolleyballServer:
         self.grace_seconds = 45
         self.idle_seconds = 900
         self.max_age_seconds = 7200
+        self.server_lag_ms = 0
 
     @property
     def running(self):
@@ -151,22 +159,27 @@ class VolleyballServer:
                 conn.queue.get_nowait()
         conn.queue.put_nowait((code, reason))
 
-    def queue_text(self, conn, text):
+    def queue_text(self, conn, text, latest=False):
         if conn.closing:
             return
+        if latest:
+            conn.latest_state = text
+            if conn.state_queued:
+                return
+            conn.state_queued = True
         try:
-            conn.queue.put_nowait(text)
+            conn.queue.put_nowait(SNAPSHOT if latest else text)
         except asyncio.QueueFull:
             self.close(conn, 1013, "SLOW_CLIENT")
 
     def send(self, conn, packet):
         self.queue_text(conn, json.dumps(packet, separators=(",", ":"), allow_nan=False))
 
-    def broadcast(self, room, packet):
+    def broadcast(self, room, packet, latest=False):
         text = json.dumps(packet, separators=(",", ":"), allow_nan=False)
         for seat in room.seats:
             if seat and seat.conn:
-                self.queue_text(seat.conn, text)
+                self.queue_text(seat.conn, text, latest=latest)
 
     def broadcast_room(self, room):
         self.broadcast(room, dict(type="room", room=room.public()))
@@ -177,7 +190,13 @@ class VolleyballServer:
         inputs = [dict(seq=s.last_seq, mask=s.mask if s.conn and now-s.last_input <= .3 else 0)
                   if s else dict(seq=-1, mask=0) for s in room.seats]
         self.broadcast(room, dict(type="state", seq=room.seq, revision=room.revision,
-                                  inputs=inputs, state=room.match.snapshot()))
+                                  serverTime=now*1000, inputs=inputs, state=room.match.snapshot()), latest=True)
+
+    def broadcast_network(self, room, now):
+        # RTT is timed by the server, never accepted as a client-provided value.
+        pings = [round(s.conn.rtt_ms) if s and s.conn and s.conn.rtt_ms is not None
+                 and now-s.conn.rtt_at < 5 else None for s in room.seats]
+        self.broadcast(room, dict(type="network", rtt=pings, serverLag=round(self.server_lag_ms, 1)))
 
     def error(self, conn, code):
         self.send(conn, dict(type="error", code=code))
@@ -217,7 +236,7 @@ class VolleyballServer:
         room.activity = time.monotonic()
         room.revision += 1
         self.send(conn, dict(type="joined", code=room.code, role="host" if seat.index == 0 else "guest",
-                             token=token, room=room.public(), state=room.match.snapshot()))
+                             token=token, room=room.public(), serverTime=time.monotonic()*1000, state=room.match.snapshot()))
         self.broadcast_room(room)
         self.broadcast_state(room)
 
@@ -257,7 +276,7 @@ class VolleyballServer:
             return
         kind = msg["type"]
         fields = {
-            "ping": {"id"}, "input": {"seq", "mask"}, "create": {"color"},
+            "ping": {"id"}, "pong_ack": {"id"}, "input": {"seq", "mask"}, "create": {"color"},
             "join": {"code", "color"}, "resume": {"code", "token"}, "color": {"color"},
             "leave": set(), "settings": {"settings"}, "start": set(), "restart": set(),
             "pause": {"paused"}, "extend": set(), "kick": set(),
@@ -266,7 +285,7 @@ class VolleyballServer:
             self.protocol_error(conn)
             return
         valid = True
-        if kind == "ping":
+        if kind in {"ping", "pong_ack"}:
             valid = integer(msg["id"], 0, 2147483647)
         elif kind == "input":
             valid = integer(msg["seq"], 0, 2147483647) and integer(msg["mask"], 0, 15)
@@ -282,7 +301,14 @@ class VolleyballServer:
             self.protocol_error(conn)
             return
         if kind == "ping":
-            self.send(conn, dict(type="pong", id=msg["id"]))
+            conn.probe_id, conn.probe_started = msg["id"], now
+            self.send(conn, dict(type="pong", id=msg["id"], probe=True))
+            return
+        if kind == "pong_ack":
+            if conn.probe_id == msg["id"]:
+                sample = (now-conn.probe_started)*1000
+                conn.rtt_ms = sample if conn.rtt_ms is None else conn.rtt_ms*.7+sample*.3
+                conn.rtt_at, conn.probe_id = now, None
             return
         if kind == "input":
             seat = self.require_member(conn)
@@ -409,11 +435,18 @@ class VolleyballServer:
                 self.remove_guest(room)
 
     async def run(self):
-        previous = last_snapshot = last_cleanup = time.monotonic()
+        previous = last_cleanup = time.monotonic()
+        next_tick = previous+1/60
+        next_snapshot = previous+1/30
+        peak_lag = 0
         try:
             while True:
-                await asyncio.sleep(1/60)
+                await asyncio.sleep(max(0, next_tick-time.monotonic()))
                 now = time.monotonic()
+                peak_lag = max(peak_lag, max(0, now-next_tick)*1000)
+                next_tick += 1/60
+                if next_tick < now:
+                    next_tick = now+1/60
                 elapsed, previous = min(100, (now-previous)*1000), now
                 for room in self.rooms.values():
                     masks = [s.mask if s and s.conn and not s.conn.closing and now-s.last_input <= .3 else 0 for s in room.seats]
@@ -421,14 +454,19 @@ class VolleyballServer:
                     room.match.advance(elapsed, masks)
                     if room.match.phase != phase:
                         self.broadcast_room(room)
-                if now-last_snapshot >= 1/30:
-                    last_snapshot = now
+                if now >= next_snapshot:
+                    next_snapshot += 1/30
+                    if next_snapshot < now:
+                        next_snapshot = now+1/30
                     for room in self.rooms.values():
                         if room.match.phase != "lobby":
                             self.broadcast_state(room)
                 if now-last_cleanup >= 1:
                     last_cleanup = now
                     self.sweep(now)
+                    self.server_lag_ms, peak_lag = peak_lag, 0
+                    for room in self.rooms.values():
+                        self.broadcast_network(room, now)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -485,6 +523,9 @@ class VolleyballServer:
             async def write():
                 while True:
                     packet = await conn.queue.get()
+                    if packet is SNAPSHOT:
+                        packet = conn.latest_state
+                        conn.latest_state, conn.state_queued = None, False
                     if isinstance(packet, tuple):
                         await websocket.close(code=packet[0], reason=packet[1])
                         return

@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import logging
@@ -668,7 +669,7 @@ async def _send_order_notification_for_submission(
         return None
     submission = {"id": submission_id, "payload": payload}
     subject, body, body_html = _build_order_email(email_payload, site_name, submission)
-    send_customer_email(email_payload.to_email, subject, body, body_html)
+    await asyncio.to_thread(send_customer_email, email_payload.to_email, subject, body, body_html)
     return await save_tilda_email_message(
         database_target,
         {
@@ -704,12 +705,12 @@ async def _auto_update_cdek_im_number(
     new_im_number = f"{_cdek_im_number_prefix(cdek_account)}{order_id}"
     if new_im_number == order_id:
         return None
-    token = cdek_get_token(cdek_account)
-    order = find_cdek_order(order_id, token, by="im_number")
+    token = await asyncio.to_thread(cdek_get_token, cdek_account)
+    order = await asyncio.to_thread(find_cdek_order, order_id, token, by="im_number")
     order_uuid = str(order.get("uuid") or "")
     if not order_uuid:
         return None
-    update_cdek_order_number(order_uuid, new_im_number, token)
+    await asyncio.to_thread(update_cdek_order_number, order_uuid, new_im_number, token)
     await update_tilda_submission_im_number(
         database_target, site_name, submission_id, order_id, new_im_number
     )
@@ -968,7 +969,7 @@ async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendR
         )
 
     try:
-        send_customer_email(to_email, subject, body, body_html)
+        await asyncio.to_thread(send_customer_email, to_email, subject, body, body_html)
         message = await save_tilda_email_message(
             _database_target_or_404(site_name),
             {
@@ -1018,17 +1019,17 @@ async def tilda_update_cdek_im_number(
 
     try:
         cdek_account = _cdek_account_or_404(site_name)
-        token = cdek_get_token(cdek_account)
+        token = await asyncio.to_thread(cdek_get_token, cdek_account)
         order = None
         if not order_uuid:
-            order = find_cdek_order(current_im_number, token, by="im_number")
+            order = await asyncio.to_thread(find_cdek_order, current_im_number, token, by="im_number")
             order_uuid = str(order.get("uuid") or "")
         if not order_uuid:
             return JSONResponse(
                 {"ok": False, "error": "cdek_order_uuid_not_found"},
                 status_code=404,
             )
-        request_uuid = update_cdek_order_number(order_uuid, new_im_number, token)
+        request_uuid = await asyncio.to_thread(update_cdek_order_number, order_uuid, new_im_number, token)
         await update_tilda_submission_im_number(
             _database_target_or_404(site_name),
             site_name,

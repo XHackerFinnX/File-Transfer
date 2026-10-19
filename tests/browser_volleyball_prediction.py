@@ -65,6 +65,34 @@ SIMULATION = r"""async () => {
       if(pose.x<low || pose.x>high || pose.y>585)throw Error('Prediction crosses the court boundary');
     }
   }
+  const { SnapshotBuffer } = await import('/volleyball/online/shared/snapshots.js');
+  for(const fps of [60,120,144]) {
+    const buffer=new SnapshotBuffer(), deliveries=[], model=new Match();model.start();
+    const base=model.snapshot();let frame=0, seq=0, previous=-Infinity, lastX=null;
+    for(let at=0;at<2000;at+=1000/30) {
+      const state={...base,players:base.players.map((p,i)=>({...p,x:i===0?100+at*.04:900-at*.04,vx:i===0?.04*DT:-.04*DT})),ball:{...base.ball,x:250+at*.06,vx:.06*DT}};
+      let due=at+40+[0,8,24,-4,0][seq%5];
+      // A 220 ms TCP delivery stall followed by an ordered burst.
+      if(due>=850 && due<1070)due=1070;
+      due=Math.max(due,previous);previous=due;
+      deliveries.push({due,state,seq:seq++,serverTime:5000+at});
+    }
+    for(let now=0;now<2100;now++) {
+      while(deliveries.length && deliveries[0].due<=now) {
+        const packet=deliveries.shift();buffer.push(packet.state,packet.seq,now,packet.serverTime);
+      }
+      if(now>=frame && buffer.latest) {
+        const value=buffer.sample(now,model.settings);frame+=1000/fps;
+        if(lastX!==null && value.players[0].x<lastX-.05)throw Error('Jitter/burst reverses remote movement');
+        lastX=value.players[0].x;
+        const limit=buffer.latest.state.players[0].x+.04*50;
+        if(lastX>limit+.001)throw Error('Unbounded remote extrapolation');
+        if(buffer.delay<45 || buffer.delay>140)throw Error('Interpolation delay is not bounded');
+      }
+    }
+    const state={...base,round:base.round+1};buffer.push(state,seq,2200,7200);
+    if(buffer.sample(2200,model.settings).round!==state.round)throw Error('Stale round rendered');
+  }
   return results;
 }"""
 
@@ -78,6 +106,7 @@ async def check(origin, chromium):
             results = await page.evaluate(SIMULATION)
             print(f"PASS prediction: {len(results)} scenarios, both roles, 60/120/144 Hz and 0/100/200 ms RTT")
             print(f"Maximum backwards correction: {max(r['backwards'] for r in results):.3f} game pixels; immediate local response, pause and round reset checked")
+            print('PASS remote snapshots: server clock, jitter, 220 ms outage/burst, bounded extrapolation and round transitions')
         finally:
             await browser.close()
 

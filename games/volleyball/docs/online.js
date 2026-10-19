@@ -1,5 +1,6 @@
 import { COLORS } from './shared/settings.js';
 import { PlayerPrediction } from './shared/prediction.js';
+import { SnapshotBuffer } from './shared/snapshots.js';
 const bridge=window.VolleyBridge;
 const $=id=>document.getElementById(id);
 const names=['Классик','Красный','Синий','Зелёный','Розовый'];
@@ -13,9 +14,11 @@ const messages={
 };
 let socket=null,connecting=null,room=null,role=null,session=null,serverURL='',busy=false,manualClose=false;
 let reconnectTimer=null,retry=0,toastTimer=null,actionTimer=null,networkOK=false;
-let seq=0,lastInputAt=0,lastMask=-1,lastStateSeq=-1,lastEvent=0,snapshots=[],rtt=0;
+let seq=0,lastInputAt=0,lastMask=-1,lastStateSeq=-1,lastEvent=0,rtt=0;
 const pressed=new Set(),pingTimes=new Map();
-const prediction=new PlayerPrediction();
+const prediction=new PlayerPrediction(), snapshots=new SnapshotBuffer();
+let pendingPrediction=null, lastPacketAt=performance.now(), pingValues=[null,null], serverLag=0;
+let receivedSnapshots=0, frameCount=0, metricsAt=performance.now(), fps=0, receiveHz=0;
 const storageKey='volley.online.session.v1';
 function status(text,error=false){$('serverStatus').textContent=text;$('serverStatus').dataset.error=String(error);}
 function toast(text){$('onlineToast').textContent=text;$('onlineToast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('onlineToast').hidden=true,4500);}
@@ -54,14 +57,14 @@ function showLobby(){
 }
 function hideLobby(){if(!room||room.phase==='lobby')return;$('onlineRoom').hidden=true;clearInput();bridge.refreshControls();}
 function resetRoom(text){
-  room=null;role=null;session=null;snapshots=[];lastStateSeq=-1;lastEvent=0;retry=0;prediction.reset();
+  room=null;role=null;session=null;snapshots.reset();pendingPrediction=null;lastStateSeq=-1;lastEvent=0;retry=0;prediction.reset();
   clearTimeout(reconnectTimer);reconnectTimer=null;saveSession();bridge.local();showHome(text);
 }
 function openSocket(){
   if(socket?.readyState===WebSocket.OPEN&&networkOK)return Promise.resolve();
   if(connecting)return connecting;
   if(!serverURL)return Promise.reject(Error('Онлайн-сервер пока не подключён.'));
-  manualClose=false;networkOK=false;
+  manualClose=false;networkOK=false;rtt=0;pingValues=[null,null];pingTimes.clear();
   connecting=new Promise((resolve,reject)=>{
     const current=new WebSocket(serverURL,'volley-v1');socket=current;
     let ready=false;
@@ -69,6 +72,7 @@ function openSocket(){
     current.addEventListener('message',event=>{
       let packet;try{packet=JSON.parse(event.data);}catch{return;}
       if(current!==socket)return;
+      lastPacketAt=performance.now();
       if(packet.type==='hello'){
         if(packet.protocol!==1){clearTimeout(timer);reject(Error('Версии игры и сервера различаются. Обновите страницу.'));current.close();return;}
         ready=true;networkOK=true;clearTimeout(timer);resolve();ping();return;
@@ -107,18 +111,28 @@ async function requestRoom(type){
 }
 function handlePacket(packet){
   if(packet.type==='joined'){
-    clearTimeout(actionTimer);retry=0;clearTimeout(reconnectTimer);reconnectTimer=null;seq=0;lastMask=-1;lastStateSeq=-1;lastEvent=0;snapshots=[];prediction.reset();
+    clearTimeout(actionTimer);retry=0;clearTimeout(reconnectTimer);reconnectTimer=null;seq=0;lastMask=-1;lastStateSeq=-1;lastEvent=0;snapshots.reset();pendingPrediction=null;prediction.reset();
     session={code:packet.code,token:packet.token};saveSession();role=packet.role;room=packet.room;
-    bridge.enter(role);bridge.room(room);pushState(packet.state,0);bridge.state(packet.state);showLobby();setBusy(false);status('Готово к игре.');return;
+    frameCount=receivedSnapshots=0;metricsAt=performance.now();
+    bridge.enter(role);bridge.room(room);pushState(packet.state,0,null,packet.serverTime);bridge.state(packet.state);showLobby();setBusy(false);status('Готово к игре.');return;
   }
   if(packet.type==='room'&&room){
     const previousPhase=room.phase;room=packet.room;bridge.room(room);renderRoom();
     if(room.phase==='lobby'||(room.phase==='paused'&&room.reason==='connection'))showLobby();
     else if(room.phase==='playing'&&previousPhase!=='playing')hideLobby();return;
   }
-  if(packet.type==='state'&&room){if(packet.seq<=lastStateSeq)return;lastStateSeq=packet.seq;pushState(packet.state,packet.seq,packet.inputs);return;}
+  if(packet.type==='state'&&room){if(packet.seq<=lastStateSeq)return;lastStateSeq=packet.seq;pushState(packet.state,packet.seq,packet.inputs,packet.serverTime);return;}
   if(packet.type==='pong'){
-    const started=pingTimes.get(packet.id);if(started!==undefined){const sample=performance.now()-started;rtt=rtt?rtt*.8+sample*.2:sample;pingTimes.delete(packet.id);$('roomPing').textContent=Math.round(rtt)+' мс';}return;
+    const started=pingTimes.get(packet.id);
+    if(started!==undefined){
+      const sample=performance.now()-started;rtt=rtt?rtt*.7+sample*.3:sample;
+      pingTimes.delete(packet.id);$('roomPing').textContent='Ваш пинг: '+Math.round(rtt)+' мс';
+      if(packet.probe)send({type:'pong_ack',id:packet.id});
+      updateNetworkHUD(performance.now());
+    }return;
+  }
+  if(packet.type==='network'){
+    pingValues=packet.rtt;serverLag=packet.serverLag||0;updateNetworkHUD(performance.now());return;
   }
   if(packet.type==='closed'){
     manualClose=true;socket?.close();resetRoom(messages[packet.code]||'Комната закрыта.');return;
@@ -129,12 +143,24 @@ function handlePacket(packet){
     const text=messages[packet.code]||'Действие не выполнено.';if(room)toast(text);else status(text,true);
   }
 }
-function pushState(state,seq,inputs){
+function pushState(state,seq,inputs,serverTime){
   if(!state||!Array.isArray(state.players)||!state.ball||!Array.isArray(state.score))return;
-  const now=performance.now(),index=role==='host'?0:1;
-  prediction.receive(state,index,room.settings,inputs?.[index],now,rtt);
-  snapshots.push({state,seq,received:now});if(snapshots.length>20)snapshots.shift();
-  for(const event of state.events||[])if(event.id>lastEvent){lastEvent=event.id;bridge.effect(event);}
+  snapshots.push(state,seq,performance.now(),serverTime,inputs);
+  pendingPrediction=snapshots.latest;receivedSnapshots++;
+}
+function updateNetworkHUD(now){
+  const values=[...pingValues];
+  if(role&&rtt)values[role==='host'?0:1]=Math.round(rtt);
+  for(const [index,id] of ['hostPing','guestPing'].entries()){
+    const value=values[index],element=$(id);
+    element.textContent=(index===0?'Хост: ':'Гость: ')+(value===null?'—':Math.round(value)+' мс');
+    element.dataset.quality=value===null?'unknown':value<80?'good':value<160?'fair':'poor';
+  }
+  const gap=snapshots.latest?now-snapshots.latest.received:0;
+  let issue=!networkOK?'Нет связи':room?.phase==='playing'&&gap>250?'Данные задерживаются':rtt>180?'Высокий пинг':serverLag>50?'Сервер занят':fps&&fps<40?'Низкий FPS':'';
+  $('networkHealth').textContent=(issue?issue+' · ':'')+Math.round(receiveHz)+'/с · '+Math.round(fps)+' FPS';
+  $('networkHealth').dataset.quality=issue?'poor':'good';
+  $('networkHealth').title='Пинг — полный путь до сервера и обратно. Обновления: '+receiveHz.toFixed(1)+'/с; разброс доставки: '+Math.round(snapshots.jitter)+' мс; буфер: '+Math.round(snapshots.delay)+' мс; задержка цикла сервера: '+Math.round(serverLag)+' мс.';
 }
 function renderRoom(){
   if(!room)return;const host=role==='host',both=room.players.every(p=>p?.connected),playing=room.phase==='playing';
@@ -176,18 +202,17 @@ function keyDown(e){
 function syncKeys(){let mask=0;if(pressed.has('KeyA')||pressed.has('ArrowLeft'))mask|=1;if(pressed.has('KeyD')||pressed.has('ArrowRight'))mask|=2;if(pressed.has('KeyW')||pressed.has('ArrowUp')||pressed.has('Space'))mask|=4;if(pressed.has('KeyS')||pressed.has('ArrowDown'))mask|=8;bridge.setInput(mask);transmitInput(performance.now());}
 function keyUp(e){pressed.delete(codeFromEvent(e));syncKeys();}
 function frame(now){
-  if(!room||!snapshots.length)return;
-  const latest=snapshots.at(-1),renderAt=now-65;
-  let a=snapshots[0],b=latest;
-  for(let i=0;i<snapshots.length-1;i++)if(snapshots[i].received<=renderAt&&snapshots[i+1].received>=renderAt){a=snapshots[i];b=snapshots[i+1];break;}
-  const result={...latest.state,players:latest.state.players.map(p=>({...p})),ball:{...latest.state.ball}};
-  if(a.state.round===b.state.round&&a.state.round===latest.state.round&&b.received>a.received&&latest.state.phase==='playing'){
-    const t=Math.max(0,Math.min(1,(renderAt-a.received)/(b.received-a.received)));
-    for(let i=0;i<2;i++)for(const key of ['x','y','vx','vy','scaleX','scaleY'])result.players[i][key]=a.state.players[i][key]+(b.state.players[i][key]-a.state.players[i][key])*t;
-    for(const key of ['x','y','scaleX','scaleY'])result.ball[key]=a.state.ball[key]+(b.state.ball[key]-a.state.ball[key])*t;
+  if(!room||!snapshots.latest)return;
+  frameCount++;
+  if(pendingPrediction){
+    const latest=pendingPrediction,index=role==='host'?0:1;
+    prediction.receive(latest.state,index,room.settings,latest.inputs?.[index],now,rtt,snapshots.age(now,rtt));
+    for(const event of latest.state.events||[])if(event.id>lastEvent){lastEvent=event.id;bridge.effect(event);}
+    pendingPrediction=null;
   }
+  const result=snapshots.sample(now,room.settings);
   const mask=currentMask();transmitInput(now);
-  const own=prediction.render(now,mask);
+  const own=prediction.render(Math.min(now,snapshots.latest.received+150),mask);
   if(own&&networkOK){
     const index=role==='host'?0:1;
     for(const key of ['x','y','vx','vy'])result.players[index][key]=own[key];
@@ -211,8 +236,25 @@ COLORS.forEach((color,index)=>{
   button.append(document.createElement('span'));button.addEventListener('click',()=>send({type:'color',color:index}));$('ownColors').append(button);
 });
 let pingId=0;
-function ping(){if(!networkOK)return;const id=pingId++%2147483647;pingTimes.clear();pingTimes.set(id,performance.now());send({type:'ping',id});}
-setInterval(()=>{if(room)ping();},3000);
+function ping(){
+  if(!networkOK)return;
+  const now=performance.now(),id=pingId++%2147483647;
+  for(const [key,at] of pingTimes)if(now-at>5000)pingTimes.delete(key);
+  pingTimes.set(id,now);send({type:'ping',id});
+}
+setInterval(()=>{
+  const now=performance.now(),elapsed=now-metricsAt;
+  fps=frameCount*1000/elapsed;receiveHz=receivedSnapshots*1000/elapsed;
+  frameCount=receivedSnapshots=0;metricsAt=now;
+  if(room){
+    const stalled=networkOK&&!document.hidden&&(now-lastPacketAt>4000||room.phase==='playing'&&snapshots.latest&&now-snapshots.latest.received>4000);
+    if(stalled){
+      socket?.close(4000,'STALE_CONNECTION');networkOK=false;
+      clearInput();showLobby();$('roomStatus').textContent='Связь задерживается. Переподключаемся…';scheduleReconnect();
+    }else ping();
+    updateNetworkHUD(now);
+  }
+},1000);
 window.addEventListener('pagehide',()=>{clearInput();});
 try{serverURL=resolveServer();status(serverURL?'Создай комнату или введи код друга.':'Онлайн-сервер пока не подключён. Доступен локальный режим.',!serverURL);}catch(error){status(error.message,true);}
 const codeMatch=location.hash.match(/^#room=([1-9][0-9]{3})$/);if(codeMatch)$('joinCode').value=codeMatch[1];

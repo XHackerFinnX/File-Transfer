@@ -480,6 +480,7 @@ html, body { touch-action: manipulation; }
 <div id="hiddenUI" class="hidden-ui">
 <div class="name-badge-left">
 <div id="badgeP1" class="liquid-glass name-badge">👤 Классик</div>
+<span id="hostPing" class="player-ping" title="Пинг хозяина до игрового сервера и обратно">Хост: —</span>
 </div>
 <div class="ui-wrapper scoreboard-wrapper">
 <div class="liquid-glass scoreboard">
@@ -488,7 +489,9 @@ html, body { touch-action: manipulation; }
 </div>
 <div class="name-badge-right">
 <div id="badgeP2" class="liquid-glass name-badge">Красный 👤</div>
+<span id="guestPing" class="player-ping" title="Пинг гостя до игрового сервера и обратно">Гость: —</span>
 </div>
+<div id="networkHealth" class="network-health" aria-label="Состояние игрового соединения">Измеряем соединение…</div>
 <div class="ui-wrapper menu-btn-wrapper">
 <button type="button" id="menuBtn" class="liquid-glass menu-btn" aria-label="Меню матча" aria-controls="settingsPanel" aria-expanded="false">☰</button>
 </div>
@@ -656,7 +659,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
         // Логические координаты для правильного масштабирования на любых экранах
         let LOGICAL_WIDTH = 1000;
         let LOGICAL_HEIGHT = 600;
-        let GAME_SCALE = 1;
+        let GAME_SCALE = 1, GAME_SCALE_X = 1, GAME_SCALE_Y = 1;
 
         function spawnParticles(x, y, color, count, type = 'normal') {
             if (!appSettings.particles) return;
@@ -1029,6 +1032,20 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
             GAME_SCALE = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT);
             VIEW_OFFSET_X = (canvas.width - LOGICAL_WIDTH * GAME_SCALE) / 2;
             VIEW_OFFSET_Y = (canvas.height - LOGICAL_HEIGHT * GAME_SCALE) / 2;
+            GAME_SCALE_X = GAME_SCALE_Y = GAME_SCALE;
+            if (isTouchDevice && orientation === 'landscape') {
+                const css = getComputedStyle(document.documentElement);
+                const inset = side => parseFloat(css.getPropertyValue('--safe-'+side)) || 0;
+                const left = Math.max(8,inset('left'))*dpr, right = Math.max(8,inset('right'))*dpr;
+                const top = inset('top')*dpr, bottom = inset('bottom')*dpr;
+                // Fit the entire arena, with extra room for ball sprites at the
+                // walls. Stretch width independently; never crop the court.
+                const margin = 24;
+                GAME_SCALE_X = (canvas.width-left-right)/(LOGICAL_WIDTH+margin*2);
+                GAME_SCALE_Y = (canvas.height-top-bottom)/LOGICAL_HEIGHT;
+                VIEW_OFFSET_X = left+margin*GAME_SCALE_X; VIEW_OFFSET_Y = top;
+                GAME_SCALE = Math.min(GAME_SCALE_X,GAME_SCALE_Y);
+            }
             GROUND_Y = LOGICAL_HEIGHT * .78; HORIZON_Y = LOGICAL_HEIGHT * .65;
             net.x = LOGICAL_WIDTH / 2; net.height = appSettings.netHeight; net.width = appSettings.netWidth; net.y = GROUND_Y - net.height;
             bgCanvas.width = 0; updateTheme(); preRenderBall(); checkTouchUI();
@@ -1334,7 +1351,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
         function drawCharacter(p, isPlayer1) {
             ctx.save(); ctx.translate(p.x, p.y);
 
-            let drawScaleX = p.scaleX; let drawScaleY = p.scaleY;
+            let drawScaleX = p.scaleX * GAME_SCALE_Y / GAME_SCALE_X; let drawScaleY = p.scaleY;
             ctx.scale(drawScaleX, drawScaleY);
 
             let rRatio = p.radius / 45; let r = p.radius; let h = r * 2.8; let color = p.color;
@@ -1431,7 +1448,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
                 bgCtx.fillRect(0, 0, canvas.width, canvas.height);
 
                 bgCtx.save();
-                bgCtx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); bgCtx.scale(GAME_SCALE, GAME_SCALE); // Постоянные пропорции площадки
+                bgCtx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); bgCtx.scale(GAME_SCALE_X, GAME_SCALE_Y); // Постоянные пропорции площадки
 
                 bgCtx.strokeStyle = '#add8e6'; bgCtx.lineWidth = 2;
                 bgCtx.beginPath();
@@ -1455,7 +1472,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
 
             drawBackground(); // Фон отрисовывается в физических пикселях с учетом скейлинга внутри
 
-            ctx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); ctx.scale(GAME_SCALE, GAME_SCALE);
+            ctx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); ctx.scale(GAME_SCALE_X, GAME_SCALE_Y);
 
             ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(net.x, GROUND_Y); ctx.quadraticCurveTo(net.x + net.bend, net.y + net.height / 2, net.x, net.y);
             ctx.lineWidth = net.width * 1.5; ctx.strokeStyle = '#000'; ctx.stroke();
@@ -1480,7 +1497,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
             }
 
             // Рендер мяча: размер 100x100 в логических пикселях, но он стал в разы четче внутри
-            ctx.save(); ctx.translate(ball.x, ball.y); ctx.save();
+            ctx.save(); ctx.translate(ball.x, ball.y); ctx.scale(GAME_SCALE_Y / GAME_SCALE_X, 1); ctx.save();
             if (isServing) { ctx.rotate(time * 0.5); } else if (ball.vx !== 0 || ball.vy !== 0) { ctx.rotate(Math.atan2(ball.vy, ball.vx)); }
             ctx.scale(ball.scaleX, ball.scaleY);
             const ballDrawSize = ball.radius * 2.5; ctx.drawImage(ballCanvas, -ballDrawSize / 2, -ballDrawSize / 2, ballDrawSize, ballDrawSize);
@@ -1996,5 +2013,5 @@ requestAnimationFrame(gameLoop);
 
     </script>
 
-<script type="module" src="./online.js?v=2"></script>
+<script type="module" src="./online.js?v=3"></script>
 </body></html>

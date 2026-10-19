@@ -10,4 +10,7 @@ The authoritative server physics and room protocol were ported to Python in
 remains in the browser for player prediction, with acknowledged input replay and
 smooth reconciliation in `docs/shared/prediction.js`. Mobile controls and
 viewport/orientation handling are adapted for the FastAPI version.
+Snapshot interpolation uses server timestamps, adaptive jitter buffering and
+bounded extrapolation in `docs/shared/snapshots.js`. The Python server coalesces
+outdated snapshots and measures both players' round-trip times for the match HUD.
 See the root `VOLLEYBALL_RU.md`.

@@ -50,6 +50,9 @@ async def check(origin, chromium, artifacts=None):
                 await visible_inside(page, '#tRight')
                 await visible_inside(page, '#tJump')
                 assert await page.locator('#tDown').count() == 0
+                await page.wait_for_function("() => /[0-9]+ мс/.test(document.getElementById('hostPing').textContent) && /[0-9]+ мс/.test(document.getElementById('guestPing').textContent)")
+                await visible_inside(page, '#hostPing')
+                await visible_inside(page, '#guestPing')
             left = await host.locator('#tLeft').bounding_box()
             jump = await host.locator('#tJump').bounding_box()
             assert left['x'] < 852/2 < jump['x']
@@ -90,6 +93,13 @@ async def check(origin, chromium, artifacts=None):
                 assert await host.evaluate('canvas.width <= innerWidth*2+1 && canvas.height <= innerHeight*2+1')
                 assert await host.evaluate('Object.values(VolleyBridge.input()).every(v => !v)')
                 assert await host.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                if width > height:
+                    arena = await host.evaluate('''() => {
+                        const dpr=canvas.width/innerWidth;
+                        return {left:VIEW_OFFSET_X/dpr,right:(VIEW_OFFSET_X+LOGICAL_WIDTH*GAME_SCALE_X)/dpr};
+                    }''')
+                    assert arena['left'] >= 0 and arena['right'] <= width, arena
+                    assert arena['right']-arena['left'] >= width*.9, arena
             await cdp.send('Input.dispatchTouchEvent', dict(type='touchCancel', touchPoints=[]))
             if artifacts:
                 await host.screenshot(path=str(artifacts/'mobile-match.png'))
