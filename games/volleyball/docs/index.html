@@ -1,0 +1,1934 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="description" content="Волейбол онлайн: комнаты по коду, игра с другом и настройка физики матча.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: ws:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<link rel="stylesheet" href="./online.css">
+<script src="./config.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VOLLEY IO</title>
+
+<style>
+/* Графика и базовая механика адаптированы из предоставленного пользователем исходника. */
+        *,
+        *::before,
+        *::after {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #ffffff;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+            touch-action: none;
+            color: #000;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        body.mouse-active { cursor: crosshair; }
+        body.mouse-idle, body.mouse-idle * { cursor: none !important; }
+
+        .liquid-glass {
+            background: #fff;
+            border: 4px solid #000;
+            box-shadow: 8px 8px 0px #000;
+            border-radius: 0;
+            color: #000;
+            pointer-events: auto;
+            position: relative;
+            font-weight: 700;
+        }
+
+        .ui-wrapper {
+            position: absolute;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .main-menu-wrapper {
+            top: 0;
+            height: 100%;
+            align-items: center;
+            z-index: 2000;
+            background: rgba(255, 255, 255, 0.95);
+            transition: opacity 0.5s ease;
+            padding: 10px;
+        }
+
+        .menu-box {
+            padding: 30px 40px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            align-items: center;
+            max-width: 95%;
+            width: 650px;
+            max-height: 95vh;
+            overflow-y: auto;
+            will-change: transform;
+            scrollbar-width: thin;
+            scrollbar-color: #000 #fff;
+        }
+
+        /* Кастомный скроллбар для элементов, которые могут вылезти */
+        .menu-box::-webkit-scrollbar, .settings-panel::-webkit-scrollbar, .victory-screen-content::-webkit-scrollbar { width: 6px; }
+        .menu-box::-webkit-scrollbar-track, .settings-panel::-webkit-scrollbar-track, .victory-screen-content::-webkit-scrollbar-track { background: #fff; border-left: 1px solid #000; }
+        .menu-box::-webkit-scrollbar-thumb, .settings-panel::-webkit-scrollbar-thumb, .victory-screen-content::-webkit-scrollbar-thumb { background: #000; }
+
+        .menu-box h1 {
+            font-size: 52px;
+            font-weight: 700;
+            color: #000;
+            margin: 0 0 10px 0;
+            text-transform: uppercase;
+        }
+
+        .skins-container {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            justify-content: center;
+            margin-bottom: 5px;
+            flex-wrap: wrap;
+        }
+
+        .skin-block {
+            background: #fff;
+            border: 4px solid #000;
+            box-shadow: 6px 6px 0px #000;
+            padding: 10px 15px;
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .skin-block h3 { margin: 0 0 10px 0; font-size: 18px; font-weight: 700; color: #000; text-transform: uppercase; }
+
+        .skin-selector { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+        .skin-preview-container { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+
+        .skin-preview-container canvas { width: 90px; height: 90px; background: #fff; border: 4px solid #000; }
+
+        .skin-display { font-size: 20px; font-weight: 700; color: #000; text-align: center; }
+
+        .skin-btn {
+            background: #fff; border: 4px solid #000; color: #000; width: 40px; height: 40px;
+            font-size: 20px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.1s;
+        }
+        .skin-btn:hover { background: #000; color: #fff; }
+        .skin-btn:active { transform: translate(4px, 4px); box-shadow: none; }
+
+        .goal-banner-wrapper { position: absolute; top: 20%; left: 0; width: 100%; display: flex; justify-content: center; align-items: center; pointer-events: none; z-index: 150; opacity: 0; transform: scale(0.5) translateY(-50px); transition: all 0.5s; will-change: transform, opacity; }
+        .goal-banner-wrapper.show { opacity: 1; transform: scale(1) translateY(0); }
+
+        .goal-banner { padding: 15px 50px; background: #fff; border: 4px solid #000; box-shadow: 6px 6px 0px #000; text-align: center; }
+        .goal-banner h1 { font-size: 52px; margin: 0; color: #000; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+
+        .hidden-ui { opacity: 0; pointer-events: none; transition: opacity 0.8s; }
+        .show-ui { opacity: 1; pointer-events: auto; }
+
+        .name-badge-left { position: absolute; top: 20px; left: 20px; z-index: 10; }
+        .name-badge-right { position: absolute; top: 20px; right: 90px; z-index: 10; }
+
+        .name-badge { padding: 6px 14px; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; border: 3px solid #000; background: #fff; color: #000; box-shadow: 4px 4px 0px #000; }
+
+        .scoreboard-wrapper { top: 15px; z-index: 10; }
+        .scoreboard { padding: 6px 25px; margin: 0; display: flex; align-items: center; gap: 20px; border: 3px solid #000; background: #fff; color: #000; box-shadow: 4px 4px 0px #000; }
+        .score-number { font-size: 38px; font-weight: 700; color: #000; min-width: 30px; }
+        .score-divider { font-size: 24px; color: #000; }
+
+        .menu-btn-wrapper { position: absolute; top: 20px; right: 20px; width: auto; z-index: 30; }
+        .settings-wrapper { position: absolute; top: 85px; right: 20px; width: auto; z-index: 20; }
+
+        .menu-btn { padding: 0px 12px 4px 12px; font-size: 24px; font-weight: 700; border: 3px solid #000; background: #fff; color: #000; box-shadow: 4px 4px 0px #000; margin: 0; cursor: pointer; transition: all 0.1s; }
+        .menu-btn:hover { background: #000; color: #fff; }
+
+        .settings-panel { padding: 20px 25px; font-size: 18px; text-align: right; margin: 0; font-weight: 700; transform: translateY(-20px); opacity: 0; pointer-events: none; transition: all 0.2s; border: 4px solid #000; background: #fff; box-shadow: 8px 8px 0px #000; max-height: 80vh; overflow-y: auto; width: 320px; max-width: 90vw; }
+        .settings-panel.open { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+        .victory-wrapper { top: 0; height: 100%; align-items: center; z-index: 100; background: rgba(255, 255, 255, 0.95); display: flex; opacity: 0; pointer-events: none; transform: scale(0.9); transition: all 0.4s; will-change: opacity, transform; padding: 10px; }
+        .victory-wrapper.show { opacity: 1; pointer-events: auto; transform: scale(1); }
+
+        .victory-screen-content { padding: 50px 80px; margin: 0; border: 6px solid #000; background: #fff; box-shadow: 12px 12px 0px #000; max-width: 95%; max-height: 95vh; overflow-y: auto; text-align: center; }
+        .victory-screen-content h2 { font-size: 50px; margin: 0 0 10px 0; font-weight: 700; color: #000; text-transform: uppercase; }
+        .victory-screen-content p { font-size: 30px; margin: 0 0 30px 0; font-weight: 700; color: #000; }
+
+        .liquid-btn { background: #fff; border: 4px solid #000; transition: all 0.1s; font-family: inherit; font-weight: 700; color: #000; margin: 0; cursor: pointer; text-transform: uppercase; box-shadow: 6px 6px 0px #000; }
+        .liquid-btn:hover { background: #000; color: #fff; }
+        .liquid-btn:active { transform: translate(4px, 4px); box-shadow: 2px 2px 0px #000; }
+
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; margin: 15px 0 15px 0; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; background: #000; border: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 30px; width: 30px; margin-top: -11px; background: #fff; border: 4px solid #000; transition: transform 0.1s; cursor: pointer; }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        .custom-select-wrapper { position: relative; margin-top: 15px; }
+        .custom-select { padding: 12px 20px; background: #fff; border: 4px solid #000; color: #000; font-weight: 700; font-size: 16px; text-align: center; box-shadow: 6px 6px 0px #000; transition: all 0.1s; cursor: pointer; }
+        .custom-select:hover { background: #000; color: #fff; }
+
+        .custom-options { position: absolute; top: 110%; left: 0; right: 0; background: #fff; border: 4px solid #000; box-shadow: 6px 6px 0px #000; opacity: 0; transform: translateY(-10px); pointer-events: none; transition: all 0.2s; overflow: hidden; z-index: 50; }
+        .custom-options.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+        .custom-option { padding: 12px 15px; color: #000; font-weight: 700; text-align: center; transition: background 0.1s; font-size: 14px; cursor: pointer; }
+        .custom-option:hover { background: #000; color: #fff; }
+
+        #touchControls { position: absolute; bottom: 50px; left: 0; right: 0; display: flex; justify-content: space-between; padding: 0 60px; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.5s; }
+        #touchControls.visible { opacity: 1; pointer-events: auto; }
+        .touch-group-left { display: flex; gap: 15px; }
+        .touch-group-right { display: flex; align-items: flex-end; }
+        .touch-btn { background: rgba(255, 255, 255, 0.85); border: 4px solid #000; border-radius: 14px; width: 65px; height: 65px; font-size: 28px; font-weight: 700; color: #000; display: flex; align-items: center; justify-content: center; user-select: none; box-shadow: 5px 5px 0px #000; transition: all 0.1s; cursor: pointer; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+        .touch-btn:active { background: #000; color: #fff; transform: translate(4px, 4px); box-shadow: 1px 1px 0px #000; }
+
+        .diff-selector { display: flex; gap: 0; width: 100%; margin-bottom: 10px; border: 4px solid #000; box-shadow: 5px 5px 0px #000; overflow: hidden; }
+        .diff-selector .diff-opt { flex: 1; padding: 12px 6px; text-align: center; font-weight: 700; font-size: 14px; font-family: inherit; cursor: pointer; background: #fff; color: #000; border: none; border-right: 3px solid #000; transition: all 0.15s; user-select: none; line-height: 1.2; }
+        .diff-selector .diff-opt:last-child { border-right: none; }
+        .diff-selector .diff-opt .diff-emoji { display: block; font-size: 24px; margin-bottom: 4px; }
+        .diff-selector .diff-opt:hover { background: #eee; }
+        .diff-selector .diff-opt.active { background: #000; color: #fff; }
+        .diff-label { font-size: 14px; font-weight: 700; text-align: left; margin-bottom: 6px; color: #000; text-transform: uppercase; }
+
+        @media (min-width: 1024px) { #touchControls { display: none !important; } }
+
+        /* ВСЕ МОБИЛЬНЫЕ УСТРОЙСТВА (ВЕРТИКАЛЬНО И ГОРИЗОНТАЛЬНО) */
+        @media (max-width: 900px), (max-height: 500px) {
+            .menu-box { padding: 15px; width: 100%; max-width: 500px; gap: 8px; border-width: 2px; box-shadow: 4px 4px 0px #000; flex-direction: row; flex-wrap: wrap; justify-content: center;}
+            .menu-box h1 { font-size: 24px; margin-bottom: 0; width: 100%; }
+            .skins-container { gap: 10px; margin-bottom: 0; flex-direction: row; }
+            .skin-block { min-width: 100px; padding: 6px; border-width: 2px; box-shadow: 2px 2px 0px #000; flex: 1; }
+            .skin-block h3 { font-size: 12px; margin-bottom: 3px; }
+            .skin-preview-container canvas { width: 40px; height: 40px; border-width: 2px; }
+            .skin-display { font-size: 10px; }
+            .skin-btn { width: 22px; height: 22px; font-size: 12px; border-width: 2px; }
+
+            /* ИГРОВОЙ ИНТЕРФЕЙС (УЛЬТРА МАЛЕНЬКИЙ И ПРОЗРАЧНЫЙ) */
+            .name-badge-left { top: 4px; left: 4px; pointer-events: none; }
+            .name-badge-right { top: 4px; right: 30px; pointer-events: none; }
+            .name-badge { padding: 1px 4px; font-size: 8px; border-width: 1px; box-shadow: none; opacity: 0.35; background: rgba(255,255,255,0.7); border-color: rgba(0,0,0,0.5); }
+
+            .scoreboard-wrapper { top: 4px; pointer-events: none; }
+            .scoreboard { padding: 1px 8px; gap: 4px; border-width: 1px; box-shadow: none; opacity: 0.35; background: rgba(255,255,255,0.7); border-color: rgba(0,0,0,0.5); }
+            .score-number { font-size: 12px; min-width: 10px; }
+            .score-divider { font-size: 10px; }
+
+            .menu-btn-wrapper { top: 4px; right: 4px; }
+            .menu-btn { padding: 0 4px 1px 4px; font-size: 12px; border-width: 1px; box-shadow: none; opacity: 0.35; background: rgba(255,255,255,0.7); border-color: rgba(0,0,0,0.5); }
+            .settings-wrapper { top: 25px; right: 4px; }
+            .settings-panel { padding: 10px; width: 200px; border-width: 2px; box-shadow: 3px 3px 0px #000; font-size: 12px; }
+
+            /* ПЛАШКА ГОЛА */
+            .goal-banner { padding: 2px 10px; border-width: 1px; box-shadow: none; background: rgba(255, 255, 255, 0.6); border-radius: 4px; border-color: rgba(0,0,0,0.5); }
+            .goal-banner h1 { font-size: 14px; letter-spacing: 0; margin: 0; color: #000; }
+
+            /* ЭКРАН ПОБЕДЫ */
+            .victory-screen-content { padding: 15px 10px; border-width: 2px; box-shadow: 3px 3px 0px #000; max-width: 300px; }
+            .victory-screen-content h2 { font-size: 20px; margin-bottom: 5px; }
+            .victory-screen-content p { font-size: 14px; margin-bottom: 10px; }
+
+            /* КНОПКИ УПРАВЛЕНИЯ */
+            #touchControls { bottom: 15px; padding: 0 15px; }
+            .touch-btn { width: 50px; height: 50px; font-size: 22px; border-width: 2px; border-radius: 8px; box-shadow: 2px 2px 0px #000; }
+            .touch-group-left { gap: 12px; }
+
+            .diff-label { font-size: 10px; margin-bottom: 4px; display: none; }
+            .diff-selector { border-width: 2px; box-shadow: 2px 2px 0px #000; width: auto; min-width: 180px; margin-bottom: 0; }
+            .diff-selector .diff-opt { padding: 6px 4px; font-size: 9px; border-right-width: 1px; }
+            .diff-selector .diff-opt .diff-emoji { font-size: 12px; margin-bottom: 2px; }
+
+            .liquid-btn { padding: 8px 6px; font-size: 12px; border-width: 2px; box-shadow: 2px 2px 0px #000; }
+        }
+
+        /* ДЛЯ ОЧЕНЬ УЗКИХ ЭКРАНОВ (Вертикальные телефоны) */
+        @media (max-width: 400px) {
+            .menu-box { flex-direction: column; flex-wrap: nowrap; padding: 10px;}
+            .skins-container { flex-direction: column; width: 100%; }
+            .diff-label { display: block; }
+            .diff-selector { width: 100%; }
+
+            .name-badge-right { right: 26px; }
+            .name-badge { font-size: 6px; padding: 1px 2px; }
+            .scoreboard { padding: 1px 4px; gap: 2px; }
+            .score-number { font-size: 10px; }
+            .score-divider { font-size: 8px; }
+            .menu-btn { font-size: 10px; padding: 0 3px 1px 3px; }
+
+            .goal-banner h1 { font-size: 12px; }
+            .touch-btn { width: 40px; height: 40px; font-size: 18px; }
+        }
+    /* Дополнения локальной версии. Все шрифты и изображения автономны. */
+[hidden] { display: none !important; }
+body, html, button, input, select { font-family: 'Courier New', Courier, monospace; }
+button, select { cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 3px solid #245eea; outline-offset: 4px; }
+#gameCanvas { touch-action: none; }
+body.mouse-idle, body.mouse-idle * { cursor: auto !important; }
+.main-menu-wrapper { background: rgba(255,255,255,.95); }
+.menu-box { gap: 14px; width: 680px; padding: 24px 32px; max-height: calc(100dvh - 30px); touch-action: pan-y; }
+.menu-box h1 { margin-bottom: 0; font-size: clamp(30px, 6vw, 48px); }
+.local-subtitle { font-size: 13px; margin: -7px 0 0; width: 100%; }
+.local-menu-actions { width: 100%; display: flex; gap: 12px; }
+.local-menu-actions .liquid-btn { flex: 1; padding: 10px; font-size: 14px; }
+.local-controls { width: 100%; text-align: left; font-size: 13px; line-height: 1.65; border-top: 2px solid #000; padding-top: 10px; }
+.local-controls p { margin: 0; }
+kbd { display: inline-block; min-width: 20px; border: 1px solid #000; padding: 0 3px; font-family: inherit; text-align: center; background: #f5f5f5; }
+.local-summary { font-size: 12px; line-height: 1.5; margin: 0; width: 100%; }
+.storage-note { font-size: 12px; color: #743b00; margin: 0; }
+.quick-action { padding: 9px; font-size: 13px; width: 100%; margin-top: 12px; }
+#menuBtn { min-width: 42px; min-height: 40px; line-height: 1; }
+#settingsPanel { text-align: left; max-height: calc(100dvh - 110px); width: 340px; touch-action: pan-y; }
+#settingsPanel:not(.open), .custom-options:not(.open) { visibility: hidden; }
+#settingsPanel.open, .custom-options.open { visibility: visible; }
+#pauseButton { font-size: 14px; }
+.match-hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 12px; background: #fff; border: 2px solid #000; padding: 7px 12px; white-space: nowrap; pointer-events: none; }
+.settings-modal { position: fixed; inset: 0; z-index: 4000; background: rgba(255,255,255,.91); display: grid; place-items: center; padding: 20px; touch-action: pan-y; }
+.settings-window { width: min(960px,100%); height: min(890px,calc(100dvh - 40px)); display: flex; flex-direction: column; background: #fff; border: 4px solid #000; box-shadow: 8px 8px 0 #000; text-align: left; }
+.settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 14px; border-bottom: 3px solid #000; }
+.settings-head h2 { margin: 0 0 7px; font-size: 26px; }
+.settings-head p { margin: 0; font-size: 13px; line-height: 1.5; max-width: 700px; }
+.close-settings { width: 36px; height: 36px; flex-shrink: 0; border: 2px solid #000; background: #fff; font-size: 25px; line-height: 1; }
+.settings-scroll { overflow-y: auto; padding: 18px 24px; min-height: 0; flex: 1; scrollbar-width: thin; scrollbar-color: #000 #fff; overscroll-behavior: contain; }
+.preset-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.preset-row span { font-size: 13px; font-weight: 700; margin-right: 4px; }
+.small-button { border: 2px solid #000; background: #fff; padding: 7px 10px; font-family: inherit; font-size: 12px; font-weight: 700; }
+.small-button:hover, .close-settings:hover { background: #000; color: #fff; }
+.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
+.settings-group { border: 2px solid #000; margin: 0; padding: 10px 15px 15px; min-width: 0; }
+.settings-group legend { padding: 0 7px; font-size: 15px; font-weight: 700; }
+.param { margin: 12px 0 16px; }
+.param:last-child { margin-bottom: 0; }
+.param-top { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.param-top label { font-size: 13px; line-height: 1.35; font-weight: 700; }
+.param-value { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.param input[type=number] { width: 75px; padding: 5px 4px; border: 2px solid #000; font-size: 13px; text-align: right; background: #fff; color: #000; user-select: text; }
+.param .unit { font-size: 11px; min-width: 18px; }
+.param input[type=range] { margin: 15px 0 5px; height: 16px; cursor: pointer; }
+.param input[type=range]::-webkit-slider-runnable-track { height: 4px; }
+.param input[type=range]::-webkit-slider-thumb { width: 18px; height: 22px; border: 2px solid #000; margin-top: -9px; }
+.param input[type=range]::-moz-range-track { height: 4px; background: #000; }
+.param input[type=range]::-moz-range-thumb { width: 15px; height: 20px; border: 2px solid #000; border-radius: 0; background: #fff; }
+.param-help, .group-help { font-size: 11px; line-height: 1.5; margin: 4px 0 0; color: #444; }
+.param select { width: 100%; padding: 7px; font-size: 13px; border: 2px solid #000; background: #fff; color: #000; margin-top: 7px; }
+.param-check { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.5; margin: 14px 0 0; }
+.param-check input { accent-color: #000; width: 17px; height: 17px; margin: 1px 0 0; flex-shrink: 0; }
+.settings-foot { padding: 14px 24px 20px; border-top: 3px solid #000; display: flex; flex-direction: column; gap: 12px; }
+.settings-foot-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; align-items: center; }
+.settings-files, .settings-confirm { display: flex; gap: 10px; }
+.settings-confirm .liquid-btn { padding: 9px 16px; font-size: 14px; }
+.settings-message { margin: 0; font-size: 12px; line-height: 1.4; min-height: 17px; }
+.settings-message[data-error=true] { color: #b01616; font-weight: 700; }
+.menu-box .diff-selector { flex-shrink: 0; }
+#resumeMatchButton { width: 100%; border-style: dashed; }
+#victoryScreen { z-index: 3000; }
+#victoryScreen .victory-screen-content { max-height: 90dvh; overflow-y: auto; }
+.victory-menu-button { margin-top: 15px; padding: 10px 16px; font-size: 16px; width: 100%; }
+@media (max-width: 900px), (max-height: 500px) {
+  .menu-box { flex-direction: column; flex-wrap: nowrap; gap: 10px; padding: 14px 18px; width: min(640px,95%); max-width: 95%; }
+  .menu-box h1 { font-size: 30px; }
+  .menu-box .local-menu-actions { min-height: 38px; }
+  .menu-box .skins-container { flex-direction: row; }
+  .menu-box .skin-block { min-width: 100px; }
+  .menu-box .diff-label { display: block; align-self: flex-start; font-size: 12px; }
+  .menu-box .diff-selector { width: 100%; }
+  .menu-box .diff-opt { font-size: 11px; }
+  .local-controls { font-size: 11px; }
+  .local-subtitle { margin-top: -4px; font-size: 11px; }
+  .settings-wrapper { top: 54px; right: 12px; }
+  #settingsPanel { width: min(340px,90vw); max-height: calc(100dvh - 70px); font-size: 15px; }
+  .menu-btn-wrapper { top: 9px; right: 10px; }
+  #menuBtn { opacity: 1; font-size: 24px; background: #fff; border: 2px solid #000; }
+  .scoreboard-wrapper { top: 10px; }
+  .scoreboard { opacity: 1; border: 2px solid #000; padding: 3px 14px; gap: 14px; }
+  .score-number { font-size: 24px; }
+  .name-badge-left { top: 12px; left: 10px; }
+  .name-badge-right { top: 12px; right: 67px; }
+  .name-badge { font-size: 10px; opacity: 1; padding: 3px 5px; border: 1px solid #000; }
+  .match-hint { bottom: 8px; font-size: 10px; }
+}
+@media (max-width: 650px) {
+  .settings-modal { padding: 8px; }
+  .settings-window { height: calc(100dvh - 16px); border-width: 3px; box-shadow: 3px 3px 0 #000; }
+  .settings-head { padding: 14px 14px 10px; }
+  .settings-head h2 { font-size: 21px; }
+  .settings-head p { font-size: 11px; }
+  .settings-scroll { padding: 12px; }
+  .settings-grid { grid-template-columns: 1fr; gap: 12px; }
+  .settings-foot { padding: 10px 12px 14px; }
+  .settings-files, .settings-confirm { flex: 1; }
+  .settings-confirm button, .settings-files button { flex: 1; }
+  .settings-foot-actions { flex-direction: column; align-items: stretch; gap: 10px; }
+  .name-badge-right, .name-badge-left { top: 58px; }
+  .name-badge-right { right: 10px; }
+  .match-hint { display: none; }
+  .local-menu-actions .liquid-btn { font-size: 11px; }
+}
+@media (pointer: coarse) {
+  #touchControls.visible { display: flex !important; }
+  #touchControls { padding: 0 20px; bottom: 16px; }
+  .touch-group-right { gap: 12px; }
+  .match-hint { display: none; }
+}
+html, body { touch-action: manipulation; }
+.touch-btn { touch-action: none; }
+#hiddenUI:not(.show-ui), #victoryScreen:not(.show) { visibility: hidden; }
+#hiddenUI.show-ui, #victoryScreen.show { visibility: visible; }
+#touchControls:not(.visible) { visibility: hidden; }
+@media (max-width: 650px) {
+  .menu-box .skin-preview-container canvas { width: 60px !important; height: 60px !important; }
+  .menu-box .skin-selector { gap: 6px; }
+  .menu-box .skin-display { font-size: 11px; }
+}
+
+</style>
+</head>
+<body>
+<div id="onlineHome" class="online-screen">
+  <main class="online-card">
+    <header class="online-heading"><span class="online-kicker">ДВА ИГРОКА / ОДИН МЯЧ</span><h1>VOLLEY IO</h1><p>Создай комнату. Отправь код другу. Встретьтесь у сетки.</p></header>
+    <div class="online-connect-status" id="serverStatus" role="status" aria-live="polite">Подготавливаем онлайн-режим…</div>
+    <div class="online-entry-grid">
+      <section class="online-entry"><span class="online-step">01 / СОЗДАТЬ</span><h2>Своя площадка</h2><p>Ты выбираешь высоту сетки, скорости и правила матча.</p><button type="button" class="liquid-btn online-primary" id="createRoomButton" disabled>СОЗДАТЬ КОМНАТУ</button></section>
+      <section class="online-entry"><span class="online-step">02 / ПОДКЛЮЧИТЬСЯ</span><h2>Комната друга</h2><form id="joinRoomForm"><label for="joinCode">Четыре цифры от хозяина комнаты</label><input type="text" id="joinCode" class="room-code-input" inputmode="numeric" pattern="[1-9][0-9]{3}" maxlength="4" placeholder="1234" autocomplete="off" required aria-label="Код комнаты из четырёх цифр"><button type="submit" class="liquid-btn online-primary" id="joinRoomButton" disabled>ПОДКЛЮЧИТЬСЯ</button></form></section>
+    </div>
+    <footer class="online-home-foot"><p>WASD или стрелки — движение и прыжок.<br>Играйте каждый на своём устройстве.</p><button type="button" class="small-button" id="localModeButton">Локальный режим</button></footer>
+    <noscript>Для игры включите JavaScript в браузере.</noscript>
+  </main>
+</div>
+<div id="onlineRoom" class="online-screen" hidden>
+  <main class="online-card room-card">
+    <header class="room-heading"><div><span class="online-kicker">ВАША КОМНАТА</span><div class="room-code-row"><h1 id="roomCode">0000</h1><button type="button" class="small-button" id="copyRoomCode">КОПИРОВАТЬ КОД</button></div></div><span id="roomRole" class="role-tag">ХОЗЯИН</span></header>
+    <p id="roomStatus" class="online-connect-status" role="status" aria-live="polite">Ожидаем второго игрока</p>
+    <div class="room-players"><section class="room-player"><canvas id="onlinePlayer1" width="90" height="90" aria-label="Первый игрок"></canvas><div><strong id="onlineName1">Хозяин · слева</strong><p id="onlineStatus1">Подключён</p></div></section><section class="room-player"><canvas id="onlinePlayer2" width="90" height="90" aria-label="Второй игрок"></canvas><div><strong id="onlineName2">Гость · справа</strong><p id="onlineStatus2">Свободное место</p></div></section></div>
+    <section class="room-colors"><h2>ТВОЙ ЦВЕТ</h2><div id="ownColors" class="color-options" role="group" aria-label="Выбор своего цвета"></div></section>
+    <section class="room-settings-summary"><div class="room-section-heading"><h2>ПАРАМЕТРЫ МАТЧА</h2><button type="button" class="small-button" id="hostSettingsButton" hidden>ИЗМЕНИТЬ</button></div><p id="guestSettingsNote" hidden>Параметры задаёт хозяин комнаты. Ты можешь выбрать свой цвет.</p><dl id="roomSettingsSummary"></dl></section>
+    <div class="room-action-row"><button type="button" class="liquid-btn online-primary" id="hostStartButton" hidden>НАЧАТЬ МАТЧ</button><button type="button" class="small-button" id="returnToMatch" hidden>ВЕРНУТЬСЯ В МАТЧ</button><button type="button" class="small-button" id="hostPauseButton" hidden>ПАУЗА</button></div>
+    <footer class="room-footer"><button type="button" class="text-button" id="leaveRoomButton">Покинуть комнату</button><button type="button" class="text-button" id="kickGuestButton" hidden>Освободить место гостя</button><span id="roomPing">—</span></footer>
+  </main>
+</div>
+<div id="onlineToast" class="online-toast" role="status" aria-live="polite" hidden></div>
+
+<div id="goalBannerUI" class="goal-banner-wrapper">
+<div class="goal-banner">
+<h1 id="goalBannerText">ГОЛ!</h1>
+</div>
+</div>
+<div id="mainMenu" class="ui-wrapper main-menu-wrapper show-ui">
+<div class="liquid-glass menu-box">
+<h1 id="uiTitle">VOLLEY IO</h1>
+<p class="local-subtitle">ЛОКАЛЬНАЯ ИГРА / НА ОДНОМ КОМПЬЮТЕРЕ</p>
+<div class="skins-container">
+<div class="skin-block">
+<h3 id="txtP1Title">ИГРОК 1</h3>
+<div class="skin-selector">
+<button type="button" class="skin-btn" aria-label="Предыдущий облик игрока 1" onclick="changeSkin(1, -1)">◀</button>
+<div class="skin-preview-container">
+<canvas id="p1PreviewCanvas" width="90" height="90" style="width: 90px; height: 90px;"></canvas>
+<span id="p1SkinDisplay" class="skin-display">Классик</span>
+</div>
+<button type="button" class="skin-btn" aria-label="Следующий облик игрока 1" onclick="changeSkin(1, 1)">▶</button>
+</div>
+</div>
+<div class="skin-block">
+<h3 id="txtP2Title">ИГРОК 2</h3>
+<div class="skin-selector">
+<button type="button" class="skin-btn" aria-label="Предыдущий облик игрока 2" onclick="changeSkin(2, -1)">◀</button>
+<div class="skin-preview-container">
+<canvas id="p2PreviewCanvas" width="90" height="90" style="width: 90px; height: 90px;"></canvas>
+<span id="p2SkinDisplay" class="skin-display">Красный</span>
+</div>
+<button type="button" class="skin-btn" aria-label="Следующий облик игрока 2" onclick="changeSkin(2, 1)">▶</button>
+</div>
+</div>
+</div>
+<div id="diffLabelMenu" class="diff-label" style="align-self: flex-start;">СЛОЖНОСТЬ БОТА:</div>
+<div class="diff-selector" id="diffSelectorMenu">
+<button type="button" class="diff-opt" data-diff="1" onclick="setBotDifficulty(1)"><span class="diff-emoji">😴</span><span class="diff-text">ЛЕГКИЙ</span></button>
+<button type="button" class="diff-opt active" data-diff="2" onclick="setBotDifficulty(2)"><span class="diff-emoji">🙂</span><span class="diff-text">НОРМ</span></button>
+<button type="button" class="diff-opt" data-diff="3" onclick="setBotDifficulty(3)"><span class="diff-emoji">😠</span><span class="diff-text">СЛОЖНО</span></button>
+<button type="button" class="diff-opt" data-diff="4" onclick="setBotDifficulty(4)"><span class="diff-emoji">💀</span><span class="diff-text">АД</span></button>
+</div>
+<div style="display: flex; gap: 15px; width: 100%;">
+<button id="btnPvp" class="liquid-btn" style="flex: 1; padding: 14px 5px; font-size: 18px;" onclick="startGame('pvp')">2 ИГРОКА (PVP)</button>
+<button id="btnBot" class="liquid-btn" style="flex: 1; padding: 14px 5px; font-size: 18px;" onclick="startGame('bot')">1 ИГРОК (VS БОТ)</button>
+</div>
+<div class="local-menu-actions"><button type="button" class="liquid-btn" onclick="openSettings()">ПАРАМЕТРЫ ИГРЫ</button><button type="button" class="liquid-btn" onclick="toggleFullscreen()">НА ВЕСЬ ЭКРАН</button></div>
+<button type="button" id="resumeMatchButton" class="liquid-btn quick-action" onclick="resumeSavedMatch()" hidden>ПРОДОЛЖИТЬ МАТЧ</button>
+<p id="settingsSummary" class="local-summary"></p>
+<div class="local-controls"><p><b>Игрок 1:</b> <kbd>A</kbd> <kbd>D</kbd> — движение · <kbd>W</kbd> / <kbd>Пробел</kbd> — прыжок · <kbd>S</kbd> — вниз</p><p><b>Игрок 2:</b> <kbd>←</kbd> <kbd>→</kbd> — движение · <kbd>↑</kbd> — прыжок · <kbd>↓</kbd> — вниз</p><p>Отбивайте мяч телом. Для подачи подпрыгните к мячу.<br><kbd>P</kbd> / <kbd>Esc</kbd> — пауза · <kbd>O</kbd> — параметры · <kbd>R</kbd> — новый матч</p></div>
+<button type="button" id="backOnlineButton" class="small-button">ОНЛАЙН-КОМНАТЫ</button>
+<p id="storageNote" class="storage-note" hidden>Браузер ограничивает сохранение. Используйте экспорт JSON для переноса настроек.</p>
+</div>
+</div>
+<div id="hiddenUI" class="hidden-ui">
+<div class="name-badge-left">
+<div id="badgeP1" class="liquid-glass name-badge">👤 Классик</div>
+</div>
+<div class="ui-wrapper scoreboard-wrapper">
+<div class="liquid-glass scoreboard">
+<span id="score1" class="score-number">0</span><span class="score-divider">-</span><span id="score2" class="score-number">0</span>
+</div>
+</div>
+<div class="name-badge-right">
+<div id="badgeP2" class="liquid-glass name-badge">Красный 👤</div>
+</div>
+<div class="ui-wrapper menu-btn-wrapper">
+<button type="button" id="menuBtn" class="liquid-glass menu-btn" aria-label="Меню матча" aria-controls="settingsPanel" aria-expanded="false">☰</button>
+</div>
+<div class="ui-wrapper settings-wrapper">
+<div id="settingsPanel" class="liquid-glass settings-panel">
+<p style="margin:0 0 12px;font-size:12px">МАТЧ ПРИОСТАНОВЛЕН</p>
+<label id="uiTempoLabel"><span id="txtTempo">ТЕМП:</span> <span id="tempoValue">100</span>%</label><br>
+<input type="range" id="tempoSlider" min="25" max="200" value="100" step="5" aria-label="Общий темп игры"><br>
+<div class="custom-select-wrapper" id="gameModeSelect">
+<button type="button" id="selText" class="custom-select" style="width:100%">2 ИГРОКА (PVP)</button>
+<div class="custom-options">
+<button type="button" id="optPvp" class="custom-option" style="width:100%;border:0;background:inherit;font-family:inherit" data-value="pvp">2 ИГРОКА (PVP)</button>
+<button type="button" id="optBot" class="custom-option" style="width:100%;border:0;background:inherit;font-family:inherit" data-value="bot">1 ИГРОК (VS БОТ)</button>
+</div>
+</div>
+<div id="diffLabelSettings" class="diff-label" style="margin-top: 15px;">СЛОЖНОСТЬ БОТА:</div>
+<div class="diff-selector" id="diffSelectorSettings">
+<button type="button" class="diff-opt" data-diff="1" onclick="setBotDifficulty(1)"><span class="diff-emoji">😴</span><span class="diff-text">ЛЕГКИЙ</span></button>
+<button type="button" class="diff-opt active" data-diff="2" onclick="setBotDifficulty(2)"><span class="diff-emoji">🙂</span><span class="diff-text">НОРМ</span></button>
+<button type="button" class="diff-opt" data-diff="3" onclick="setBotDifficulty(3)"><span class="diff-emoji">😠</span><span class="diff-text">СЛОЖНО</span></button>
+<button type="button" class="diff-opt" data-diff="4" onclick="setBotDifficulty(4)"><span class="diff-emoji">💀</span><span class="diff-text">АД</span></button>
+</div>
+<button type="button" class="liquid-btn quick-action" onclick="openSettings()">ПАРАМЕТРЫ ИГРЫ · O</button>
+<button type="button" id="pauseButton" class="liquid-btn quick-action" onclick="toggleManualPause(); toggleQuickMenu(false)">ПАУЗА · P</button>
+<button type="button" class="liquid-btn quick-action" onclick="restartGame()">НОВЫЙ МАТЧ · R</button>
+<button id="btnMenuExit" class="liquid-btn" style="margin-top: 15px; padding: 10px 20px; font-size: 16px; width: 100%; border-radius: 0;" onclick="exitToMenu()">В ГЛАВНОЕ МЕНЮ</button>
+</div>
+</div>
+<p id="matchHint" class="match-hint"></p>
+</div>
+<div id="victoryScreen" class="ui-wrapper victory-wrapper">
+<div class="victory-screen-content">
+<h2 id="winnerText">ПОБЕДИТЕЛЬ!</h2>
+<p><span id="txtScore">СЧЕТ:</span> <span id="finalScore">15 - 0</span></p>
+<button id="btnAgain" class="liquid-btn" onclick="restartGame()" style="margin-bottom: 15px; display: block; padding: 14px 20px; width: 100%;">ИГРАТЬ СНОВА</button>
+<button id="btnContinueAd" class="liquid-btn" onclick="continueMatch()" style="font-size: 18px; border-style: dashed; display: block; padding: 14px 20px; width: 100%;">+5 ОЧКОВ · ПРОДОЛЖИТЬ</button>
+<button type="button" class="liquid-btn victory-menu-button" onclick="exitToMenu()">В ГЛАВНОЕ МЕНЮ</button>
+</div>
+</div>
+<!-- Мобильное управление -->
+<div id="touchControls">
+<div class="touch-group-left">
+<button type="button" id="tLeft" class="touch-btn" aria-label="Влево">◀</button>
+<button type="button" id="tRight" class="touch-btn" aria-label="Вправо">▶</button>
+</div>
+<div class="touch-group-right">
+<button type="button" id="tDown" class="touch-btn" aria-label="Быстро вниз">▼</button>
+<button type="button" id="tJump" class="touch-btn" aria-label="Прыжок">▲</button>
+</div>
+</div>
+<div id="physicsModal" class="settings-modal" hidden>
+  <section class="settings-window" role="dialog" aria-modal="true" aria-labelledby="physicsTitle" aria-describedby="physicsDescription">
+    <header class="settings-head">
+      <div><h2 id="physicsTitle">ПАРАМЕТРЫ ИГРЫ</h2><p id="physicsDescription">Изменяйте значения ползунками или вводите числа. Применение начинает новую подачу; текущий счёт сохраняется.</p></div>
+      <button type="button" id="closeSettings" class="close-settings" onclick="closeSettings()" aria-label="Закрыть настройки">×</button>
+    </header>
+    <div class="settings-scroll">
+      <div class="preset-row"><span>НАБОРЫ:</span>
+        <button type="button" class="small-button" onclick="setPreset('original')">Оригинал</button>
+        <button type="button" class="small-button" onclick="setPreset('training')">Тренировка</button>
+        <button type="button" class="small-button" onclick="setPreset('fast')">Быстро</button>
+        <button type="button" class="small-button" onclick="setPreset('moon')">Низкая гравитация</button>
+      </div>
+      <div class="settings-grid">
+        <fieldset class="settings-group"><legend>01 / ПЛОЩАДКА</legend><div id="fields-court"></div></fieldset>
+        <fieldset class="settings-group"><legend>02 / ИГРОКИ</legend><div id="fields-players"></div><p class="group-help">100% — исходные значения. У бота дополнительно действуют скорость, прыжок и размер выбранного уровня сложности.</p></fieldset>
+        <fieldset class="settings-group"><legend>03 / МЯЧ И ФИЗИКА</legend><div id="fields-ball"></div></fieldset>
+        <fieldset class="settings-group"><legend>04 / ПРАВИЛА И ЭФФЕКТЫ</legend><div id="fields-rules"></div>
+          <div class="param"><label for="maxTouches"><strong>Касаний подряд на своей стороне</strong></label><select id="maxTouches"><option value="0">Без ограничений</option><option value="1">1</option><option value="2">2</option><option value="3">3 · как в оригинале</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option></select></div>
+          <label class="param-check"><input type="checkbox" id="check-winByTwo">Победа с разницей минимум в 2 очка</label>
+          <label class="param-check" id="hellUnlimitedRow"><input type="checkbox" id="check-hellUnlimited">Бесконечные касания у бота «Ад»</label>
+          <label class="param-check"><input type="checkbox" id="check-particles">Частицы и конфетти</label>
+          <label class="param-check"><input type="checkbox" id="check-trail">След мяча</label>
+          <label class="param-check"><input type="checkbox" id="check-shake">Тряска экрана</label>
+        </fieldset>
+      </div>
+    </div>
+    <footer class="settings-foot">
+      <p id="settingsMessage" class="settings-message" role="status" aria-live="polite"></p>
+      <div class="settings-foot-actions">
+        <div class="settings-files"><button type="button" class="small-button" onclick="exportSettings()">Экспорт JSON</button><button type="button" class="small-button" onclick="document.getElementById('importSettingsFile').click()">Импорт JSON</button><input type="file" id="importSettingsFile" accept=".json,application/json" hidden></div>
+        <div class="settings-confirm"><button type="button" class="small-button" onclick="closeSettings()">Отмена</button><button type="button" class="liquid-btn" onclick="applySettings()">Применить</button></div>
+      </div>
+    </footer>
+  </section>
+</div>
+
+<canvas id="gameCanvas" aria-label="Волейбольная площадка"></canvas>
+<script>
+'use strict';
+let onlineMode=false,onlineRole=null,onlineRound=0,onlineVisualAccumulator=0;const onlineHooks={};
+// Настройки в процентах меняют исходные величины. Площадка использует игровые единицы.
+const SETTINGS_KEY = 'volley-local-v1';
+const PARAMS = [
+  { key: 'netHeight', label: 'Высота сетки', min: 100, max: 460, step: .5, value: 322.5, unit: 'ед.', group: 'court' },
+  { key: 'netWidth', label: 'Толщина стойки', min: 4, max: 24, step: 1, value: 8, unit: 'ед.', group: 'court' },
+  { key: 'courtWidth', label: 'Ширина площадки', min: 900, max: 1600, step: 50, value: 1100, unit: 'ед.', group: 'court' },
+  { key: 'serveHeight', label: 'Высота подачи', min: 180, max: 420, step: 5, value: 280, unit: 'ед.', group: 'court', help: 'Мяч появляется не выше, чем подающий способен достать прыжком.' },
+  { key: 'speed1', label: 'Скорость игрока 1', min: 25, max: 250, step: 5, value: 100, unit: '%', group: 'players' },
+  { key: 'speed2', label: 'Скорость игрока 2 / бота', min: 25, max: 250, step: 5, value: 100, unit: '%', group: 'players' },
+  { key: 'jump1', label: 'Сила прыжка игрока 1', min: 50, max: 180, step: 5, value: 100, unit: '%', group: 'players' },
+  { key: 'jump2', label: 'Сила прыжка игрока 2 / бота', min: 50, max: 180, step: 5, value: 100, unit: '%', group: 'players' },
+  { key: 'acceleration', label: 'Разгон игроков', min: 50, max: 200, step: 5, value: 100, unit: '%', group: 'players' },
+  { key: 'ballSpeed', label: 'Скорость мяча', min: 50, max: 200, step: 5, value: 100, unit: '%', group: 'ball' },
+  { key: 'ballSize', label: 'Размер мяча', min: 50, max: 150, step: 5, value: 100, unit: '%', group: 'ball' },
+  { key: 'hitPower', label: 'Сила удара', min: 50, max: 200, step: 5, value: 100, unit: '%', group: 'ball' },
+  { key: 'gravity', label: 'Гравитация', min: 30, max: 180, step: 5, value: 100, unit: '%', group: 'ball' },
+  { key: 'airDrag', label: 'Сопротивление воздуха', min: 0, max: 3, step: .1, value: 1, unit: '%', group: 'ball' },
+  { key: 'tempo', label: 'Общий темп игры', min: 25, max: 200, step: 5, value: 100, unit: '%', group: 'rules', help: 'Меняет скорость всей симуляции. Скорости игроков и мяча настраиваются отдельно.' },
+  { key: 'winScore', label: 'Очков для победы', min: 1, max: 50, step: 1, value: 5, unit: '', group: 'rules' }
+];
+const DEFAULT_SETTINGS = Object.freeze(Object.assign(Object.fromEntries(PARAMS.map(p => [p.key, p.value])), {
+  maxTouches: 3, winByTwo: false, hellUnlimited: true, particles: true, trail: true, shake: true
+}));
+let storageAvailable = true;
+function normalizeSettings(raw) {
+  const clean = { ...DEFAULT_SETTINGS };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return clean;
+  for (const spec of PARAMS) {
+    if (typeof raw[spec.key] !== 'number' || !Number.isFinite(raw[spec.key])) continue;
+    const value = Math.max(spec.min, Math.min(spec.max, raw[spec.key]));
+    clean[spec.key] = Number((Math.round((value - spec.min) / spec.step) * spec.step + spec.min).toFixed(3));
+  }
+  if (Number.isInteger(raw.maxTouches) && raw.maxTouches >= 0 && raw.maxTouches <= 10) clean.maxTouches = raw.maxTouches;
+  for (const key of ['winByTwo','hellUnlimited','particles','trail','shake']) {
+    if (typeof raw[key] === 'boolean') clean[key] = raw[key];
+  }
+  return clean;
+}
+function readLocalSave() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  } catch (error) { storageAvailable = false; return {}; }
+}
+const startupSave = readLocalSave();
+let appSettings = normalizeSettings(startupSave.settings);
+let settingsDraft = { ...appSettings };
+let settingsOpen = false, quickMenuOpen = false, manualPaused = false, backgroundPaused = false;
+let settingsReturnFocus = null, roundServer = 1, victoryTimer = null;
+let VIEW_OFFSET_X = 0, VIEW_OFFSET_Y = 0;
+const pressedCodes = new Set();
+
+        const TWO_PI = Math.PI * 2;
+        const HALF_PI = Math.PI * 0.5;
+
+        const MAX_PARTICLES = 250;
+        const particlesPool = Array.from({ length: MAX_PARTICLES }, () => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, color: '', size: 0, rot: 0, rotV: 0 }));
+
+        const MAX_CONFETTI = 150;
+        const confettiPool = Array.from({ length: MAX_CONFETTI }, () => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, size: 0, color: '', rot: 0, rotV: 0 }));
+
+        const MAX_TEXTS = 20;
+        const floatTextsPool = Array.from({ length: MAX_TEXTS }, () => ({ active: false, x: 0, y: 0, text: '', life: 0, vy: 0, scale: 0, rot: 0, type: '' }));
+
+        const TRAIL_LEN = 10;
+        const trailX = new Float32Array(TRAIL_LEN);
+        const trailY = new Float32Array(TRAIL_LEN);
+        let trailHead = 0;
+        let trailActiveCount = 0;
+
+        // Логические координаты для правильного масштабирования на любых экранах
+        let LOGICAL_WIDTH = 1000;
+        let LOGICAL_HEIGHT = 600;
+        let GAME_SCALE = 1;
+
+        function spawnParticles(x, y, color, count, type = 'normal') {
+            if (!appSettings.particles) return;
+            let isGoal = type === 'goal' || type === 'star';
+            let spawned = 0;
+            for (let i = 0; i < MAX_PARTICLES; i++) {
+                if (!particlesPool[i].active) {
+                    let p = particlesPool[i];
+                    p.active = true;
+                    p.x = x; p.y = y;
+                    p.vx = (Math.random() - 0.5) * (isGoal ? 25 : 10);
+                    p.vy = (Math.random() - 0.5) * (isGoal ? 15 : 10) - (isGoal ? 6 : 3);
+                    p.life = 1.0;
+                    p.color = color;
+                    p.size = Math.random() * (isGoal ? 12 : 6) + 4;
+                    p.rot = Math.random() * TWO_PI;
+                    p.rotV = (Math.random() - 0.5) * 0.2;
+
+                    spawned++;
+                    if (spawned >= count) break;
+                }
+            }
+        }
+
+        function spawnConfetti(count) {
+            if (!appSettings.particles) return;
+            let winColors = ['#000', '#333', '#666'];
+            let spawned = 0;
+            for (let i = 0; i < MAX_CONFETTI; i++) {
+                if (!confettiPool[i].active) {
+                    let c = confettiPool[i];
+                    c.active = true;
+                    c.x = LOGICAL_WIDTH / 2 + (Math.random() - 0.5) * 200;
+                    c.y = LOGICAL_HEIGHT + 50;
+                    c.vx = (Math.random() - 0.5) * 25;
+                    c.vy = -(Math.random() * 20 + 10);
+                    c.size = Math.random() * 12 + 6;
+                    c.color = winColors[Math.floor(Math.random() * winColors.length)];
+                    c.rot = Math.random() * TWO_PI;
+                    c.rotV = (Math.random() - 0.5) * 0.4;
+
+                    spawned++;
+                    if (spawned >= count) break;
+                }
+            }
+        }
+
+        function spawnFloatingText(x, y, text, life, vy, scale, rot, type) {
+            for (let i = 0; i < MAX_TEXTS; i++) {
+                if (!floatTextsPool[i].active) {
+                    let ft = floatTextsPool[i];
+                    ft.active = true;
+                    ft.x = x; ft.y = y; ft.text = text; ft.life = life; ft.vy = vy; ft.scale = scale; ft.rot = rot; ft.type = type;
+                    break;
+                }
+            }
+        }
+
+        function clearPools() {
+            for (let i = 0; i < MAX_PARTICLES; i++) particlesPool[i].active = false;
+            for (let i = 0; i < MAX_CONFETTI; i++) confettiPool[i].active = false;
+            for (let i = 0; i < MAX_TEXTS; i++) floatTextsPool[i].active = false;
+            trailActiveCount = 0;
+        }
+
+        const skinsList = [
+            { id: 'classic', nameRu: 'Классик', nameEn: 'Classic', suit: '#000000', hair: '#000000', icon: '👤' },
+            { id: 'red', nameRu: 'Красный', nameEn: 'Red', suit: '#ff0000', hair: '#ff0000', icon: '👤' },
+            { id: 'blue', nameRu: 'Синий', nameEn: 'Blue', suit: '#0000ff', hair: '#0000ff', icon: '👤' },
+            { id: 'green', nameRu: 'Зеленый', nameEn: 'Green', suit: '#00cc00', hair: '#00cc00', icon: '👤' },
+            { id: 'pink', nameRu: 'Розовый', nameEn: 'Pink', suit: '#ff00ff', hair: '#ff00ff', icon: '👤' }
+        ];
+
+        let p1SkinIndex = 0; let p2SkinIndex = 1;
+
+        const i18n = {
+            'ru': {
+                title: 'VOLLEY IO', pvp: '2 ИГРОКА (PVP)', bot: '1 ИГРОК (VS БОТ)',
+                p1Label: 'ИГРОК 1', p2Label: 'ИГРОК 2', tempo: 'ТЕМП:', menu: 'В ГЛАВНОЕ МЕНЮ',
+                serve: 'ПОДАЧА', winTpl: '{name} ПОБЕДИЛ!', touches: 'КАСАНИЙ: ',
+                score: 'СЧЕТ:', again: 'ИГРАТЬ СНОВА', pause: 'ПАУЗА',
+                continueAd: '+5 ОЧКОВ · ПРОДОЛЖИТЬ',
+                goalWords: ["ГОЛ!", "ОЧКО!", "ТОЧНО!", "СУПЕР!", "УДАР!"],
+                sadWords: ["ПРОМАХ...", "МИМО!", "УПС!", "ЭХ...", "ОБИДНО!"],
+                comboWords: ["СЕРИЯ!", "КОМБО!", "КРУТО!", "ОТЛИЧНО!", "ЛОВКО!"],
+                diff1: 'ЛЕГКИЙ', diff2: 'НОРМ', diff3: 'СЛОЖНО', diff4: 'АД',
+                botDiff: 'СЛОЖНОСТЬ БОТА:'
+            },
+            'en': {
+                title: 'VOLLEY IO', pvp: '2 PLAYERS (PVP)', bot: '1 PLAYER (VS BOT)',
+                p1Label: 'PLAYER 1', p2Label: 'PLAYER 2', tempo: 'TEMPO:', menu: 'MAIN MENU',
+                serve: 'SERVE', winTpl: '{name} WINS!', touches: 'TOUCHES: ',
+                score: 'SCORE:', again: 'PLAY AGAIN', pause: 'PAUSE',
+                continueAd: '+5 POINTS · CONTINUE',
+                goalWords: ["GOAL!", "POINT!", "BULLSEYE!", "SUPER!", "NICE!"],
+                sadWords: ["MISS...", "OOPS!", "NO WAY!", "SIGH...", "SAD!"],
+                comboWords: ["STREAK!", "COMBO!", "COOL!", "PERFECT!", "NICE!"],
+                diff1: 'EASY', diff2: 'NORM', diff3: 'HARD', diff4: 'HELL',
+                botDiff: 'BOT DIFFICULTY:'
+            }
+        };
+
+        let currentLang = 'ru';
+        let comboPhrases = i18n.ru.comboWords; let sadPhrases = i18n.ru.sadWords; let goalPhrases = i18n.ru.goalWords;
+
+        function showGoalBanner() {
+            let banner = document.getElementById('goalBannerUI');
+            let text = document.getElementById('goalBannerText');
+            text.innerText = goalPhrases[Math.floor(Math.random() * goalPhrases.length)];
+
+            banner.classList.remove('show');
+            void banner.offsetWidth;
+            banner.classList.add('show');
+
+            setTimeout(() => { banner.classList.remove('show'); }, 2000);
+        }
+
+        function drawSkinPreviewCanvas(canvasId, skinData, isPlayer1) {
+            const c = document.getElementById(canvasId);
+            if (!c) return;
+            const ctxP = c.getContext('2d');
+
+            let dpr = window.devicePixelRatio || 1;
+
+            // Фиксируем физическое разрешение для четкости
+            if (c.width === 90) {
+                c.style.width = '90px';
+                c.style.height = '90px';
+                c.width = 90 * dpr;
+                c.height = 90 * dpr;
+            }
+
+            ctxP.clearRect(0, 0, c.width, c.height);
+
+            ctxP.save();
+            ctxP.scale(dpr, dpr);
+            ctxP.translate(45, 55);
+            ctxP.scale(1.5, 1.5);
+
+            ctxP.strokeStyle = skinData.suit;
+            ctxP.lineWidth = 4;
+            ctxP.lineCap = 'round'; ctxP.lineJoin = 'round';
+
+            ctxP.beginPath(); ctxP.arc(0, -20, 10, 0, TWO_PI); ctxP.stroke();
+            ctxP.beginPath(); ctxP.moveTo(0, -10); ctxP.lineTo(0, 15); ctxP.stroke();
+            ctxP.beginPath(); ctxP.moveTo(0, -5); ctxP.lineTo(-15, 5); ctxP.moveTo(0, -5); ctxP.lineTo(15, 5); ctxP.stroke();
+            ctxP.beginPath(); ctxP.moveTo(0, 15); ctxP.lineTo(-10, 30); ctxP.moveTo(0, 15); ctxP.lineTo(10, 30); ctxP.stroke();
+
+            ctxP.restore();
+        }
+
+        function updateSkinDisplays() {
+            const isRu = currentLang === 'ru';
+            const s1 = skinsList[p1SkinIndex]; const s2 = skinsList[p2SkinIndex];
+
+            document.getElementById('p1SkinDisplay').innerText = isRu ? s1.nameRu : s1.nameEn;
+            document.getElementById('p2SkinDisplay').innerText = isRu ? s2.nameRu : s2.nameEn;
+
+            drawSkinPreviewCanvas('p1PreviewCanvas', s1, true);
+            drawSkinPreviewCanvas('p2PreviewCanvas', s2, false);
+
+            document.getElementById('badgeP1').innerText = `${s1.icon} ${isRu ? s1.nameRu : s1.nameEn}`;
+            document.getElementById('badgeP2').innerText = `${isRu ? s2.nameRu : s2.nameEn} ${s2.icon}`;
+
+            updateTheme();
+        }
+
+        function changeSkin(playerNum, direction) {
+            if (playerNum === 1) p1SkinIndex = (p1SkinIndex + direction + skinsList.length) % skinsList.length;
+            else p2SkinIndex = (p2SkinIndex + direction + skinsList.length) % skinsList.length;
+            updateSkinDisplays(); saveProgress();
+        }
+
+        function applyLanguage() {
+            const dict = i18n[currentLang] || i18n['en'];
+            document.title = dict.title + ' · Локальная игра';
+            document.getElementById('uiTitle').innerText = dict.title;
+            document.getElementById('txtP1Title').innerText = dict.p1Label;
+            document.getElementById('txtP2Title').innerText = dict.p2Label;
+            document.getElementById('btnPvp').innerText = dict.pvp;
+            document.getElementById('btnBot').innerText = dict.bot;
+            document.getElementById('txtTempo').innerText = dict.tempo;
+            document.getElementById('btnMenuExit').innerText = dict.menu;
+            document.getElementById('txtScore').innerText = dict.score;
+            document.getElementById('btnAgain').innerText = dict.again;
+            document.getElementById('btnContinueAd').innerText = dict.continueAd;
+
+            document.getElementById('optPvp').innerText = dict.pvp;
+            document.getElementById('optBot').innerText = dict.bot;
+            document.getElementById('selText').innerText = isBotEnabled ? dict.bot : dict.pvp;
+
+            document.getElementById('diffLabelMenu').innerText = dict.botDiff;
+            document.getElementById('diffLabelSettings').innerText = dict.botDiff;
+
+            comboPhrases = dict.comboWords; sadPhrases = dict.sadWords; goalPhrases = dict.goalWords;
+            document.documentElement.lang = currentLang;
+
+            updateSkinDisplays(); updateBotDifficultyUI();
+        }
+
+        const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
+
+        function enforceMobileMode() {
+            if (isTouchDevice) {
+                const btnPvp = document.getElementById('btnPvp');
+                if (btnPvp) btnPvp.style.display = 'none';
+                const gameModeSelect = document.getElementById('gameModeSelect');
+                if (gameModeSelect) gameModeSelect.style.display = 'none';
+                isBotEnabled = true;
+            }
+        }
+
+        let isPaused = false;
+
+        function checkTouchUI() {
+            if (isTouchDevice && isGameStarted) {
+                document.getElementById('touchControls').classList.add('visible');
+            } else {
+                document.getElementById('touchControls').classList.remove('visible');
+            }
+        }
+
+        function bindTouchBtn(id, keyField) {
+            const el = document.getElementById(id); if (!el) return;
+            el.addEventListener('pointerdown', e => {
+                e.preventDefault(); if (isPaused || !isGameStarted || isGameOver) return;
+                el.setPointerCapture(e.pointerId); keys[keyField] = true;
+            });
+            for (const event of ['pointerup','pointercancel','lostpointercapture']) el.addEventListener(event, e => { e.preventDefault(); keys[keyField] = false; });
+        }
+        bindTouchBtn('tLeft','a'); bindTouchBtn('tRight','d'); bindTouchBtn('tJump','w'); bindTouchBtn('tDown','s');
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+        const uiScore1 = document.getElementById('score1'); const uiScore2 = document.getElementById('score2');
+        const uiVictory = document.getElementById('victoryScreen'); const uiWinnerText = document.getElementById('winnerText');
+        const uiFinalScore = document.getElementById('finalScore');
+
+        let _cachedScore1 = -1; let _cachedScore2 = -1;
+        function updateScoreDOM() {
+            if (score1 !== _cachedScore1) { uiScore1.innerText = score1; _cachedScore1 = score1; }
+            if (score2 !== _cachedScore2) { uiScore2.innerText = score2; _cachedScore2 = score2; }
+        }
+
+        document.addEventListener('contextmenu', e => e.preventDefault()); document.addEventListener('dragstart', e => e.preventDefault());
+
+        document.getElementById('menuBtn').addEventListener('click', () => toggleQuickMenu());
+
+        let isGameStarted = false; let globalTempo = 1.0; let isBotEnabled = false; let botDifficulty = 2;
+        let matchesPlayed = 0; let rallyTouches = 0; let botSimTimer = 0; let cachedBotTargetX = 0;
+
+
+        function updateBotDifficultyUI() {
+            let dict = i18n[currentLang] || i18n['en'];
+            let labels = [dict.diff1, dict.diff2, dict.diff3, dict.diff4];
+            let emojis = ['😴', '🙂', '😠', '💀'];
+            document.querySelectorAll('.diff-selector').forEach(sel => {
+                sel.querySelectorAll('.diff-opt').forEach(opt => {
+                    let d = parseInt(opt.getAttribute('data-diff'));
+                    opt.classList.toggle('active', d === botDifficulty);
+                    opt.querySelector('.diff-text').textContent = labels[d - 1];
+                    opt.querySelector('.diff-emoji').textContent = emojis[d - 1];
+                });
+            });
+        }
+
+        document.getElementById('tempoSlider').addEventListener('input', e => { appSettings.tempo = Number(e.target.value); globalTempo = appSettings.tempo / 100; updateSettingsSummary(); saveProgress(); });
+
+        const selectWrapper = document.getElementById('gameModeSelect'); const selectBox = document.getElementById('selText'); const optionsContainer = selectWrapper.querySelector('.custom-options');
+        selectBox.addEventListener('click', () => { optionsContainer.classList.toggle('open'); });
+        selectWrapper.querySelectorAll('.custom-option').forEach(option => {
+            option.addEventListener('click', () => {
+                let dict = i18n[currentLang] || i18n['en'];
+                isBotEnabled = option.getAttribute('data-value') === 'bot';
+                if(isTouchDevice) isBotEnabled = true;
+
+                selectBox.innerText = isBotEnabled ? dict.bot : dict.pvp;
+                if (isBotEnabled) { keys.left = keys.right = keys.up = keys.down = false; }
+                optionsContainer.classList.remove('open'); clearInput(); configurePlayers(); resetPlayerPositions(); if (!isGameOver) resetRound(roundServer); checkTouchUI(); saveProgress();
+            });
+        });
+        document.addEventListener('click', (e) => { if (!selectWrapper.contains(e.target)) optionsContainer.classList.remove('open'); });
+
+        const ballCanvas = document.createElement('canvas'); const bCtx = ballCanvas.getContext('2d');
+        // Повышено качество рендеринга мяча для поддержки высокого DPI
+        let BALL_RENDER_SIZE = 150;
+
+        function preRenderBall() {
+            let dpr = window.devicePixelRatio || 1;
+            BALL_RENDER_SIZE = 100 * Math.ceil(dpr);
+            ballCanvas.width = BALL_RENDER_SIZE; ballCanvas.height = BALL_RENDER_SIZE;
+            bCtx.clearRect(0, 0, BALL_RENDER_SIZE, BALL_RENDER_SIZE);
+
+            bCtx.save();
+            bCtx.scale(BALL_RENDER_SIZE / 100, BALL_RENDER_SIZE / 100);
+            let r = 42; let cx = 50; let cy = 50;
+            bCtx.translate(cx, cy);
+
+            bCtx.lineWidth = 6; bCtx.strokeStyle = '#000'; bCtx.fillStyle = '#fff';
+            bCtx.beginPath(); bCtx.arc(0, 0, r, 0, TWO_PI); bCtx.fill(); bCtx.stroke();
+            bCtx.beginPath(); bCtx.moveTo(-r, 0); bCtx.quadraticCurveTo(0, -r / 2, r, 0); bCtx.stroke();
+            bCtx.beginPath(); bCtx.moveTo(-r * 0.7, -r * 0.7); bCtx.quadraticCurveTo(0, r / 2, r * 0.7, -r * 0.7); bCtx.stroke();
+            bCtx.beginPath(); bCtx.moveTo(-r * 0.7, r * 0.7); bCtx.quadraticCurveTo(0, r / 2, r * 0.7, r * 0.7); bCtx.stroke();
+            bCtx.restore();
+        }
+        preRenderBall();
+
+        let GROUND_Y; let HORIZON_Y;
+        let GRAVITY = 0.45, AIR_RESISTANCE = 0.99, ACCEL = 1.8; const FRICTION = 0.85, MAX_SPEED = 12; let WIN_SCORE = appSettings.winScore;
+
+        let player1 = { x: 0, y: 0, vx: 0, vy: 0, radius: 45, jumpPower: -16, baseJump: -16, scaleX: 1, scaleY: 1, sVelX: 0, sVelY: 0, hitTimer: 0, color: '#000' };
+        let player2 = { x: 0, y: 0, vx: 0, vy: 0, radius: 45, jumpPower: -16, baseJump: -16, scaleX: 1, scaleY: 1, sVelX: 0, sVelY: 0, hitTimer: 0, color: '#000' };
+        const playersArr = [player1, player2];
+        let ball = { x: 0, y: 0, vx: 0, vy: 0, radius: 40, scaleX: 1, scaleY: 1, sVelX: 0, sVelY: 0 };
+        let net = { x: 0, y: 0, width: 8, height: 0, bend: 0, bendVel: 0 };
+
+        let score1 = 0; let score2 = 0; let possession = 0; let consecutiveTouches = 0; let touchCooldown = 0;
+        let isServing = true; let isGameOver = false; let time = 0; let comboCount = 0; let screenShake = 0;
+
+        let keys = { a: false, d: false, w: false, s: false, left: false, right: false, up: false, down: false };
+
+        function updateTheme() {
+            let s1 = skinsList[p1SkinIndex]; let s2 = skinsList[p2SkinIndex];
+            player1.color = s1.suit; player2.color = s2.suit;
+        }
+
+        function resize() {
+            const dpr = Math.min(3, window.devicePixelRatio || 1);
+            canvas.style.width = window.innerWidth + 'px'; canvas.style.height = window.innerHeight + 'px';
+            canvas.width = Math.max(1, window.innerWidth) * dpr; canvas.height = Math.max(1, window.innerHeight) * dpr;
+            LOGICAL_WIDTH = appSettings.courtWidth; LOGICAL_HEIGHT = 750;
+            GAME_SCALE = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT);
+            VIEW_OFFSET_X = (canvas.width - LOGICAL_WIDTH * GAME_SCALE) / 2;
+            VIEW_OFFSET_Y = (canvas.height - LOGICAL_HEIGHT * GAME_SCALE) / 2;
+            GROUND_Y = LOGICAL_HEIGHT * .78; HORIZON_Y = LOGICAL_HEIGHT * .65;
+            net.x = LOGICAL_WIDTH / 2; net.height = appSettings.netHeight; net.width = appSettings.netWidth; net.y = GROUND_Y - net.height;
+            bgCanvas.width = 0; updateTheme(); preRenderBall();
+        }
+        window.addEventListener('resize', resize);
+
+        function triggerJelly(obj, sx, sy) { obj.scaleX = sx; obj.scaleY = sy; obj.sVelX = (1 - sx) * 0.2; obj.sVelY = (1 - sy) * 0.2; }
+        function updateJelly(obj) { obj.sVelX += (1 - obj.scaleX) * 0.15; obj.sVelY += (1 - obj.scaleY) * 0.15; obj.sVelX *= 0.8; obj.sVelY *= 0.8; obj.scaleX += obj.sVelX; obj.scaleY += obj.sVelY; }
+
+        function resetRound(server) {
+            roundServer = server; configurePlayers();
+            isServing = true; ball.vx = ball.vy = 0; possession = consecutiveTouches = touchCooldown = net.bend = net.bendVel = comboCount = 0;
+            trailActiveCount = 0; rallyTouches = 0; botSimTimer = 0;
+            ball.x = server === 1 ? LOGICAL_WIDTH * .25 : LOGICAL_WIDTH * .75;
+            ball.y = GROUND_Y - serveHeightFor(server);
+        }
+
+        function checkWin(nextServer) {
+            updateScoreDOM();
+            if (hasMatchWinner()) {
+                isGameOver = true; matchesPlayed++;
+                let dict = i18n[currentLang] || i18n['en'];
+
+                let winnerName = score1 > score2 ?
+                    (currentLang === 'ru' ? skinsList[p1SkinIndex].nameRu : skinsList[p1SkinIndex].nameEn) :
+                    (currentLang === 'ru' ? skinsList[p2SkinIndex].nameRu : skinsList[p2SkinIndex].nameEn);
+
+                uiWinnerText.innerText = dict.winTpl.replace('{name}', winnerName);
+                uiFinalScore.innerText = `${score1} - ${score2}`;
+
+                document.getElementById('btnContinueAd').style.display = 'block';
+
+                spawnConfetti(150);
+                cancelVictoryTimer(); victoryTimer = setTimeout(() => { if (isGameStarted && isGameOver) uiVictory.classList.add('show'); victoryTimer = null; }, 900);
+
+            } else { resetRound(nextServer); }
+            saveProgress();
+        }
+
+        function update() {
+            time += 0.05;
+
+            for (let i = 0; i < MAX_TEXTS; i++) {
+                if (floatTextsPool[i].active) {
+                    let ft = floatTextsPool[i];
+                    if (ft.type === 'combo') {
+                        ft.y += ft.vy; ft.vy *= 0.88; ft.life -= 0.012;
+                        if (ft.life > 0.3) { ft.scale += (1.2 - ft.scale) * 0.15; } else { ft.scale *= 0.85; ft.vy -= 1.5; ft.rot += 0.15; }
+                    } else if (ft.type === 'sad') {
+                        ft.y += ft.vy; ft.vy *= 0.95; ft.life -= 0.01; ft.scale += (0.5 - ft.scale) * 0.05;
+                    } else if (ft.type === 'touch') {
+                        ft.y += ft.vy; ft.vy *= 0.92; ft.life -= 0.02; ft.scale += (0.4 - ft.scale) * 0.1;
+                    }
+                    if (ft.life <= 0) ft.active = false;
+                }
+            }
+
+            if (isGameOver) {
+                keys.a = keys.d = keys.w = keys.s = keys.left = keys.right = keys.up = keys.down = false;
+                if (Math.random() < 0.4) spawnConfetti(1);
+            }
+
+            if (touchCooldown > 0) touchCooldown--; if (screenShake > 0) screenShake *= 0.85;
+            if (player1.hitTimer > 0) player1.hitTimer--; if (player2.hitTimer > 0) player2.hitTimer--;
+
+            if (blinkTimer1 > 0) blinkTimer1--; else if (Math.random() < 0.015) blinkTimer1 = 6;
+            if (blinkTimer2 > 0) blinkTimer2--; else if (Math.random() < 0.015) blinkTimer2 = 6;
+
+            updateJelly(ball); updateJelly(player1); updateJelly(player2);
+            net.bendVel += (0 - net.bend) * 0.1; net.bendVel *= 0.85; net.bend += net.bendVel;
+
+            if (keys.a) player1.vx -= ACCEL * appSettings.speed1 / 100; if (keys.d) player1.vx += ACCEL * appSettings.speed1 / 100; if (!keys.a && !keys.d) player1.vx *= FRICTION;
+
+            if (keys.w && player1.y === GROUND_Y) { player1.vy = player1.jumpPower; triggerJelly(player1, 0.6, 1.4); spawnParticles(player1.x, GROUND_Y, player1.color, 5); }
+            if (!keys.w && player1.vy < -5) player1.vy *= 0.8;
+            if (keys.s && !keys.w && player1.y < GROUND_Y) player1.vy += 2.5;
+
+            if (isBotEnabled && !isGameOver) {
+                let targetX = LOGICAL_WIDTH * 0.75; keys.left = keys.right = keys.up = keys.down = false;
+
+                let shouldReact = true;
+                if (botDifficulty === 1 && Math.random() < 0.02) shouldReact = false;
+
+                if (shouldReact) {
+                    let isServingMe = isServing && ball.x > LOGICAL_WIDTH / 2;
+                    let isBallIncoming = ball.vx > 0 || ball.x > net.x - 50;
+                    let diffX = player2.x - ball.x;
+
+                    if (botDifficulty === 4) {
+                        if (isServingMe) { targetX = ball.x + 50; }
+                        else if (isBallIncoming) { targetX = ball.x + (ball.vx * 10) + 60; }
+                        else { targetX = net.x + player2.radius + 15; }
+
+                        if (targetX < net.x + player2.radius + 10) targetX = net.x + player2.radius + 10;
+                        if (targetX > LOGICAL_WIDTH - player2.radius - 10) targetX = LOGICAL_WIDTH - player2.radius - 10;
+
+                        let deadZone = 5;
+                        if (player2.x < targetX - deadZone) keys.right = true;
+                        else if (player2.x > targetX + deadZone) keys.left = true;
+
+                        if (isServingMe) {
+                            if (player2.y === GROUND_Y && Math.abs(player2.x - targetX) < 15) keys.up = true; // Прыжок при подаче
+                            if (player2.y < GROUND_Y) {
+                                if (diffX < 20) { keys.right = true; keys.left = false; } else { keys.left = true; keys.right = false; }
+                            }
+                        } else if (isBallIncoming) {
+                            if (ball.vy > -15 && ball.x > net.x - 100 && Math.abs(diffX) < 350 && player2.y === GROUND_Y) keys.up = true;
+                            if (player2.y < GROUND_Y) {
+                                if (diffX < 25) { keys.right = true; keys.left = false; }
+                                else if (diffX > 90) { keys.left = true; keys.right = false; }
+                                else { keys.left = true; keys.right = false; }
+
+                                if (ball.y > player2.y - 10 && player2.vy > -2) keys.down = true;
+                            }
+                        } else {
+                            if (ball.x > net.x - 200 && ball.y < net.y + 150 && ball.vx > 0) {
+                                keys.up = true;
+                                if (player2.y < GROUND_Y) {
+                                    if (diffX < 20) { keys.right = true; keys.left = false; } else { keys.left = true; keys.right = false; }
+                                }
+                            }
+                        }
+                    } else {
+                        if (isServingMe) { targetX = ball.x + 35; }
+                        else if (ball.x > net.x - 40) {
+                            botSimTimer--;
+                            if (botSimTimer <= 0) {
+                                let simX = ball.x, simY = ball.y, simVx = ball.vx, simVy = ball.vy;
+                                let headLevel = GROUND_Y - 120; let steps = 0; let maxSteps = 80;
+                                while (simY < headLevel && simVy < 20 && steps < maxSteps) {
+                                    const simDt = appSettings.ballSpeed / 100; simVx *= Math.pow(AIR_RESISTANCE, simDt); simVy *= Math.pow(AIR_RESISTANCE, simDt); simVy += GRAVITY * simDt;
+                                    if (simVy > 20) simVy = 20; if (simVy < -20) simVy = -20;
+                                    simX += simVx * simDt; simY += simVy * simDt;
+                                    if (simX < ball.radius) { simX = ball.radius; simVx *= -1; }
+                                    if (simX > LOGICAL_WIDTH - ball.radius) { simX = LOGICAL_WIDTH - ball.radius; simVx *= -1; }
+                                    if (simX + ball.radius > net.x - net.width && simX - ball.radius < net.x + net.width && simY > net.y) {
+                                        if (simX < net.x) simX = net.x - ball.radius - net.width; else simX = net.x + ball.radius + net.width;
+                                        simVx *= -0.7;
+                                    }
+                                    steps++;
+                                }
+                                cachedBotTargetX = simX; botSimTimer = (botDifficulty === 3) ? 5 : 8;
+                            }
+                            let posOffset = (botDifficulty === 3) ? 45 : 30;
+                            targetX = cachedBotTargetX + posOffset;
+                        } else {
+                            targetX = net.x + (LOGICAL_WIDTH - net.x) * 0.4;
+                        }
+
+                        if (targetX < net.x + player2.radius + 15) targetX = net.x + player2.radius + 15;
+                        if (targetX > LOGICAL_WIDTH - player2.radius - 15) targetX = LOGICAL_WIDTH - player2.radius - 15;
+
+                        let deadZone = (botDifficulty === 3) ? 4 : (botDifficulty === 2) ? 5 : 8;
+                        if (player2.x < targetX - deadZone) keys.right = true; else if (player2.x > targetX + deadZone) keys.left = true;
+
+                        if (isServingMe) {
+                            if (player2.y === GROUND_Y && Math.abs(player2.x - targetX) < 15) keys.up = true; // Надежный прыжок на подаче для всех ботов
+                            if (player2.y < GROUND_Y) {
+                                if (diffX < 15) { keys.right = true; keys.left = false; } else { keys.left = true; keys.right = false; }
+                            }
+                        } else if (ball.x > net.x - 40) {
+                            let jumpDist = (botDifficulty === 3) ? 140 : 120; let jumpHeight = (botDifficulty === 3) ? 550 : 450;
+                            if (Math.abs(diffX) < jumpDist && ball.y > GROUND_Y - jumpHeight && ball.vy > -2 && player2.y === GROUND_Y) keys.up = true;
+
+                            if (ball.x > net.x - 50 && ball.x < net.x + 100 && ball.y < net.y - 50 && player2.y === GROUND_Y) {
+                                if (player2.x < net.x + 100) keys.up = true;
+                            }
+
+                            if (player2.y < GROUND_Y) {
+                                if (ball.y > player2.y - 150 && ball.x < player2.x + 20 && Math.abs(diffX) < 120) keys.down = true;
+
+                                if (botDifficulty === 3) {
+                                    if (diffX < 15) { keys.right = true; keys.left = false; }
+                                    else if (diffX > 70) { keys.left = true; keys.right = false; }
+                                    else if (ball.y < player2.y + 20) { keys.left = true; keys.right = false; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (isBotEnabled && !isGameOver) {
+                let accelBonus = (botDifficulty === 4) ? 3.5 : (botDifficulty === 3) ? 1.5 : (botDifficulty === 1) ? 0.85 : 1.1;
+                if (keys.left) player2.vx -= ACCEL * accelBonus * appSettings.speed2 / 100; if (keys.right) player2.vx += ACCEL * accelBonus * appSettings.speed2 / 100;
+                if (!keys.left && !keys.right) player2.vx *= FRICTION;
+            } else {
+                if (keys.left) player2.vx -= ACCEL * appSettings.speed2 / 100; if (keys.right) player2.vx += ACCEL * appSettings.speed2 / 100; if (!keys.left && !keys.right) player2.vx *= FRICTION;
+            }
+
+            if (keys.up && player2.y === GROUND_Y) { player2.vy = player2.jumpPower; triggerJelly(player2, 0.6, 1.4); spawnParticles(player2.x, GROUND_Y, player2.color, 5); }
+            if (!keys.up && player2.vy < -5) player2.vy *= 0.8;
+            if (keys.down && !keys.up && player2.y < GROUND_Y) player2.vy += 2.5;
+
+            playersArr.forEach((p, idx) => {
+                let currentMaxSpeed = MAX_SPEED * (idx === 0 ? appSettings.speed1 : appSettings.speed2) / 100;
+                if (isBotEnabled && idx === 1) {
+                    if (botDifficulty === 4) currentMaxSpeed *= 2.2;
+                    else if (botDifficulty === 3) currentMaxSpeed *= 1.4;
+                    else if (botDifficulty === 2) currentMaxSpeed *= 1.1;
+                    else if (botDifficulty === 1) currentMaxSpeed *= 0.95;
+                }
+                if (p.vx > currentMaxSpeed) p.vx = currentMaxSpeed; if (p.vx < -currentMaxSpeed) p.vx = -currentMaxSpeed;
+                let wasInAir = p.y < GROUND_Y; p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
+                if (p.y >= GROUND_Y) { if (wasInAir) triggerJelly(p, 1.4, 0.6); p.y = GROUND_Y; p.vy = 0; p.jumpPower = p.baseJump; }
+            });
+
+            if (player1.x < player1.radius) { player1.x = player1.radius; player1.vx *= -0.5; }
+            if (player1.x > net.x - player1.radius) { player1.x = net.x - player1.radius; player1.vx = 0; }
+            if (player2.x < net.x + player2.radius) { player2.x = net.x + player2.radius; player2.vx = 0; }
+            if (player2.x > LOGICAL_WIDTH - player2.radius) { player2.x = LOGICAL_WIDTH - player2.radius; player2.vx *= -0.5; }
+
+            for (let i = 0; i < MAX_PARTICLES; i++) {
+                if (particlesPool[i].active) {
+                    let p = particlesPool[i];
+                    p.x += p.vx; p.vy += GRAVITY * 0.5; p.y += p.vy; p.life -= 0.02; p.rot += p.rotV;
+                    if (p.life <= 0) p.active = false;
+                }
+            }
+            for (let i = 0; i < MAX_CONFETTI; i++) {
+                if (confettiPool[i].active) {
+                    let c = confettiPool[i];
+                    c.x += c.vx; c.vy += GRAVITY * 0.3; c.y += c.vy; c.rot += c.rotV;
+                    if (c.y > LOGICAL_HEIGHT + 20) c.active = false;
+                }
+            }
+
+            advanceBall();
+
+            if (!isGameOver) {
+                for (let i = 0; i < playersArr.length; i++) {
+                    let p = playersArr[i]; let playerId = i + 1;
+                    let heightMult = 2.8; let topY = p.y - (p.radius * heightMult * p.scaleY); let bottomY = p.y - (p.radius * 0.5);
+                    let closestY = ball.y; if (closestY > bottomY) closestY = bottomY; else if (closestY < topY) closestY = topY;
+                    let dx = ball.x - p.x; let dy = ball.y - closestY;
+
+                    let actualRadius = p.radius * p.scaleX * 1.1; let combinedRadius = ball.radius + actualRadius;
+                    let distSq = dx * dx + dy * dy;
+
+                    if (distSq < combinedRadius * combinedRadius) {
+                        if (isServing) { isServing = false; trailActiveCount = 0; }
+
+                        let distance = Math.sqrt(distSq); if (distance === 0) { dx = 0; dy = -1; distance = 1; }
+                        let nx = dx / distance; let ny = dy / distance;
+                        let speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy); let bounceSpeed = Math.min(speed * 0.8 + 10, 18) * appSettings.hitPower / 100;
+                        ball.vx = nx * bounceSpeed + (p.vx * 0.5);
+                        if (closestY < p.y - p.radius) { ball.vy = ny * bounceSpeed - 9 * appSettings.hitPower / 100; } else { ball.vy = ny * bounceSpeed - 4 * appSettings.hitPower / 100; }
+                        ball.x = p.x + nx * (combinedRadius + .1); ball.y = closestY + ny * (combinedRadius + .1);
+
+                        p.hitTimer = 15; triggerJelly(ball, 1.37, 0.63); triggerJelly(p, 1.2, 0.8);
+                        spawnParticles(ball.x, ball.y + 10, p.color, 12);
+
+                        if (touchCooldown === 0) {
+                            rallyTouches++; comboCount++;
+                            if (comboCount > 0 && comboCount % 3 === 0) {
+                                let text = `x${comboCount} ${comboPhrases[Math.floor(Math.random() * comboPhrases.length)]}`;
+                                spawnFloatingText(ball.x, ball.y - 80, text, 1.2, -8, 0.1, (Math.random() - 0.5) * 0.2, 'combo');
+                            }
+                            if (possession !== playerId) { possession = playerId; consecutiveTouches = 1; } else { consecutiveTouches++; }
+
+                            let hasUnlimitedTouches = appSettings.maxTouches === 0 || (appSettings.hellUnlimited && isBotEnabled && playerId === 2 && botDifficulty === 4);
+                            let displayTouches = hasUnlimitedTouches ? `${consecutiveTouches}/∞` : `${consecutiveTouches}/${appSettings.maxTouches}`;
+
+                            spawnFloatingText(p.x, p.y - 120, displayTouches, 0.8, -2, 0.1, 0, 'touch');
+
+                            if (!hasUnlimitedTouches && consecutiveTouches > appSettings.maxTouches) {
+                                screenShake = 15;
+                                if (playerId === 1) { score2++; checkWin(2); } else { score1++; checkWin(1); }
+                                return;
+                            }
+                            touchCooldown = 15;
+                        }
+                    }
+                }
+
+                if (ball.y + ball.radius > GROUND_Y) {
+                    screenShake = 15; spawnParticles(ball.x, GROUND_Y, '#000', 25, 'star');
+
+                    let isLeft = ball.x < LOGICAL_WIDTH / 2;
+                    let textSad = sadPhrases[Math.floor(Math.random() * sadPhrases.length)];
+
+                    // Печальный текст теперь тоже уменьшен
+                    showGoalBanner(); spawnFloatingText(ball.x, GROUND_Y - 50, textSad, 1.5, 1, 0.5, 0, 'sad');
+
+                    if (isLeft) { score2++; checkWin(2); } else { score1++; checkWin(1); }
+                }
+            } else { if (ball.y + ball.radius > GROUND_Y) { ball.y = GROUND_Y - ball.radius; ball.vy *= -0.5; } }
+        }
+
+        let blinkTimer1 = 0, blinkTimer2 = 0;
+
+        function drawCharacter(p, isPlayer1) {
+            ctx.save(); ctx.translate(p.x, p.y);
+
+            let drawScaleX = p.scaleX; let drawScaleY = p.scaleY;
+            ctx.scale(drawScaleX, drawScaleY);
+
+            let rRatio = p.radius / 45; let r = p.radius; let h = r * 2.8; let color = p.color;
+
+            let inAir = p.y < GROUND_Y; let speedRatio = p.vx / MAX_SPEED; let walkPhase = inAir ? 0 : time * 15;
+            let legSwing = inAir ? -p.vx * 1.5 : Math.sin(walkPhase) * 20 * rRatio * Math.abs(speedRatio);
+            let legLiftLeft = inAir ? -15 * rRatio : Math.max(0, -Math.sin(walkPhase)) * 12 * rRatio * Math.abs(speedRatio);
+            let legLiftRight = inAir ? -15 * rRatio : Math.max(0, Math.sin(walkPhase)) * 12 * rRatio * Math.abs(speedRatio);
+            let leftFootX = (-15 * rRatio) + legSwing; let rightFootX = (15 * rRatio) - legSwing;
+            let leftFootY = -legLiftLeft; let rightFootY = -legLiftRight;
+
+            ctx.lineWidth = 8 * rRatio; ctx.strokeStyle = color; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+            ctx.beginPath();
+            ctx.moveTo(0, -h * 0.95 + (24 * rRatio)); ctx.lineTo(0, -h * 0.4);
+            ctx.moveTo(0, -h * 0.4); ctx.lineTo(leftFootX, leftFootY);
+            ctx.moveTo(0, -h * 0.4); ctx.lineTo(rightFootX, rightFootY);
+            ctx.stroke();
+
+            let hitPhase = p.hitTimer > 0 ? Math.sin((p.hitTimer / 15) * Math.PI) : 0;
+            let currentHandY = (p.vy * 1.5) - h * 0.6 - (hitPhase * 35 * rRatio);
+            let leftHandX = (-30 * rRatio) - (p.vx * 1.5) + (hitPhase * 25 * rRatio);
+            let rightHandX = (30 * rRatio) - (p.vx * 1.5) - (hitPhase * 25 * rRatio);
+
+            ctx.beginPath();
+            ctx.moveTo(0, -h * 0.7); ctx.lineTo(leftHandX, currentHandY);
+            ctx.moveTo(0, -h * 0.7); ctx.lineTo(rightHandX, currentHandY);
+            ctx.stroke();
+
+            let headY = -h * 0.95;
+            ctx.beginPath(); ctx.arc(0, headY, 24 * rRatio, 0, TWO_PI);
+            ctx.fillStyle = '#fff'; ctx.fill(); ctx.stroke();
+
+            let eyeLeftX = -7 * rRatio, eyeRightX = 7 * rRatio, eyeY = headY - (3 * rRatio);
+            let eyeRadius = 6 * rRatio; let pupilRadius = 3 * rRatio;
+
+            let blinkRef = isPlayer1 ? blinkTimer1 : blinkTimer2;
+            let isBlinking = blinkRef > 0 && blinkRef < 6;
+
+            let dx = ball.x - p.x; let dy = ball.y - (p.y + headY); let dist = Math.abs(dx) + Math.abs(dy) || 1;
+            let lookX = (dx / dist) * 2.5 * rRatio; let lookY = Math.max(-2 * rRatio, Math.min(2 * rRatio, (dy / dist) * 2.5 * rRatio));
+
+            if (p.hitTimer > 0) {
+                ctx.lineWidth = 3 * rRatio; let sz = 4 * rRatio;
+                ctx.beginPath();
+                ctx.moveTo(eyeLeftX - sz, eyeY - sz); ctx.lineTo(eyeLeftX + sz, eyeY + sz);
+                ctx.moveTo(eyeLeftX + sz, eyeY - sz); ctx.lineTo(eyeLeftX - sz, eyeY + sz);
+                ctx.moveTo(eyeRightX - sz, eyeY - sz); ctx.lineTo(eyeRightX + sz, eyeY + sz);
+                ctx.moveTo(eyeRightX + sz, eyeY - sz); ctx.lineTo(eyeRightX - sz, eyeY + sz);
+                ctx.stroke();
+                ctx.lineWidth = 8 * rRatio;
+            } else if (isBlinking) {
+                ctx.lineWidth = 3 * rRatio;
+                ctx.beginPath(); ctx.moveTo(eyeLeftX - (5 * rRatio), eyeY); ctx.lineTo(eyeLeftX + (5 * rRatio), eyeY);
+                ctx.moveTo(eyeRightX - (5 * rRatio), eyeY); ctx.lineTo(eyeRightX + (5 * rRatio), eyeY);
+                ctx.stroke();
+                ctx.lineWidth = 8 * rRatio;
+            } else {
+                ctx.fillStyle = '#fff';
+                ctx.beginPath(); ctx.arc(eyeLeftX, eyeY, eyeRadius, 0, TWO_PI); ctx.fill();
+                ctx.lineWidth = 2.5 * rRatio; ctx.stroke();
+
+                ctx.beginPath(); ctx.arc(eyeRightX, eyeY, eyeRadius, 0, TWO_PI); ctx.fill(); ctx.stroke();
+
+                ctx.fillStyle = color;
+                ctx.beginPath(); ctx.arc(eyeLeftX + lookX, eyeY + lookY, pupilRadius, 0, TWO_PI); ctx.fill();
+                ctx.beginPath(); ctx.arc(eyeRightX + lookX, eyeY + lookY, pupilRadius, 0, TWO_PI); ctx.fill();
+
+                ctx.fillStyle = '#fff';
+                ctx.beginPath(); ctx.arc(eyeLeftX + lookX - (1.2 * rRatio), eyeY + lookY - (1.5 * rRatio), 1.2 * rRatio, 0, TWO_PI); ctx.fill();
+                ctx.beginPath(); ctx.arc(eyeRightX + lookX - (1.2 * rRatio), eyeY + lookY - (1.5 * rRatio), 1.2 * rRatio, 0, TWO_PI); ctx.fill();
+
+                ctx.lineWidth = 8 * rRatio;
+            }
+
+            ctx.lineWidth = 2.5 * rRatio; let mouthY = headY + (9 * rRatio);
+            ctx.beginPath();
+            if (p.hitTimer > 0) { ctx.arc(0, mouthY, 4 * rRatio, 0, TWO_PI); }
+            else if (p.vy < -5) { ctx.arc(0, mouthY + (2 * rRatio), 3 * rRatio, 0, Math.PI); }
+            else { ctx.arc(0, mouthY - (2 * rRatio), 6 * rRatio, 0.15 * Math.PI, 0.85 * Math.PI); }
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        let bgCanvas = document.createElement('canvas'); let bgCtx = bgCanvas.getContext('2d', { alpha: false });
+
+        function drawBackground() {
+            if (bgCanvas.width !== canvas.width || bgCanvas.height !== canvas.height) {
+                bgCanvas.width = canvas.width;
+                bgCanvas.height = canvas.height;
+
+                bgCtx.fillStyle = '#ffffff';
+                bgCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+                bgCtx.save();
+                bgCtx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); bgCtx.scale(GAME_SCALE, GAME_SCALE); // Постоянные пропорции площадки
+
+                bgCtx.strokeStyle = '#add8e6'; bgCtx.lineWidth = 2;
+                bgCtx.beginPath();
+                for (let y = 50; y < LOGICAL_HEIGHT; y += 50) { bgCtx.moveTo(0, y); bgCtx.lineTo(LOGICAL_WIDTH, y); }
+                bgCtx.stroke();
+
+                bgCtx.strokeStyle = '#ffb6c1'; bgCtx.lineWidth = 3;
+                bgCtx.beginPath(); bgCtx.moveTo(50, 0); bgCtx.lineTo(50, LOGICAL_HEIGHT); bgCtx.stroke();
+
+                bgCtx.strokeStyle = '#000'; bgCtx.lineWidth = 4;
+                bgCtx.beginPath(); bgCtx.moveTo(0, GROUND_Y); bgCtx.lineTo(LOGICAL_WIDTH, GROUND_Y); bgCtx.stroke();
+
+                bgCtx.restore();
+            }
+            ctx.drawImage(bgCanvas, 0, 0);
+        }
+
+        function draw() {
+            ctx.save();
+            if (appSettings.shake && screenShake > 0.5) ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+
+            drawBackground(); // Фон отрисовывается в физических пикселях с учетом скейлинга внутри
+
+            ctx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); ctx.scale(GAME_SCALE, GAME_SCALE);
+
+            ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(net.x, GROUND_Y); ctx.quadraticCurveTo(net.x + net.bend, net.y + net.height / 2, net.x, net.y);
+            ctx.lineWidth = net.width * 1.5; ctx.strokeStyle = '#000'; ctx.stroke();
+            ctx.lineWidth = Math.max(2, net.width / 2); ctx.strokeStyle = '#fff'; ctx.stroke();
+
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); ctx.arc(net.x, net.y, net.width, 0, TWO_PI); ctx.fill();
+
+            drawCharacter(player1, true); drawCharacter(player2, false);
+
+            if (appSettings.trail && trailActiveCount > 0 && !isServing && !isGameOver) {
+                ctx.beginPath();
+                let startIdx = (trailHead - trailActiveCount + TRAIL_LEN) % TRAIL_LEN;
+                ctx.moveTo(trailX[startIdx], trailY[startIdx]);
+                for (let i = 1; i < trailActiveCount; i++) {
+                    let idx = (startIdx + i) % TRAIL_LEN;
+                    ctx.lineTo(trailX[idx], trailY[idx]);
+                }
+                ctx.lineTo(ball.x, ball.y);
+                ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.setLineDash([10, 15]); ctx.stroke(); ctx.setLineDash([]);
+            }
+
+            // Рендер мяча: размер 100x100 в логических пикселях, но он стал в разы четче внутри
+            ctx.save(); ctx.translate(ball.x, ball.y); ctx.save();
+            if (isServing) { ctx.rotate(time * 0.5); } else if (ball.vx !== 0 || ball.vy !== 0) { ctx.rotate(Math.atan2(ball.vy, ball.vx)); }
+            ctx.scale(ball.scaleX, ball.scaleY);
+            const ballDrawSize = ball.radius * 2.5; ctx.drawImage(ballCanvas, -ballDrawSize / 2, -ballDrawSize / 2, ballDrawSize, ballDrawSize);
+            ctx.restore();
+            ctx.restore();
+
+            if (isServing && !isGameOver) {
+                let dict = i18n[currentLang] || i18n['en']; let bobY = Math.sin(time * 4) * 8;
+                ctx.save(); ctx.translate(ball.x, ball.y - 120 + bobY);
+                ctx.fillStyle = "#fff"; ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+                ctx.fillRect(-60, -25, 120, 50); ctx.strokeRect(-60, -25, 120, 50);
+                ctx.fillStyle = "#000"; ctx.fillRect(-54, 25, 120, 6); ctx.fillRect(60, -19, 6, 50);
+                ctx.fillStyle = "#000"; ctx.font = "900 22px 'Courier New', monospace";
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText(dict.serve, 0, 0); ctx.restore();
+            }
+
+            for (let i = 0; i < MAX_PARTICLES; i++) {
+                if (particlesPool[i].active) {
+                    let p = particlesPool[i];
+                    ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color;
+                    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+                    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size); ctx.restore();
+                }
+            }
+            ctx.globalAlpha = 1.0;
+
+            if (ball.y + ball.radius < 0) { ctx.beginPath(); ctx.arc(ball.x, 20, 10, 0, TWO_PI); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.stroke(); }
+
+            for (let i = 0; i < MAX_CONFETTI; i++) {
+                if (confettiPool[i].active) {
+                    let c = confettiPool[i];
+                    ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rot);
+                    ctx.fillStyle = c.color; ctx.fillRect(-c.size / 2, -c.size / 2, c.size, c.size * 0.6); ctx.restore();
+                }
+            }
+
+            ctx.font = "900 24px 'Courier New', monospace";
+            ctx.textAlign = "center";
+            for (let i = 0; i < MAX_TEXTS; i++) {
+                if (floatTextsPool[i].active) {
+                    let ft = floatTextsPool[i];
+                    ctx.save(); ctx.globalAlpha = Math.max(0, Math.min(1, ft.life));
+                    ctx.translate(ft.x, ft.y); ctx.scale(ft.scale, ft.scale);
+                    if (ft.rot) ctx.rotate(ft.rot);
+                    ctx.fillStyle = "#000"; ctx.fillText(ft.text, 0, 0); ctx.restore();
+                }
+            }
+            ctx.restore();
+        }
+
+        let lastTime = 0; let accumulator = 0; const FIXED_DT = 1000 / 60;
+
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            let dt = timestamp - lastTime;
+            lastTime = timestamp;
+            if (dt > 100) dt = 100;
+
+            if(onlineMode){if(onlineHooks.frame)onlineHooks.frame(timestamp);if(!isPaused)advanceOnlineEffects(dt);}
+            if (!isPaused) {
+                if (isGameStarted && !onlineMode) {
+                    accumulator += dt * globalTempo;
+                    while (accumulator >= FIXED_DT) { update(); accumulator -= FIXED_DT; }
+                } else { time += 0.01; }
+                draw();
+            } else {
+                draw();
+                ctx.fillStyle = "rgba(255, 255, 255, 0.8)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#000";
+                let pauseFontSize = Math.max(30, 64 * GAME_SCALE); // Масштабируем текст паузы
+                ctx.font = `900 ${pauseFontSize}px 'Courier New', monospace`;
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                let dict = i18n[currentLang] || i18n['en'];
+                ctx.fillText(dict.pause, canvas.width / 2, canvas.height / 2);
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Локальная версия: сохранение, настройка физики и управление паузой.
+function clearInput() {
+  pressedCodes.clear();
+  for (const key of Object.keys(keys)) keys[key] = false;
+}
+function syncKeyboardInput() {
+  keys.a = pressedCodes.has('KeyA') || (isBotEnabled && pressedCodes.has('ArrowLeft'));
+  keys.d = pressedCodes.has('KeyD') || (isBotEnabled && pressedCodes.has('ArrowRight'));
+  keys.w = pressedCodes.has('KeyW') || pressedCodes.has('Space') || (isBotEnabled && pressedCodes.has('ArrowUp'));
+  keys.s = pressedCodes.has('KeyS') || (isBotEnabled && pressedCodes.has('ArrowDown'));
+  if (!isBotEnabled) {
+    keys.left = pressedCodes.has('ArrowLeft'); keys.right = pressedCodes.has('ArrowRight');
+    keys.up = pressedCodes.has('ArrowUp'); keys.down = pressedCodes.has('ArrowDown');
+  }
+}
+function refreshPause() {
+  if(onlineMode){clearInput();if(onlineHooks.clearInput)onlineHooks.clearInput();return;}
+  isPaused = isGameStarted && (manualPaused || backgroundPaused || settingsOpen || quickMenuOpen);
+  clearInput();
+  accumulator = 0; lastTime = performance.now();
+  document.getElementById('pauseButton').textContent = manualPaused ? 'ПРОДОЛЖИТЬ · P' : 'ПАУЗА · P';
+  document.getElementById('touchControls').style.visibility = isPaused ? 'hidden' : 'visible';
+}
+function setGamePause(paused) { manualPaused = Boolean(paused); refreshPause(); }
+function toggleManualPause() { if (isGameStarted && !isGameOver) setGamePause(!manualPaused); }
+function toggleQuickMenu(force) {
+  if(onlineMode){if(onlineHooks.menu)onlineHooks.menu();return;}
+  quickMenuOpen = typeof force === 'boolean' ? force : !quickMenuOpen;
+  document.getElementById('settingsPanel').classList.toggle('open', quickMenuOpen);
+  document.getElementById('menuBtn').setAttribute('aria-expanded', String(quickMenuOpen));
+  if (!quickMenuOpen) optionsContainer.classList.remove('open');
+  refreshPause();
+}
+function cancelVictoryTimer() { if (victoryTimer !== null) clearTimeout(victoryTimer); victoryTimer = null; }
+function configurePlayers() {
+  GRAVITY = .45 * appSettings.gravity / 100;
+  ACCEL = 1.8 * appSettings.acceleration / 100;
+  AIR_RESISTANCE = 1 - appSettings.airDrag / 100;
+  globalTempo = appSettings.tempo / 100;
+  player1.radius = 45; player1.baseJump = -16 * appSettings.jump1 / 100;
+  const botRadius = botDifficulty === 4 ? 70 : botDifficulty === 3 ? 52 : 45;
+  const botJump = botDifficulty === 4 ? -25 : botDifficulty === 3 ? -18.5 : -16.5;
+  player2.radius = isBotEnabled ? botRadius : 45;
+  player2.baseJump = (isBotEnabled ? botJump : -16) * appSettings.jump2 / 100;
+  for (const p of playersArr) p.jumpPower = p.baseJump;
+  ball.radius = 40 * appSettings.ballSize / 100;
+  net.width = appSettings.netWidth; net.height = appSettings.netHeight; net.y = GROUND_Y - net.height;
+}
+function serveHeightFor(server) {
+  const p = server === 1 ? player1 : player2;
+  const reach = p.radius * 2.8 + ball.radius + p.baseJump * p.baseJump / (2 * GRAVITY) * .65;
+  return Math.min(appSettings.serveHeight, reach, GROUND_Y - ball.radius - 35);
+}
+function resetPlayerPositions() {
+  for (const [idx, p] of playersArr.entries()) {
+    p.x = LOGICAL_WIDTH * (idx === 0 ? .25 : .75); p.y = GROUND_Y; p.vx = p.vy = 0;
+    p.scaleX = p.scaleY = 1; p.sVelX = p.sVelY = 0; p.hitTimer = 0;
+  }
+  ball.scaleX = ball.scaleY = 1; ball.sVelX = ball.sVelY = 0;
+}
+function hasMatchWinner() {
+  return Math.max(score1, score2) >= WIN_SCORE && (!appSettings.winByTwo || Math.abs(score1 - score2) >= 2);
+}
+function saveProgress() {
+  if(onlineMode)return;
+  const data = {
+    version: 1, settings: appSettings, p1SkinIndex, p2SkinIndex, botDifficulty, matchesPlayed,
+    session: isGameStarted && !isGameOver ? { score1, score2, isBotEnabled, targetScore: WIN_SCORE, server: roundServer } : null
+  };
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); storageAvailable = true; }
+  catch (error) { storageAvailable = false; }
+  updateStorageNote();
+}
+function updateStorageNote() {
+  document.getElementById('storageNote').hidden = storageAvailable;
+}
+function validSession(session) {
+  return session && typeof session === 'object' &&
+    Number.isInteger(session.score1) && session.score1 >= 0 && session.score1 <= 1000000 &&
+    Number.isInteger(session.score2) && session.score2 >= 0 && session.score2 <= 1000000 &&
+    Number.isInteger(session.targetScore) && session.targetScore >= 1 && session.targetScore <= 1000005 &&
+    typeof session.isBotEnabled === 'boolean' && (session.server === 1 || session.server === 2) &&
+    (Math.max(session.score1, session.score2) < session.targetScore || (appSettings.winByTwo && Math.abs(session.score1-session.score2) < 2));
+}
+function restoreLocalPreferences() {
+  if (Number.isInteger(startupSave.p1SkinIndex) && startupSave.p1SkinIndex >= 0 && startupSave.p1SkinIndex < skinsList.length) p1SkinIndex = startupSave.p1SkinIndex;
+  if (Number.isInteger(startupSave.p2SkinIndex) && startupSave.p2SkinIndex >= 0 && startupSave.p2SkinIndex < skinsList.length) p2SkinIndex = startupSave.p2SkinIndex;
+  if (Number.isInteger(startupSave.botDifficulty) && startupSave.botDifficulty >= 1 && startupSave.botDifficulty <= 4) botDifficulty = startupSave.botDifficulty;
+  if (Number.isInteger(startupSave.matchesPlayed) && startupSave.matchesPlayed >= 0) matchesPlayed = startupSave.matchesPlayed;
+  const resume = document.getElementById('resumeMatchButton');
+  resume.hidden = !validSession(startupSave.session);
+  if (!resume.hidden) resume.textContent = 'ПРОДОЛЖИТЬ МАТЧ · ' + startupSave.session.score1 + ' : ' + startupSave.session.score2;
+  updateStorageNote();
+}
+function resumeSavedMatch() {
+  const session = startupSave.session;
+  if (!validSession(session)) return;
+  startGame(session.isBotEnabled ? 'bot' : 'pvp');
+  score1 = session.score1; score2 = session.score2; WIN_SCORE = session.targetScore;
+  resetRound(session.server); updateScoreDOM(); updateSettingsSummary(); saveProgress();
+}
+function setBotDifficulty(level) {
+  botDifficulty = Math.max(1, Math.min(4, Math.round(Number(level) || 2)));
+  updateBotDifficultyUI(); configurePlayers(); botSimTimer = 0;
+  if (isGameStarted && !isGameOver) { clearPools(); resetPlayerPositions(); resetRound(roundServer); }
+  saveProgress();
+}
+function startGame(mode) {
+  if(onlineMode){if(onlineHooks.restart)onlineHooks.restart();return;}
+  cancelVictoryTimer(); clearInput();
+  isBotEnabled = mode === 'bot';
+  if (isTouchDevice) isBotEnabled = true;
+  WIN_SCORE = appSettings.winScore; score1 = score2 = 0; isGameOver = false;
+  manualPaused = false; quickMenuOpen = false;
+  document.getElementById('settingsPanel').classList.remove('open');
+  document.getElementById('menuBtn').setAttribute('aria-expanded','false');
+  uiVictory.classList.remove('show');
+  document.getElementById('mainMenu').style.display = 'none';
+  document.getElementById('hiddenUI').classList.add('show-ui');
+  document.getElementById('resumeMatchButton').hidden = true;
+  isGameStarted = true; clearPools(); configurePlayers(); resetPlayerPositions(); resetRound(1);
+  applyLanguage(); updateScoreDOM(); checkTouchUI(); updateSettingsSummary(); refreshPause(); saveProgress();
+}
+function restartGame() { startGame(isBotEnabled ? 'bot' : 'pvp'); }
+function exitToMenu() {
+  if(onlineMode){if(onlineHooks.menu)onlineHooks.menu();return;}
+  cancelVictoryTimer(); clearInput();
+  quickMenuOpen = false; manualPaused = false; isPaused = false; isGameStarted = false;
+  document.getElementById('settingsPanel').classList.remove('open');
+  document.getElementById('menuBtn').setAttribute('aria-expanded','false');
+  document.getElementById('hiddenUI').classList.remove('show-ui');
+  uiVictory.classList.remove('show');
+  document.getElementById('touchControls').classList.remove('visible');
+  document.getElementById('goalBannerUI').classList.remove('show');
+  document.getElementById('resumeMatchButton').hidden = true;
+  const menu = document.getElementById('mainMenu'); menu.style.display = 'flex'; menu.style.opacity = '1';
+  clearPools(); configurePlayers(); resetPlayerPositions(); resetRound(1); updateSkinDisplays(); saveProgress();
+}
+function continueMatch() {
+  if(onlineMode){if(onlineHooks.extend)onlineHooks.extend();return;}
+  cancelVictoryTimer(); WIN_SCORE = Math.max(WIN_SCORE, score1, score2) + 5;
+  uiVictory.classList.remove('show'); isGameOver = false; clearPools(); resetPlayerPositions(); resetRound(1);
+  manualPaused = false; refreshPause(); updateSettingsSummary(); saveProgress();
+}
+// Подшаги предотвращают пролёт быстрого мяча через узкую стойку.
+function advanceBall() {
+  if (isServing && !isGameOver) return;
+  if (!isGameOver) {
+    trailX[trailHead] = ball.x; trailY[trailHead] = ball.y;
+    trailHead = (trailHead + 1) % TRAIL_LEN; trailActiveCount = Math.min(TRAIL_LEN, trailActiveCount + 1);
+  }
+  const ballDt = appSettings.ballSpeed / 100;
+  const stepCount = Math.min(40, Math.max(1, Math.ceil(Math.hypot(ball.vx, ball.vy) * ballDt / Math.max(4, Math.min(ball.radius / 2, net.width)))));
+  const dt = ballDt / stepCount;
+  for (let step = 0; step < stepCount; step++) {
+    ball.vx *= Math.pow(AIR_RESISTANCE, dt); ball.vy *= Math.pow(AIR_RESISTANCE, dt); ball.vy += GRAVITY * dt;
+    const limit = 20 * Math.max(1, appSettings.hitPower / 100);
+    ball.vy = Math.max(-limit, Math.min(limit, ball.vy));
+    const prevX = ball.x, prevY = ball.y;
+    ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+    if (ball.x < ball.radius) { ball.x = ball.radius; ball.vx = Math.abs(ball.vx); triggerJelly(ball,.63,1.37); spawnParticles(0,ball.y,'#000',5); }
+    if (ball.x > LOGICAL_WIDTH-ball.radius) { ball.x = LOGICAL_WIDTH-ball.radius; ball.vx = -Math.abs(ball.vx); triggerJelly(ball,.63,1.37); spawnParticles(LOGICAL_WIDTH,ball.y,'#000',5); }
+    const closestX = Math.max(net.x-net.width,Math.min(net.x+net.width,ball.x));
+    const closestY = Math.max(net.y,Math.min(GROUND_Y,ball.y));
+    let dx = ball.x-closestX, dy = ball.y-closestY;
+    let distance = Math.hypot(dx,dy);
+    if (distance < ball.radius) {
+      if (distance < .001) {
+        if (prevY < net.y) { dx=0; dy=-1; } else { dx=prevX<net.x?-1:1; dy=0; }
+        distance=1;
+      }
+      const nx=dx/distance, ny=dy/distance;
+      ball.x=closestX+nx*(ball.radius+.1); ball.y=closestY+ny*(ball.radius+.1);
+      const approach=ball.vx*nx+ball.vy*ny;
+      if (approach < 0) {
+        const restitution = ny < -.5 ? .8 : .7;
+        ball.vx -= (1+restitution)*approach*nx; ball.vy -= (1+restitution)*approach*ny;
+        net.bendVel = Math.max(-25,Math.min(25,-approach*nx));
+        triggerJelly(ball,ny<-.5?1.37:.72,ny<-.5?.63:1.28);
+        if (-approach>2) spawnParticles(closestX,closestY,'#000',6);
+      }
+      if (ny<-.5 && Math.abs(ball.vx)<1.5) ball.vx += ball.x>=net.x?3:-3;
+    }
+  }
+}
+function updateSettingsSummary() {
+  const s=appSettings;
+  document.getElementById('settingsSummary').textContent = 'Сетка '+s.netHeight+' ед. · Скорость '+s.speed1+' / '+s.speed2+'% · Матч до '+s.winScore+(s.winByTwo?' (+2)':'');
+  document.getElementById('matchHint').textContent = 'До '+WIN_SCORE+(s.winByTwo?' · Разница 2':'')+' · P — пауза · O — параметры · F — весь экран';
+  document.getElementById('tempoSlider').value=s.tempo; document.getElementById('tempoValue').textContent=s.tempo;
+}
+function renderSettingFields() {
+  for (const group of ['court','players','ball','rules']) {
+    const host=document.getElementById('fields-'+group);
+    host.innerHTML=PARAMS.filter(p=>p.group===group).map(p=>
+      '<div class="param"><div class="param-top"><label for="number-'+p.key+'">'+p.label+'</label><span class="param-value">'+
+      '<input type="number" id="number-'+p.key+'" data-setting="'+p.key+'" min="'+p.min+'" max="'+p.max+'" step="'+p.step+'" aria-label="'+p.label+'"><span class="unit">'+p.unit+'</span></span></div>'+
+      '<input type="range" id="range-'+p.key+'" data-setting="'+p.key+'" min="'+p.min+'" max="'+p.max+'" step="'+p.step+'" aria-label="'+p.label+'">'+
+      (p.help?'<p class="param-help">'+p.help+'</p>':'')+'</div>').join('');
+  }
+  document.querySelectorAll('[data-setting]').forEach(input=>{
+    input.addEventListener('input',()=>{
+      const key=input.dataset.setting;
+      if (input.type==='number' && (input.value==='' || !Number.isFinite(input.valueAsNumber))) return;
+      const raw=Number(input.value); if (!Number.isFinite(raw)) return;
+      if (input.type==='number') {
+        const spec=PARAMS.find(p=>p.key===key);
+        if (raw<spec.min || raw>spec.max) return;
+      }
+      settingsDraft=normalizeSettings({...settingsDraft,[key]:raw});
+      const peer=document.getElementById((input.type==='range'?'number-':'range-')+key);
+      peer.value=settingsDraft[key];
+      setSettingsMessage('Нажмите «Применить», чтобы сохранить изменения.');
+    });
+    input.addEventListener('change',()=>{
+      const key=input.dataset.setting, spec=PARAMS.find(p=>p.key===key);
+      const value=input.value===''?spec.value:Number(input.value);
+      settingsDraft=normalizeSettings({...settingsDraft,[key]:Number.isFinite(value)?value:spec.value});
+      document.getElementById('number-'+key).value=settingsDraft[key];
+      document.getElementById('range-'+key).value=settingsDraft[key];
+    });
+  });
+  for (const key of ['winByTwo','hellUnlimited','particles','trail','shake']) {
+    document.getElementById('check-'+key).addEventListener('change',e=>{ settingsDraft[key]=e.target.checked; });
+  }
+  document.getElementById('maxTouches').addEventListener('change',e=>{settingsDraft.maxTouches=Number(e.target.value);});
+}
+function syncSettingsFields() {
+  for (const p of PARAMS) {
+    document.getElementById('number-'+p.key).value=settingsDraft[p.key]; document.getElementById('range-'+p.key).value=settingsDraft[p.key];
+  }
+  for (const key of ['winByTwo','hellUnlimited','particles','trail','shake']) document.getElementById('check-'+key).checked=settingsDraft[key];
+  document.getElementById('maxTouches').value=settingsDraft.maxTouches;
+}
+function setSettingsMessage(message,error=false) {
+  const el=document.getElementById('settingsMessage'); el.textContent=message; el.dataset.error=String(error);
+}
+function openSettings() {
+  if(onlineMode&&(!onlineHooks.canConfigure||!onlineHooks.canConfigure()))return;
+  if (settingsOpen) return;
+  settingsReturnFocus=document.activeElement;
+  settingsDraft={...appSettings}; syncSettingsFields();
+  document.getElementById('physicsModal').hidden=false;
+  settingsOpen=true; toggleQuickMenu(false); refreshPause();
+  setSettingsMessage('Параметры сохраняются в этом браузере.');
+  document.getElementById('closeSettings').focus();
+}
+function closeSettings() {
+  document.getElementById('physicsModal').hidden=true; settingsOpen=false; refreshPause();
+  if (settingsReturnFocus && typeof settingsReturnFocus.focus==='function') settingsReturnFocus.focus();
+}
+function applySettings() {
+  for (const spec of PARAMS) {
+    const field=document.getElementById('number-'+spec.key);
+    const value=field.value===''?settingsDraft[spec.key]:Number(field.value);
+    settingsDraft[spec.key]=Number.isFinite(value)?value:settingsDraft[spec.key];
+  }
+  if(onlineMode){if(onlineHooks.settings)onlineHooks.settings(normalizeSettings(settingsDraft));closeSettings();return;}
+  appSettings=normalizeSettings(settingsDraft); WIN_SCORE=appSettings.winScore;
+  configurePlayers(); resize(); clearPools(); resetPlayerPositions();
+  if (isGameStarted && !isGameOver && hasMatchWinner()) checkWin(score1>score2?1:2);
+  else if (!isGameOver) resetRound(roundServer);
+  updateSettingsSummary(); saveProgress(); closeSettings();
+}
+const PRESETS = {
+  original: {},
+  training: { netHeight:240,speed1:90,speed2:80,jump1:115,jump2:100,ballSpeed:75,gravity:80,maxTouches:0,hellUnlimited:false,winScore:15 },
+  fast: { speed1:140,speed2:140,ballSpeed:140,winScore:11,winByTwo:true },
+  moon: { gravity:45,jump1:85,jump2:85,ballSpeed:85,maxTouches:0,netHeight:370 }
+};
+function setPreset(name) {
+  if (!Object.prototype.hasOwnProperty.call(PRESETS,name)) return;
+  settingsDraft=normalizeSettings({...DEFAULT_SETTINGS,...PRESETS[name]}); syncSettingsFields();
+  setSettingsMessage('Набор выбран. Нажмите «Применить».');
+}
+function exportSettings() {
+  const blob=new Blob([JSON.stringify({format:'volley-local-settings',version:1,settings:normalizeSettings(settingsDraft)},null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob); const link=document.createElement('a');
+  link.href=url; link.download='volleyball-settings.json'; document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000); setSettingsMessage('Файл настроек подготовлен.');
+}
+async function importSettings(event) {
+  const file=event.target.files && event.target.files[0]; if (!file) return;
+  try {
+    if (file.size>100000) throw new Error('Файл слишком большой. Выберите JSON настроек игры.');
+    const data=JSON.parse(await file.text());
+    if (!data || data.format!=='volley-local-settings' || data.version!==1 || !data.settings || typeof data.settings!=='object' || Array.isArray(data.settings)) throw new Error('Это не файл настроек VOLLEY IO.');
+    if (!PARAMS.some(p=>typeof data.settings[p.key]==='number' && Number.isFinite(data.settings[p.key]))) throw new Error('В файле нет параметров игры.');
+    settingsDraft=normalizeSettings(data.settings); syncSettingsFields(); setSettingsMessage('Настройки загружены. Нажмите «Применить».');
+  } catch(error) { setSettingsMessage(error instanceof SyntaxError?'Не удалось прочитать JSON. Выберите файл настроек игры.':error.message,true); }
+  finally { event.target.value=''; }
+}
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) { if (document.exitFullscreen) await document.exitFullscreen(); }
+    else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+  } catch(error) { /* Браузер может запрещать полноэкранный режим для локального файла. */ }
+}
+function handleKeyDown(e) {
+  if(onlineMode&&!settingsOpen){if(onlineHooks.keyDown)onlineHooks.keyDown(e);return;}
+  const code=e.code || ({'a':'KeyA','ф':'KeyA','d':'KeyD','в':'KeyD','w':'KeyW','ц':'KeyW','s':'KeyS','ы':'KeyS'}[e.key.toLowerCase()]) || e.key;
+  if (e.key==='Escape') {
+    e.preventDefault();
+    if (settingsOpen) closeSettings(); else if (quickMenuOpen) toggleQuickMenu(false); else toggleManualPause();
+    return;
+  }
+  if (settingsOpen) {
+    if (e.key==='Tab') {
+      const focusable=Array.from(document.getElementById('physicsModal').querySelectorAll('button,input:not([type="file"]),select')).filter(el=>!el.disabled && !el.hidden);
+      const first=focusable[0],last=focusable[focusable.length-1];
+      if (e.shiftKey && document.activeElement===first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement===last) { e.preventDefault(); first.focus(); }
+    }
+    return;
+  }
+  if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (e.repeat && ['KeyP','KeyO','KeyR','KeyF'].includes(code)) return;
+  if (code==='KeyO') { e.preventDefault(); openSettings(); return; }
+  if (code==='KeyF') { e.preventDefault(); toggleFullscreen(); return; }
+  if (!isGameStarted) return;
+  if (code==='KeyP') { e.preventDefault(); toggleManualPause(); return; }
+  if (code==='KeyR' && !quickMenuOpen) { e.preventDefault(); restartGame(); return; }
+  if (['KeyA','KeyD','KeyW','KeyS','Space','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(code)) {
+    e.preventDefault();
+    if (isPaused || isGameOver) return;
+    pressedCodes.add(code); syncKeyboardInput();
+  }
+}
+function handleKeyUp(e) { if(onlineMode){if(onlineHooks.keyUp)onlineHooks.keyUp(e);return;}pressedCodes.delete(e.code || e.key); syncKeyboardInput(); }
+window.addEventListener('keydown',handleKeyDown); window.addEventListener('keyup',handleKeyUp);
+window.addEventListener('blur',()=>{backgroundPaused=true;refreshPause();});
+window.addEventListener('focus',()=>{backgroundPaused=document.hidden;refreshPause();});
+document.addEventListener('visibilitychange',()=>{backgroundPaused=document.hidden;refreshPause();});
+window.addEventListener('pagehide',saveProgress);
+document.getElementById('importSettingsFile').addEventListener('change',importSettings);
+document.getElementById('physicsModal').addEventListener('click',e=>{if(e.target===e.currentTarget)closeSettings();});
+document.getElementById('gameCanvas').addEventListener('pointerdown',()=>{if(manualPaused) setGamePause(false);});
+// Мост связывает прежнюю графику с серверными снимками. Онлайн-физика здесь не рассчитывается.
+function advanceOnlineEffects(dt) {
+  onlineVisualAccumulator+=Math.min(100,dt);
+  while(onlineVisualAccumulator>=FIXED_DT){
+    onlineVisualAccumulator-=FIXED_DT;
+    for(const p of particlesPool)if(p.active){p.x+=p.vx;p.vy+=GRAVITY*.5;p.y+=p.vy;p.life-=.02;p.rot+=p.rotV;if(p.life<=0)p.active=false;}
+    for(const c of confettiPool)if(c.active){c.x+=c.vx;c.vy+=GRAVITY*.3;c.y+=c.vy;c.rot+=c.rotV;if(c.y>LOGICAL_HEIGHT+20)c.active=false;}
+    for(const ft of floatTextsPool)if(ft.active){ft.y+=ft.vy;ft.vy*=.92;ft.life-=.02;ft.scale+=(.5-ft.scale)*.12;if(ft.life<=0)ft.active=false;}
+    if(screenShake>0)screenShake*=.85;
+    if(blinkTimer1>0)blinkTimer1--;else if(Math.random()<.015)blinkTimer1=6;
+    if(blinkTimer2>0)blinkTimer2--;else if(Math.random()<.015)blinkTimer2=6;
+  }
+}
+window.VolleyBridge = {
+  hooks:onlineHooks,
+  isOnline:()=>onlineMode,
+  isSettingsOpen:()=>settingsOpen,
+  input:()=>({left:keys.a,right:keys.d,jump:keys.w,down:keys.s}),
+  setInput(mask){keys.a=Boolean(mask&1);keys.d=Boolean(mask&2);keys.w=Boolean(mask&4);keys.s=Boolean(mask&8);},
+  clear:clearInput,
+  openSettings,
+  closeSettings,
+  local(){
+    onlineMode=false;document.body.classList.remove('online-mode');document.getElementById('btnAgain').style.display='block';document.getElementById('btnContinueAd').style.display='block';document.getElementById('touchControls').classList.remove('visible');
+    appSettings=normalizeSettings(readLocalSave().settings);WIN_SCORE=appSettings.winScore;isGameStarted=false;isGameOver=false;isPaused=false;
+    document.getElementById('mainMenu').style.display='flex';document.getElementById('mainMenu').style.opacity='1';
+    document.getElementById('hiddenUI').classList.remove('show-ui');uiVictory.classList.remove('show');
+    configurePlayers();resize();clearPools();resetPlayerPositions();resetRound(1);updateSettingsSummary();updateSkinDisplays();
+  },
+  enter(role){
+    onlineMode=true;onlineRole=role;document.body.classList.add('online-mode');
+    isBotEnabled=false;isGameStarted=false;isGameOver=false;manualPaused=false;isPaused=false;quickMenuOpen=false;
+    document.getElementById('settingsPanel').classList.remove('open');document.getElementById('mainMenu').style.display='none';
+    document.getElementById('hiddenUI').classList.add('show-ui');uiVictory.classList.remove('show');clearPools();clearInput();
+    document.getElementById('btnAgain').style.display=role==='host'?'block':'none';
+    document.getElementById('btnContinueAd').style.display=role==='host'?'block':'none';
+    document.getElementById('btnAgain').textContent='НОВЫЙ МАТЧ';
+  },
+  room(data){
+    const next=normalizeSettings(data.settings);
+    const changed=JSON.stringify(appSettings)!==JSON.stringify(next);
+    appSettings=next;
+    p1SkinIndex=data.players[0]?.color??0;p2SkinIndex=data.players[1]?.color??1;
+    if(changed){configurePlayers();resize();clearPools();}
+    updateSkinDisplays();
+    document.getElementById('badgeP1').textContent=(onlineRole==='host'?'ВЫ · ':'')+skinsList[p1SkinIndex].nameRu;
+    document.getElementById('badgeP2').textContent=(onlineRole==='guest'?'ВЫ · ':'')+skinsList[p2SkinIndex].nameRu;
+    drawSkinPreviewCanvas('onlinePlayer1',skinsList[p1SkinIndex],true);
+    drawSkinPreviewCanvas('onlinePlayer2',skinsList[p2SkinIndex],false);
+  },
+  state(state){
+    if(!state||!Array.isArray(state.players)||state.players.length!==2)return;
+    if(onlineRound!==state.round){onlineRound=state.round;trailActiveCount=0;}
+    for(let i=0;i<2;i++)Object.assign(playersArr[i],state.players[i]);
+    Object.assign(ball,state.ball);net.bend=state.bend;time=state.time;
+    score1=state.score[0];score2=state.score[1];WIN_SCORE=state.target;isServing=state.serving;
+    isGameStarted=state.phase!=='lobby';isGameOver=state.phase==='finished';isPaused=state.phase==='paused';
+    updateScoreDOM();
+    const hint=document.getElementById('matchHint');hint.textContent='ОНЛАЙН · ВЫ '+(onlineRole==='host'?'СЛЕВА':'СПРАВА')+' · WASD / СТРЕЛКИ · ESC — КОМНАТА';
+    document.getElementById('touchControls').classList.toggle('visible',isTouchDevice&&isGameStarted&&!isGameOver&&!isPaused);
+    document.getElementById('touchControls').style.visibility='visible';
+    if(!isServing&&!isGameOver&&!isPaused){trailX[trailHead]=ball.x;trailY[trailHead]=ball.y;trailHead=(trailHead+1)%TRAIL_LEN;trailActiveCount=Math.min(TRAIL_LEN,trailActiveCount+1);}
+    if(isGameOver){
+      const winner=score1>score2?skinsList[p1SkinIndex].nameRu:skinsList[p2SkinIndex].nameRu;
+      uiWinnerText.textContent=winner+' ПОБЕДИЛ!';uiFinalScore.textContent=score1+' — '+score2;uiVictory.classList.add('show');
+    }else uiVictory.classList.remove('show');
+  },
+  effect(event){
+    if(event.kind==='hit'){
+      const p=playersArr[event.player-1];spawnParticles(event.x,event.y,p.color,12);
+      spawnFloatingText(p.x,p.y-140,event.touches+'/'+(appSettings.maxTouches||'∞'),.8,-2,.4,0,'touch');
+      if(event.combo%3===0)spawnFloatingText(event.x,event.y-70,'x'+event.combo+' КОМБО!',1,-3,.5,0,'combo');
+    }else if(event.kind==='point'){
+      screenShake=15;spawnParticles(event.x,event.y,'#000',25,'star');showGoalBanner();
+    }else if(event.kind==='win')spawnConfetti(150);
+  },
+  hideVictory(){uiVictory.classList.remove('show');},
+  fullscreen:toggleFullscreen
+};
+
+renderSettingFields(); restoreLocalPreferences(); enforceMobileMode();
+resize(); configurePlayers(); resetPlayerPositions(); resetRound(1); applyLanguage(); updateSettingsSummary(); updateScoreDOM(); refreshPause();
+requestAnimationFrame(gameLoop);
+
+    </script>
+
+<script type="module" src="./online.js"></script>
+</body></html>

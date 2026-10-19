@@ -15,6 +15,8 @@ from config import config
 from db.connections import close_database_pools, open_database_pools
 from db.schemas import create_tilda_submissions_schema
 from security import normalize_allowed_origins, extract_origin_from_url
+from routers.volleyball import router as volleyball_router
+from services.volleyball import volleyball_lifespan
 
 def ignore_windows_disconnect_noise(loop, context):
     exception = context.get("exception")
@@ -41,7 +43,8 @@ async def lifespan(app: FastAPI):
         await create_tilda_submissions_schema(database_target)
 
     try:
-        yield
+        async with volleyball_lifespan():
+            yield
     finally:
         await asyncio.to_thread(close_database_pools)
 
@@ -102,3 +105,4 @@ app.include_router(main_router)
 app.include_router(launcher_router, prefix="/launcher")
 app.include_router(launcher_feedback_router)
 app.include_router(tilda_apex_webhook_router)
+app.include_router(volleyball_router)

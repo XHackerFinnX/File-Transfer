@@ -1,0 +1,10 @@
+Source: https://github.com/XHackerFinnX/volleyball-online
+Commit: 8eb56c8513b57ff9db230ba0c1041f091ae5cd73
+
+Browser assets are vendored here so File-Transfer can deploy the game without
+another repository, Node.js, npm or a separate service. The browser configuration
+and WebSocket URL resolution use `/volleyball/ws` on the same origin.
+
+The authoritative server physics and room protocol were ported to Python in
+`services/volleyball_physics.py` and `services/volleyball.py`. JavaScript physics
+remains in the browser for player prediction. See the root `VOLLEYBALL_RU.md`.

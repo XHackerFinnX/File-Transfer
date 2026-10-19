@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from typing import List
 
 class Settings(BaseSettings):
@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     POSTGRESQL_DATABASES_JSON: str = ""
     CDEK_ACCOUNTS_JSON: str = ""
     TILDA_PROJECTS_JSON: str = ""
+
+    VOLLEYBALL_ENABLED: bool = True
+    VOLLEYBALL_MAX_ROOMS: int = Field(default=100, ge=1, le=500)
+    VOLLEYBALL_MAX_CONNECTIONS: int = Field(default=300, ge=2, le=2000)
+    VOLLEYBALL_MAX_CONNECTIONS_PER_IP: int = Field(default=6, ge=2, le=50)
     
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
