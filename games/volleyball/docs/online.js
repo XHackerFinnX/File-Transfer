@@ -1,5 +1,5 @@
 import { COLORS } from './shared/settings.js';
-import { movePlayer, DT } from './shared/physics.js';
+import { PlayerPrediction } from './shared/prediction.js';
 const bridge=window.VolleyBridge;
 const $=id=>document.getElementById(id);
 const names=['Классик','Красный','Синий','Зелёный','Розовый'];
@@ -15,6 +15,7 @@ let socket=null,connecting=null,room=null,role=null,session=null,serverURL='',bu
 let reconnectTimer=null,retry=0,toastTimer=null,actionTimer=null,networkOK=false;
 let seq=0,lastInputAt=0,lastMask=-1,lastStateSeq=-1,lastEvent=0,snapshots=[],rtt=0;
 const pressed=new Set(),pingTimes=new Map();
+const prediction=new PlayerPrediction();
 const storageKey='volley.online.session.v1';
 function status(text,error=false){$('serverStatus').textContent=text;$('serverStatus').dataset.error=String(error);}
 function toast(text){$('onlineToast').textContent=text;$('onlineToast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('onlineToast').hidden=true,4500);}
@@ -30,17 +31,30 @@ function resolveServer(){
   url.pathname=window.VOLLEY_CONFIG?.websocketPath||'/ws';return url.href;
 }
 function send(packet){if(socket?.readyState!==WebSocket.OPEN||!networkOK)return false;socket.send(JSON.stringify(packet));return true;}
-function clearInput(){pressed.clear();bridge.clear();if(session&&lastMask!==0){send({type:'input',mask:0,seq:seq++});lastMask=0;}}
+function currentMask(){
+  if(!room||room.phase!=='playing'||!$('onlineRoom').hidden||bridge.isSettingsOpen()||!networkOK)return 0;
+  const input=bridge.input();
+  return (input.left?1:0)|(input.right?2:0)|(input.jump?4:0)|(input.down?8:0);
+}
+function transmitInput(now){
+  if(!session||!room||(room.phase!=='playing'&&lastMask===0))return;
+  const mask=currentMask();
+  if(mask===lastMask&&now-lastInputAt<1000/30)return;
+  if(send({type:'input',mask,seq})){
+    prediction.input(seq++,mask,now);lastInputAt=now;lastMask=mask;
+  }
+}
+function clearInput(){pressed.clear();bridge.clear();transmitInput(performance.now());}
 function showHome(text){
   $('onlineHome').hidden=false;$('onlineRoom').hidden=true;$('mainMenu').style.display='none';
   bridge.hideVictory();if(text)status(text,true);setBusy(false);
 }
 function showLobby(){
-  if(!room)return;clearInput();$('onlineHome').hidden=true;$('onlineRoom').hidden=false;renderRoom();
+  if(!room)return;clearInput();$('onlineHome').hidden=true;$('onlineRoom').hidden=false;renderRoom();bridge.refreshControls();
 }
-function hideLobby(){if(!room||room.phase==='lobby')return;$('onlineRoom').hidden=true;clearInput();}
+function hideLobby(){if(!room||room.phase==='lobby')return;$('onlineRoom').hidden=true;clearInput();bridge.refreshControls();}
 function resetRoom(text){
-  room=null;role=null;session=null;snapshots=[];lastStateSeq=-1;lastEvent=0;retry=0;
+  room=null;role=null;session=null;snapshots=[];lastStateSeq=-1;lastEvent=0;retry=0;prediction.reset();
   clearTimeout(reconnectTimer);reconnectTimer=null;saveSession();bridge.local();showHome(text);
 }
 function openSocket(){
@@ -57,7 +71,7 @@ function openSocket(){
       if(current!==socket)return;
       if(packet.type==='hello'){
         if(packet.protocol!==1){clearTimeout(timer);reject(Error('Версии игры и сервера различаются. Обновите страницу.'));current.close();return;}
-        ready=true;networkOK=true;clearTimeout(timer);resolve();return;
+        ready=true;networkOK=true;clearTimeout(timer);resolve();ping();return;
       }
       handlePacket(packet);
     });
@@ -93,7 +107,7 @@ async function requestRoom(type){
 }
 function handlePacket(packet){
   if(packet.type==='joined'){
-    clearTimeout(actionTimer);retry=0;clearTimeout(reconnectTimer);reconnectTimer=null;seq=0;lastMask=-1;lastStateSeq=-1;lastEvent=0;snapshots=[];
+    clearTimeout(actionTimer);retry=0;clearTimeout(reconnectTimer);reconnectTimer=null;seq=0;lastMask=-1;lastStateSeq=-1;lastEvent=0;snapshots=[];prediction.reset();
     session={code:packet.code,token:packet.token};saveSession();role=packet.role;room=packet.room;
     bridge.enter(role);bridge.room(room);pushState(packet.state,0);bridge.state(packet.state);showLobby();setBusy(false);status('Готово к игре.');return;
   }
@@ -102,9 +116,9 @@ function handlePacket(packet){
     if(room.phase==='lobby'||(room.phase==='paused'&&room.reason==='connection'))showLobby();
     else if(room.phase==='playing'&&previousPhase!=='playing')hideLobby();return;
   }
-  if(packet.type==='state'&&room){if(packet.seq<=lastStateSeq)return;lastStateSeq=packet.seq;pushState(packet.state,packet.seq);return;}
+  if(packet.type==='state'&&room){if(packet.seq<=lastStateSeq)return;lastStateSeq=packet.seq;pushState(packet.state,packet.seq,packet.inputs);return;}
   if(packet.type==='pong'){
-    const started=pingTimes.get(packet.id);if(started!==undefined){rtt=Math.round(performance.now()-started);pingTimes.delete(packet.id);$('roomPing').textContent=rtt+' мс';}return;
+    const started=pingTimes.get(packet.id);if(started!==undefined){const sample=performance.now()-started;rtt=rtt?rtt*.8+sample*.2:sample;pingTimes.delete(packet.id);$('roomPing').textContent=Math.round(rtt)+' мс';}return;
   }
   if(packet.type==='closed'){
     manualClose=true;socket?.close();resetRoom(messages[packet.code]||'Комната закрыта.');return;
@@ -115,9 +129,11 @@ function handlePacket(packet){
     const text=messages[packet.code]||'Действие не выполнено.';if(room)toast(text);else status(text,true);
   }
 }
-function pushState(state,seq){
+function pushState(state,seq,inputs){
   if(!state||!Array.isArray(state.players)||!state.ball||!Array.isArray(state.score))return;
-  snapshots.push({state,seq,received:performance.now()});if(snapshots.length>20)snapshots.shift();
+  const now=performance.now(),index=role==='host'?0:1;
+  prediction.receive(state,index,room.settings,inputs?.[index],now,rtt);
+  snapshots.push({state,seq,received:now});if(snapshots.length>20)snapshots.shift();
   for(const event of state.events||[])if(event.id>lastEvent){lastEvent=event.id;bridge.effect(event);}
 }
 function renderRoom(){
@@ -157,7 +173,7 @@ function keyDown(e){
     e.preventDefault();if(!$('onlineRoom').hidden||room.phase!=='playing')return;pressed.add(code);syncKeys();
   }
 }
-function syncKeys(){let mask=0;if(pressed.has('KeyA')||pressed.has('ArrowLeft'))mask|=1;if(pressed.has('KeyD')||pressed.has('ArrowRight'))mask|=2;if(pressed.has('KeyW')||pressed.has('ArrowUp')||pressed.has('Space'))mask|=4;if(pressed.has('KeyS')||pressed.has('ArrowDown'))mask|=8;bridge.setInput(mask);}
+function syncKeys(){let mask=0;if(pressed.has('KeyA')||pressed.has('ArrowLeft'))mask|=1;if(pressed.has('KeyD')||pressed.has('ArrowRight'))mask|=2;if(pressed.has('KeyW')||pressed.has('ArrowUp')||pressed.has('Space'))mask|=4;if(pressed.has('KeyS')||pressed.has('ArrowDown'))mask|=8;bridge.setInput(mask);transmitInput(performance.now());}
 function keyUp(e){pressed.delete(codeFromEvent(e));syncKeys();}
 function frame(now){
   if(!room||!snapshots.length)return;
@@ -170,19 +186,15 @@ function frame(now){
     for(let i=0;i<2;i++)for(const key of ['x','y','vx','vy','scaleX','scaleY'])result.players[i][key]=a.state.players[i][key]+(b.state.players[i][key]-a.state.players[i][key])*t;
     for(const key of ['x','y','scaleX','scaleY'])result.ball[key]=a.state.ball[key]+(b.state.ball[key]-a.state.ball[key])*t;
   }
-  const input=bridge.input();let mask=0;
-  if(room.phase==='playing'&&$('onlineRoom').hidden&&!bridge.isSettingsOpen()&&networkOK){mask=(input.left?1:0)|(input.right?2:0)|(input.jump?4:0)|(input.down?8:0);}
-  if(now-lastInputAt>=1000/30){lastInputAt=now;lastMask=mask;send({type:'input',mask,seq:seq++});}
-  // Предсказание своего аватара влияет только на картинку; счёт и столкновения остаются серверными.
-  if(room.phase==='playing'&&networkOK&&mask!==0){
-    const index=role==='host'?0:1,p={...latest.state.players[index],sVelX:0,sVelY:0};
-    const milliseconds=Math.min(100,Math.max(0,now-latest.received+rtt/2))*room.settings.tempo/100;
-    for(let step=0;step<Math.ceil(milliseconds/DT);step++)movePlayer(p,mask,index,room.settings);
-    result.players[index]=p;
+  const mask=currentMask();transmitInput(now);
+  const own=prediction.render(now,mask);
+  if(own&&networkOK){
+    const index=role==='host'?0:1;
+    for(const key of ['x','y','vx','vy'])result.players[index][key]=own[key];
   }
   bridge.state(result);
 }
-Object.assign(bridge.hooks,{keyDown,keyUp,frame,clearInput:()=>{pressed.clear();if(session&&lastMask!==0){send({type:'input',mask:0,seq:seq++});lastMask=0;}},menu:openRoomMenu,settings:settings=>{if(role==='host')send({type:'settings',settings});else toast(messages.NOT_HOST);},restart:()=>ownerCommand('restart'),extend:()=>ownerCommand('extend'),canConfigure:()=>role==='host'});
+Object.assign(bridge.hooks,{keyDown,keyUp,frame,inputChanged:()=>transmitInput(performance.now()),clearInput:()=>{pressed.clear();transmitInput(performance.now());},menu:openRoomMenu,settings:settings=>{if(role==='host')send({type:'settings',settings});else toast(messages.NOT_HOST);},restart:()=>ownerCommand('restart'),extend:()=>ownerCommand('extend'),canConfigure:()=>role==='host'});
 $('createRoomButton').addEventListener('click',()=>requestRoom('create'));
 $('joinRoomForm').addEventListener('submit',e=>{e.preventDefault();requestRoom('join');});
 $('joinCode').addEventListener('input',e=>{e.target.value=e.target.value.replace(/\D/g,'').slice(0,4);});
@@ -199,7 +211,8 @@ COLORS.forEach((color,index)=>{
   button.append(document.createElement('span'));button.addEventListener('click',()=>send({type:'color',color:index}));$('ownColors').append(button);
 });
 let pingId=0;
-setInterval(()=>{if(!room||!networkOK)return;const id=pingId++%2147483647;pingTimes.clear();pingTimes.set(id,performance.now());send({type:'ping',id});},3000);
+function ping(){if(!networkOK)return;const id=pingId++%2147483647;pingTimes.clear();pingTimes.set(id,performance.now());send({type:'ping',id});}
+setInterval(()=>{if(room)ping();},3000);
 window.addEventListener('pagehide',()=>{clearInput();});
 try{serverURL=resolveServer();status(serverURL?'Создай комнату или введи код друга.':'Онлайн-сервер пока не подключён. Доступен локальный режим.',!serverURL);}catch(error){status(error.message,true);}
 const codeMatch=location.hash.match(/^#room=([1-9][0-9]{3})$/);if(codeMatch)$('joinCode').value=codeMatch[1];

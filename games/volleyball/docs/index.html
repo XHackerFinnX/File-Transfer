@@ -5,7 +5,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: ws:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <link rel="stylesheet" href="./online.css">
 <script src="./config.js"></script>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VOLLEY IO</title>
 
 <style>
@@ -397,6 +397,7 @@ html, body { touch-action: manipulation; }
 }
 
 </style>
+<link rel="stylesheet" href="./mobile.css">
 </head>
 <body>
 <div id="onlineHome" class="online-screen">
@@ -528,14 +529,14 @@ html, body { touch-action: manipulation; }
 </div>
 </div>
 <!-- Мобильное управление -->
-<div id="touchControls">
+<p id="rotateHint" role="status">Поверните телефон — площадка станет больше</p>
+<div id="touchControls" role="group" aria-label="Управление игроком">
 <div class="touch-group-left">
 <button type="button" id="tLeft" class="touch-btn" aria-label="Влево">◀</button>
 <button type="button" id="tRight" class="touch-btn" aria-label="Вправо">▶</button>
 </div>
 <div class="touch-group-right">
-<button type="button" id="tDown" class="touch-btn" aria-label="Быстро вниз">▼</button>
-<button type="button" id="tJump" class="touch-btn" aria-label="Прыжок">▲</button>
+<button type="button" id="tJump" class="touch-btn" aria-label="Прыжок"><span aria-hidden="true">↑</span><span class="touch-label">ПРЫЖОК</span></button>
 </div>
 </div>
 <div id="physicsModal" class="settings-modal" hidden>
@@ -630,6 +631,9 @@ let settingsOpen = false, quickMenuOpen = false, manualPaused = false, backgroun
 let settingsReturnFocus = null, roundServer = 1, victoryTimer = null;
 let VIEW_OFFSET_X = 0, VIEW_OFFSET_Y = 0;
 const pressedCodes = new Set();
+const touchPointers = new Map();
+const touchKeys = { a:false, d:false, w:false, s:false };
+let onlineKeyboardMask = 0, onlineHudKey = "";
 
         const TWO_PI = Math.PI * 2;
         const HALF_PI = Math.PI * 0.5;
@@ -853,7 +857,7 @@ const pressedCodes = new Set();
             updateSkinDisplays(); updateBotDifficultyUI();
         }
 
-        const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
+        let isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
 
         function enforceMobileMode() {
             if (isTouchDevice) {
@@ -868,22 +872,47 @@ const pressedCodes = new Set();
         let isPaused = false;
 
         function checkTouchUI() {
-            if (isTouchDevice && isGameStarted) {
-                document.getElementById('touchControls').classList.add('visible');
-            } else {
-                document.getElementById('touchControls').classList.remove('visible');
-            }
+            const inMatch = isGameStarted && (!onlineMode || document.getElementById('onlineRoom').hidden);
+            const visible = isTouchDevice && inMatch && !isPaused && !isGameOver && !settingsOpen;
+            const controls = document.getElementById('touchControls');
+            controls.classList.toggle('visible', visible);
+            controls.style.visibility = visible ? 'visible' : 'hidden';
+            document.body.classList.toggle('match-active', inMatch && !isGameOver);
         }
 
-        function bindTouchBtn(id, keyField) {
-            const el = document.getElementById(id); if (!el) return;
-            el.addEventListener('pointerdown', e => {
-                e.preventDefault(); if (isPaused || !isGameStarted || isGameOver) return;
-                el.setPointerCapture(e.pointerId); keys[keyField] = true;
-            });
-            for (const event of ['pointerup','pointercancel','lostpointercapture']) el.addEventListener(event, e => { e.preventDefault(); keys[keyField] = false; });
+        function applyOnlineInput() {
+            for (const [field, bit] of [['a',1],['d',2],['w',4],['s',8]]) {
+                keys[field] = Boolean(onlineKeyboardMask & bit) || touchKeys[field];
+            }
         }
-        bindTouchBtn('tLeft','a'); bindTouchBtn('tRight','d'); bindTouchBtn('tJump','w'); bindTouchBtn('tDown','s');
+        function syncTouchInput() {
+            for (const field of Object.keys(touchKeys)) touchKeys[field] = false;
+            for (const pointer of touchPointers.values()) touchKeys[pointer.field] = true;
+            for (const [id,field] of [['tLeft','a'],['tRight','d'],['tJump','w']]) {
+                document.getElementById(id).dataset.pressed = String(touchKeys[field]);
+            }
+            if (onlineMode) {
+                applyOnlineInput();
+                if (onlineHooks.inputChanged) onlineHooks.inputChanged();
+            } else syncKeyboardInput();
+        }
+        function bindTouchBtn(id, field) {
+            const el = document.getElementById(id);
+            el.addEventListener('pointerdown', e => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                e.preventDefault();
+                if (isPaused || !isGameStarted || isGameOver || settingsOpen) return;
+                touchPointers.set(e.pointerId, { field, el });
+                el.setPointerCapture(e.pointerId);
+                syncTouchInput();
+            });
+            for (const event of ['pointerup','pointercancel','lostpointercapture']) el.addEventListener(event, e => {
+                e.preventDefault();
+                if (touchPointers.delete(e.pointerId)) syncTouchInput();
+            });
+            el.addEventListener('contextmenu', e => e.preventDefault());
+        }
+        bindTouchBtn('tLeft','a'); bindTouchBtn('tRight','d'); bindTouchBtn('tJump','w');
 
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
@@ -980,18 +1009,42 @@ const pressedCodes = new Set();
         }
 
         function resize() {
-            const dpr = Math.min(3, window.devicePixelRatio || 1);
-            canvas.style.width = window.innerWidth + 'px'; canvas.style.height = window.innerHeight + 'px';
-            canvas.width = Math.max(1, window.innerWidth) * dpr; canvas.height = Math.max(1, window.innerHeight) * dpr;
+            const viewport = window.visualViewport;
+            const width = Math.round(viewport && viewport.scale === 1 ? viewport.width : window.innerWidth);
+            const height = Math.round(viewport && viewport.scale === 1 ? viewport.height : window.innerHeight);
+            isTouchDevice = navigator.maxTouchPoints > 0 || window.matchMedia('(any-pointer: coarse)').matches;
+            document.body.dataset.mobile = String(isTouchDevice);
+            const orientation = width > height ? 'landscape' : 'portrait';
+            if (document.body.dataset.orientation && document.body.dataset.orientation !== orientation) {
+                clearInput(); if (onlineHooks.clearInput) onlineHooks.clearInput();
+            }
+            document.body.dataset.orientation = orientation;
+            document.documentElement.style.setProperty('--viewport-height', height+'px');
+            const dpr = Math.min(2, window.devicePixelRatio || 1);
+            canvas.style.width = width+'px'; canvas.style.height = height+'px';
+            const pixelsX = Math.max(1, Math.round(width*dpr)), pixelsY = Math.max(1, Math.round(height*dpr));
+            if (canvas.width !== pixelsX) canvas.width = pixelsX;
+            if (canvas.height !== pixelsY) canvas.height = pixelsY;
             LOGICAL_WIDTH = appSettings.courtWidth; LOGICAL_HEIGHT = 750;
             GAME_SCALE = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT);
             VIEW_OFFSET_X = (canvas.width - LOGICAL_WIDTH * GAME_SCALE) / 2;
             VIEW_OFFSET_Y = (canvas.height - LOGICAL_HEIGHT * GAME_SCALE) / 2;
             GROUND_Y = LOGICAL_HEIGHT * .78; HORIZON_Y = LOGICAL_HEIGHT * .65;
             net.x = LOGICAL_WIDTH / 2; net.height = appSettings.netHeight; net.width = appSettings.netWidth; net.y = GROUND_Y - net.height;
-            bgCanvas.width = 0; updateTheme(); preRenderBall();
+            bgCanvas.width = 0; updateTheme(); preRenderBall(); checkTouchUI();
         }
-        window.addEventListener('resize', resize);
+        let resizeFrame = null;
+        function scheduleResize() {
+            if (resizeFrame !== null) return;
+            resizeFrame = requestAnimationFrame(() => { resizeFrame = null; resize(); });
+        }
+        function orientationChanged() { clearInput(); if (onlineHooks.clearInput) onlineHooks.clearInput(); scheduleResize(); }
+        window.addEventListener('resize', scheduleResize);
+        window.addEventListener('orientationchange', orientationChanged);
+        window.visualViewport?.addEventListener('resize', scheduleResize);
+        screen.orientation?.addEventListener('change', orientationChanged);
+        window.matchMedia('(any-pointer: coarse)').addEventListener('change', scheduleResize);
+        document.addEventListener('fullscreenchange', scheduleResize);
 
         function triggerJelly(obj, sx, sy) { obj.scaleX = sx; obj.scaleY = sy; obj.sVelX = (1 - sx) * 0.2; obj.sVelY = (1 - sy) * 0.2; }
         function updateJelly(obj) { obj.sVelX += (1 - obj.scaleX) * 0.15; obj.sVelY += (1 - obj.scaleY) * 0.15; obj.sVelX *= 0.8; obj.sVelY *= 0.8; obj.scaleX += obj.sVelX; obj.scaleY += obj.sVelY; }
@@ -1509,14 +1562,21 @@ const pressedCodes = new Set();
 
         // Локальная версия: сохранение, настройка физики и управление паузой.
 function clearInput() {
-  pressedCodes.clear();
+  pressedCodes.clear(); onlineKeyboardMask = 0;
+  const pointers = [...touchPointers.entries()];
+  touchPointers.clear();
+  for (const [id, pointer] of pointers) {
+    if (pointer.el.hasPointerCapture(id)) pointer.el.releasePointerCapture(id);
+  }
+  for (const field of Object.keys(touchKeys)) touchKeys[field] = false;
+  for (const id of ['tLeft','tRight','tJump']) document.getElementById(id).dataset.pressed = 'false';
   for (const key of Object.keys(keys)) keys[key] = false;
 }
 function syncKeyboardInput() {
-  keys.a = pressedCodes.has('KeyA') || (isBotEnabled && pressedCodes.has('ArrowLeft'));
-  keys.d = pressedCodes.has('KeyD') || (isBotEnabled && pressedCodes.has('ArrowRight'));
-  keys.w = pressedCodes.has('KeyW') || pressedCodes.has('Space') || (isBotEnabled && pressedCodes.has('ArrowUp'));
-  keys.s = pressedCodes.has('KeyS') || (isBotEnabled && pressedCodes.has('ArrowDown'));
+  keys.a = touchKeys.a || pressedCodes.has('KeyA') || (isBotEnabled && pressedCodes.has('ArrowLeft'));
+  keys.d = touchKeys.d || pressedCodes.has('KeyD') || (isBotEnabled && pressedCodes.has('ArrowRight'));
+  keys.w = touchKeys.w || pressedCodes.has('KeyW') || pressedCodes.has('Space') || (isBotEnabled && pressedCodes.has('ArrowUp'));
+  keys.s = touchKeys.s || pressedCodes.has('KeyS') || (isBotEnabled && pressedCodes.has('ArrowDown'));
   if (!isBotEnabled) {
     keys.left = pressedCodes.has('ArrowLeft'); keys.right = pressedCodes.has('ArrowRight');
     keys.up = pressedCodes.has('ArrowUp'); keys.down = pressedCodes.has('ArrowDown');
@@ -1862,8 +1922,9 @@ window.VolleyBridge = {
   isOnline:()=>onlineMode,
   isSettingsOpen:()=>settingsOpen,
   input:()=>({left:keys.a,right:keys.d,jump:keys.w,down:keys.s}),
-  setInput(mask){keys.a=Boolean(mask&1);keys.d=Boolean(mask&2);keys.w=Boolean(mask&4);keys.s=Boolean(mask&8);},
+  setInput(mask){onlineKeyboardMask=mask;applyOnlineInput();},
   clear:clearInput,
+  refreshControls:checkTouchUI,
   openSettings,
   closeSettings,
   local(){
@@ -1902,9 +1963,14 @@ window.VolleyBridge = {
     score1=state.score[0];score2=state.score[1];WIN_SCORE=state.target;isServing=state.serving;
     isGameStarted=state.phase!=='lobby';isGameOver=state.phase==='finished';isPaused=state.phase==='paused';
     updateScoreDOM();
-    const hint=document.getElementById('matchHint');hint.textContent='ОНЛАЙН · ВЫ '+(onlineRole==='host'?'СЛЕВА':'СПРАВА')+' · WASD / СТРЕЛКИ · ESC — КОМНАТА';
-    document.getElementById('touchControls').classList.toggle('visible',isTouchDevice&&isGameStarted&&!isGameOver&&!isPaused);
-    document.getElementById('touchControls').style.visibility='visible';
+    const hudKey = [onlineRole,state.phase,score1,score2,isTouchDevice,settingsOpen,document.getElementById('onlineRoom').hidden].join(':');
+    if (hudKey !== onlineHudKey) {
+      onlineHudKey = hudKey;
+      document.getElementById('matchHint').textContent = isTouchDevice
+        ? 'ОНЛАЙН · ВЫ '+(onlineRole==='host'?'СЛЕВА':'СПРАВА')
+        : 'ОНЛАЙН · ВЫ '+(onlineRole==='host'?'СЛЕВА':'СПРАВА')+' · WASD / СТРЕЛКИ · ESC — КОМНАТА';
+      checkTouchUI();
+    }
     if(!isServing&&!isGameOver&&!isPaused){trailX[trailHead]=ball.x;trailY[trailHead]=ball.y;trailHead=(trailHead+1)%TRAIL_LEN;trailActiveCount=Math.min(TRAIL_LEN,trailActiveCount+1);}
     if(isGameOver){
       const winner=score1>score2?skinsList[p1SkinIndex].nameRu:skinsList[p2SkinIndex].nameRu;
@@ -1930,5 +1996,5 @@ requestAnimationFrame(gameLoop);
 
     </script>
 
-<script type="module" src="./online.js"></script>
+<script type="module" src="./online.js?v=2"></script>
 </body></html>

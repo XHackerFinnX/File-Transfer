@@ -173,7 +173,11 @@ class VolleyballServer:
 
     def broadcast_state(self, room):
         room.seq += 1
-        self.broadcast(room, dict(type="state", seq=room.seq, revision=room.revision, state=room.match.snapshot()))
+        now = time.monotonic()
+        inputs = [dict(seq=s.last_seq, mask=s.mask if s.conn and now-s.last_input <= .3 else 0)
+                  if s else dict(seq=-1, mask=0) for s in room.seats]
+        self.broadcast(room, dict(type="state", seq=room.seq, revision=room.revision,
+                                  inputs=inputs, state=room.match.snapshot()))
 
     def error(self, conn, code):
         self.send(conn, dict(type="error", code=code))

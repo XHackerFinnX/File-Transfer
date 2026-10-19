@@ -7,4 +7,7 @@ and WebSocket URL resolution use `/volleyball/ws` on the same origin.
 
 The authoritative server physics and room protocol were ported to Python in
 `services/volleyball_physics.py` and `services/volleyball.py`. JavaScript physics
-remains in the browser for player prediction. See the root `VOLLEYBALL_RU.md`.
+remains in the browser for player prediction, with acknowledged input replay and
+smooth reconciliation in `docs/shared/prediction.js`. Mobile controls and
+viewport/orientation handling are adapted for the FastAPI version.
+See the root `VOLLEYBALL_RU.md`.

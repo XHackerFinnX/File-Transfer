@@ -171,6 +171,9 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         await host.send(type="input", seq=1, mask=6)
         await guest.send(type="input", seq=1, mask=1)
         state = await host.wait("state", lambda p: p["state"]["tick"] > first["state"]["tick"]+3)
+        self.assertEqual(len(state["inputs"]), 2)
+        self.assertGreaterEqual(state["inputs"][0]["seq"], 1)
+        self.assertGreaterEqual(state["inputs"][1]["seq"], 1)
         other = await guest.wait("state", lambda p: p["seq"] == state["seq"])
         self.assertEqual(state["state"], other["state"])
         self.assertGreater(state["state"]["players"][0]["x"], 275)
@@ -250,7 +253,8 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_assets_and_private_file_denial(self):
         for path in ["/volleyball/online/", "/volleyball/online", "/volleyball/online/config.js", "/volleyball/online/online.js",
-                     "/volleyball/online/online.css", "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js"]:
+                     "/volleyball/online/online.css", "/volleyball/online/mobile.css", "/volleyball/online/shared/prediction.js",
+                     "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js"]:
             with urlopen(self.base+path) as response:
                 self.assertEqual(response.status, 200)
                 body = response.read().decode()

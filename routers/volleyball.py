@@ -8,7 +8,7 @@ from security import normalize_allowed_origins, websocket_origin_allowed
 from services.volleyball import GAME_ROOT, volleyball_server
 
 router = APIRouter(prefix="/volleyball", tags=["volleyball"])
-PUBLIC_FILES = {"index.html", "config.js", "online.js", "online.css", "shared/settings.js", "shared/physics.js"}
+PUBLIC_FILES = {"index.html", "config.js", "online.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js"}
 
 
 @router.get("/healthz")
@@ -31,7 +31,7 @@ async def volleyball_asset(filename: str = "index.html"):
         raise HTTPException(status_code=404)
     return FileResponse(
         GAME_ROOT / "docs" / filename,
-        headers={"Cache-Control": "no-store" if filename in {"index.html", "config.js"} else "public, max-age=300"},
+        headers={"Cache-Control": "no-store" if filename in {"index.html", "config.js"} else "no-cache"},
     )
 
 
