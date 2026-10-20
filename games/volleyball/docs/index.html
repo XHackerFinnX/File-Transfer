@@ -633,6 +633,7 @@ let settingsDraft = { ...appSettings };
 let settingsOpen = false, quickMenuOpen = false, manualPaused = false, backgroundPaused = false;
 let settingsReturnFocus = null, roundServer = 1, victoryTimer = null;
 let VIEW_OFFSET_X = 0, VIEW_OFFSET_Y = 0;
+let onlineArenaView = null, hostArenaView = {width:1148,height:750};
 const pressedCodes = new Set();
 const touchPointers = new Map();
 const touchKeys = { a:false, d:false, w:false, s:false };
@@ -1029,26 +1030,43 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
             if (canvas.width !== pixelsX) canvas.width = pixelsX;
             if (canvas.height !== pixelsY) canvas.height = pixelsY;
             LOGICAL_WIDTH = appSettings.courtWidth; LOGICAL_HEIGHT = 750;
+            const css = getComputedStyle(document.documentElement);
+            const inset = side => parseFloat(css.getPropertyValue('--safe-'+side)) || 0;
+            const left = Math.max(8,inset('left'))*dpr, right = Math.max(8,inset('right'))*dpr;
+            const top = inset('top')*dpr, bottom = inset('bottom')*dpr;
+            const availableWidth = Math.max(1,canvas.width-left-right);
+            const availableHeight = Math.max(1,canvas.height-top-bottom);
+            const margin = 24;
+            // The host chooses the projection. Other screens fit this same view
+            // with one scale factor, rather than stretching its axes again.
+            hostArenaView = isTouchDevice && orientation === 'landscape'
+                ? {width:Math.max(64,Math.min(16384,Math.round(availableWidth/dpr))),
+                   height:Math.max(64,Math.min(16384,Math.round(availableHeight/dpr)))}
+                : {width:LOGICAL_WIDTH+margin*2,height:LOGICAL_HEIGHT};
             GAME_SCALE = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT);
             VIEW_OFFSET_X = (canvas.width - LOGICAL_WIDTH * GAME_SCALE) / 2;
             VIEW_OFFSET_Y = (canvas.height - LOGICAL_HEIGHT * GAME_SCALE) / 2;
             GAME_SCALE_X = GAME_SCALE_Y = GAME_SCALE;
-            if (isTouchDevice && orientation === 'landscape') {
-                const css = getComputedStyle(document.documentElement);
-                const inset = side => parseFloat(css.getPropertyValue('--safe-'+side)) || 0;
-                const left = Math.max(8,inset('left'))*dpr, right = Math.max(8,inset('right'))*dpr;
-                const top = inset('top')*dpr, bottom = inset('bottom')*dpr;
+            if (onlineMode && onlineArenaView) {
+                const view = onlineArenaView;
+                const fit = Math.min(availableWidth/view.width,availableHeight/view.height);
+                GAME_SCALE_X = fit*view.width/(LOGICAL_WIDTH+margin*2);
+                GAME_SCALE_Y = fit*view.height/LOGICAL_HEIGHT;
+                VIEW_OFFSET_X = left+(availableWidth-view.width*fit)/2+margin*GAME_SCALE_X;
+                VIEW_OFFSET_Y = top+(availableHeight-view.height*fit)/2;
+                GAME_SCALE = Math.min(GAME_SCALE_X,GAME_SCALE_Y);
+            } else if (isTouchDevice && orientation === 'landscape') {
                 // Fit the entire arena, with extra room for ball sprites at the
                 // walls. Stretch width independently; never crop the court.
-                const margin = 24;
-                GAME_SCALE_X = (canvas.width-left-right)/(LOGICAL_WIDTH+margin*2);
-                GAME_SCALE_Y = (canvas.height-top-bottom)/LOGICAL_HEIGHT;
+                GAME_SCALE_X = availableWidth/(LOGICAL_WIDTH+margin*2);
+                GAME_SCALE_Y = availableHeight/LOGICAL_HEIGHT;
                 VIEW_OFFSET_X = left+margin*GAME_SCALE_X; VIEW_OFFSET_Y = top;
                 GAME_SCALE = Math.min(GAME_SCALE_X,GAME_SCALE_Y);
             }
             GROUND_Y = LOGICAL_HEIGHT * .78; HORIZON_Y = LOGICAL_HEIGHT * .65;
             net.x = LOGICAL_WIDTH / 2; net.height = appSettings.netHeight; net.width = appSettings.netWidth; net.y = GROUND_Y - net.height;
             bgCanvas.width = 0; updateTheme(); preRenderBall(); checkTouchUI();
+            if (onlineMode && onlineHooks.viewportChanged) onlineHooks.viewportChanged();
         }
         let resizeFrame = null;
         function scheduleResize() {
@@ -1938,6 +1956,7 @@ window.VolleyBridge = {
   hooks:onlineHooks,
   isOnline:()=>onlineMode,
   isSettingsOpen:()=>settingsOpen,
+  arenaView:()=>({...hostArenaView}),
   input:()=>({left:keys.a,right:keys.d,jump:keys.w,down:keys.s}),
   setInput(mask){onlineKeyboardMask=mask;applyOnlineInput();},
   clear:clearInput,
@@ -1945,6 +1964,7 @@ window.VolleyBridge = {
   openSettings,
   closeSettings,
   local(){
+    onlineArenaView=null;
     onlineMode=false;document.body.classList.remove('online-mode');document.getElementById('btnAgain').style.display='block';document.getElementById('btnContinueAd').style.display='block';document.getElementById('touchControls').classList.remove('visible');
     appSettings=normalizeSettings(readLocalSave().settings);WIN_SCORE=appSettings.winScore;isGameStarted=false;isGameOver=false;isPaused=false;
     document.getElementById('mainMenu').style.display='flex';document.getElementById('mainMenu').style.opacity='1';
@@ -1963,9 +1983,12 @@ window.VolleyBridge = {
   room(data){
     const next=normalizeSettings(data.settings);
     const changed=JSON.stringify(appSettings)!==JSON.stringify(next);
+    const viewChanged=JSON.stringify(onlineArenaView)!==JSON.stringify(data.arenaView);
+    onlineArenaView=data.arenaView;
     appSettings=next;
     p1SkinIndex=data.players[0]?.color??0;p2SkinIndex=data.players[1]?.color??1;
-    if(changed){configurePlayers();resize();clearPools();}
+    if(changed){configurePlayers();clearPools();}
+    if(changed||viewChanged)resize();
     updateSkinDisplays();
     document.getElementById('badgeP1').textContent=(onlineRole==='host'?'ВЫ · ':'')+skinsList[p1SkinIndex].nameRu;
     document.getElementById('badgeP2').textContent=(onlineRole==='guest'?'ВЫ · ':'')+skinsList[p2SkinIndex].nameRu;

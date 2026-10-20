@@ -215,6 +215,55 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         await host.send(type="kick")
         self.assertEqual((await guest.wait("closed"))["code"], "KICKED")
 
+    async def test_host_arena_view_is_shared_and_resize_does_not_reset_physics(self):
+        host = await self.peer()
+        initial = {"width": 1008, "height": 420}
+        await host.send(type="create", color=0, arenaView=initial)
+        owner = await host.wait("joined")
+        self.assertEqual(owner["room"]["arenaView"], initial)
+        guest = await self.peer()
+        await guest.send(type="join", code=owner["code"], color=1)
+        visitor = await guest.wait("joined")
+        self.assertEqual(visitor["room"]["arenaView"], initial)
+        await guest.send(type="arena_view", view={"width": 568, "height": 320})
+        self.assertEqual((await guest.wait("error"))["code"], "NOT_HOST")
+        await host.send(type="start")
+        before = await host.wait("state", lambda p: p["state"]["phase"] == "playing")
+        await host.send(type="input", seq=1, mask=2)
+        changed = {"width": 836, "height": 393}
+        await host.send(type="arena_view", view=changed)
+        layout = await guest.wait("room", lambda p: p["room"]["arenaView"] == changed)
+        self.assertEqual(layout["room"]["settings"], visitor["room"]["settings"])
+        after = await guest.wait("state", lambda p: p["state"]["tick"] > before["state"]["tick"]+5)
+        self.assertEqual(after["state"]["phase"], "playing")
+        self.assertEqual(after["state"]["round"], before["state"]["round"])
+        self.assertEqual(after["state"]["score"], before["state"]["score"])
+        self.assertGreater(after["state"]["players"][0]["x"], before["state"]["players"][0]["x"])
+        self.assertEqual(after["inputs"][0], {"seq": 1, "mask": 2})
+        await host.ws.close()
+        await guest.wait("room", lambda p: not p["room"]["players"][0]["connected"])
+        restored = await self.peer()
+        await restored.send(type="resume", code=owner["code"], token=owner["token"])
+        self.assertEqual((await restored.wait("joined"))["room"]["arenaView"], changed)
+
+    async def test_arena_view_rejects_invalid_dimensions_and_unknown_fields(self):
+        # Rejected creates must not allocate a room or bypass strict validation.
+        invalid = [{"width": 0, "height": 750}, {"width": True, "height": 750},
+                   {"width": 1000.5, "height": 750}, {"width": 1000, "height": 16385},
+                   {"width": 1000}, {"width": 1000, "height": 750, "courtWidth": 900}, []]
+        for index, view in enumerate(invalid):
+            if index % 2 == 0:
+                if index:
+                    await peer.ws.close()
+                peer = await self.peer()
+            await peer.send(type="create", color=0, arenaView=view)
+            self.assertEqual((await peer.wait("error"))["code"], "INVALID_MESSAGE")
+        await peer.send(type="create", color=0)
+        created = await peer.wait("joined")
+        self.assertEqual(created["room"]["arenaView"], {"width": DEFAULT_SETTINGS["courtWidth"]+48, "height": 750})
+        await peer.send(type="arena_view", view={"width": 1000, "height": 0})
+        self.assertEqual((await peer.wait("error"))["code"], "INVALID_MESSAGE")
+
     async def test_wrong_origin_and_protocol_rejected_before_upgrade(self):
         for origin, protocols in [("https://evil.example", ["volley-v1"]), (None, ["volley-v1"]), (ORIGIN, None)]:
             with self.subTest(origin=origin, protocols=protocols), self.assertRaises(InvalidStatus) as err:

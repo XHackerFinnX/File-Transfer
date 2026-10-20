@@ -13,4 +13,6 @@ viewport/orientation handling are adapted for the FastAPI version.
 Snapshot interpolation uses server timestamps, adaptive jitter buffering and
 bounded extrapolation in `docs/shared/snapshots.js`. The Python server coalesces
 outdated snapshots and measures both players' round-trip times for the match HUD.
+Room metadata also carries the host's arena view; guests fit that view with
+letterboxing instead of choosing an independent horizontal stretch.
 See the root `VOLLEYBALL_RU.md`.

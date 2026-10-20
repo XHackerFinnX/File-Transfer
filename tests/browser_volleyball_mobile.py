@@ -88,6 +88,8 @@ async def check(origin, chromium, artifacts=None):
                 await host.set_viewport_size(dict(width=width, height=height))
                 orientation = 'landscape' if width > height else 'portrait'
                 await host.wait_for_function('o => document.body.dataset.orientation === o', arg=orientation)
+                await host.wait_for_function('''() => onlineArenaView.width === hostArenaView.width
+                    && onlineArenaView.height === hostArenaView.height''')
                 for selector in ('#tLeft', '#tRight', '#tJump', '#menuBtn', '.scoreboard'):
                     await visible_inside(host, selector)
                 assert await host.evaluate('canvas.width <= innerWidth*2+1 && canvas.height <= innerHeight*2+1')

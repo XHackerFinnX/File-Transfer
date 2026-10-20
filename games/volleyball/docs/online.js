@@ -14,6 +14,7 @@ const messages={
 };
 let socket=null,connecting=null,room=null,role=null,session=null,serverURL='',busy=false,manualClose=false;
 let reconnectTimer=null,retry=0,toastTimer=null,actionTimer=null,networkOK=false;
+let arenaViewTimer=null;
 let seq=0,lastInputAt=0,lastMask=-1,lastStateSeq=-1,lastEvent=0,rtt=0;
 const pressed=new Set(),pingTimes=new Map();
 const prediction=new PlayerPrediction(), snapshots=new SnapshotBuffer();
@@ -57,6 +58,7 @@ function showLobby(){
 }
 function hideLobby(){if(!room||room.phase==='lobby')return;$('onlineRoom').hidden=true;clearInput();bridge.refreshControls();}
 function resetRoom(text){
+  clearTimeout(arenaViewTimer);
   room=null;role=null;session=null;snapshots.reset();pendingPrediction=null;lastStateSeq=-1;lastEvent=0;retry=0;prediction.reset();
   clearTimeout(reconnectTimer);reconnectTimer=null;saveSession();bridge.local();showHome(text);
 }
@@ -105,7 +107,7 @@ async function requestRoom(type){
   const code=$('joinCode').value.trim();if(type==='join'&&!/^[1-9][0-9]{3}$/.test(code)){toast('Введите четырёхзначный код комнаты.');$('joinCode').focus();return;}
   setBusy(true);status('Подключаемся к серверу… Первый запуск сервера может занять около минуты.');
   try{
-    await openSocket();send(type==='create'?{type:'create',color:0}:{type:'join',code,color:1});
+    await openSocket();send(type==='create'?{type:'create',color:0,arenaView:bridge.arenaView()}:{type:'join',code,color:1});
     clearTimeout(actionTimer);actionTimer=setTimeout(()=>{setBusy(false);status('Ответ задерживается. Попробуйте снова.',true);},10000);
   }catch(error){setBusy(false);status(error.message,true);}
 }
@@ -114,7 +116,7 @@ function handlePacket(packet){
     clearTimeout(actionTimer);retry=0;clearTimeout(reconnectTimer);reconnectTimer=null;seq=0;lastMask=-1;lastStateSeq=-1;lastEvent=0;snapshots.reset();pendingPrediction=null;prediction.reset();
     session={code:packet.code,token:packet.token};saveSession();role=packet.role;room=packet.room;
     frameCount=receivedSnapshots=0;metricsAt=performance.now();
-    bridge.enter(role);bridge.room(room);pushState(packet.state,0,null,packet.serverTime);bridge.state(packet.state);showLobby();setBusy(false);status('Готово к игре.');return;
+    bridge.enter(role);bridge.room(room);scheduleArenaView();pushState(packet.state,0,null,packet.serverTime);bridge.state(packet.state);showLobby();setBusy(false);status('Готово к игре.');return;
   }
   if(packet.type==='room'&&room){
     const previousPhase=room.phase;room=packet.room;bridge.room(room);renderRoom();
@@ -142,6 +144,17 @@ function handlePacket(packet){
     if(packet.code==='SESSION_EXPIRED'){manualClose=true;socket?.close();resetRoom(messages[packet.code]);return;}
     const text=messages[packet.code]||'Действие не выполнено.';if(room)toast(text);else status(text,true);
   }
+}
+function scheduleArenaView(){
+  clearTimeout(arenaViewTimer);
+  if(role!=='host'||!room||!networkOK)return;
+  // Browser rotation can fire several viewport events. Publish the settled view.
+  arenaViewTimer=setTimeout(()=>{
+    if(role!=='host'||!room||!networkOK)return;
+    const view=bridge.arenaView();
+    if(view.width!==room.arenaView?.width||view.height!==room.arenaView?.height)
+      send({type:'arena_view',view});
+  },250);
 }
 function pushState(state,seq,inputs,serverTime){
   if(!state||!Array.isArray(state.players)||!state.ball||!Array.isArray(state.score))return;
@@ -219,7 +232,7 @@ function frame(now){
   }
   bridge.state(result);
 }
-Object.assign(bridge.hooks,{keyDown,keyUp,frame,inputChanged:()=>transmitInput(performance.now()),clearInput:()=>{pressed.clear();transmitInput(performance.now());},menu:openRoomMenu,settings:settings=>{if(role==='host')send({type:'settings',settings});else toast(messages.NOT_HOST);},restart:()=>ownerCommand('restart'),extend:()=>ownerCommand('extend'),canConfigure:()=>role==='host'});
+Object.assign(bridge.hooks,{keyDown,keyUp,frame,viewportChanged:scheduleArenaView,inputChanged:()=>transmitInput(performance.now()),clearInput:()=>{pressed.clear();transmitInput(performance.now());},menu:openRoomMenu,settings:settings=>{if(role==='host')send({type:'settings',settings});else toast(messages.NOT_HOST);},restart:()=>ownerCommand('restart'),extend:()=>ownerCommand('extend'),canConfigure:()=>role==='host'});
 $('createRoomButton').addEventListener('click',()=>requestRoom('create'));
 $('joinRoomForm').addEventListener('submit',e=>{e.preventDefault();requestRoom('join');});
 $('joinCode').addEventListener('input',e=>{e.target.value=e.target.value.replace(/\D/g,'').slice(0,4);});

@@ -24,6 +24,11 @@ TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 SNAPSHOT = object()
 
 
+def valid_arena_view(view):
+    return (isinstance(view, dict) and view.keys() == {"width", "height"}
+            and all(integer(view[key], 64, 16384) for key in ("width", "height")))
+
+
 class Bucket:
     def __init__(self, capacity, period, now=None):
         self.capacity, self.period = capacity, period
@@ -69,6 +74,7 @@ class Connection:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=16))
     messages: Bucket = field(default_factory=lambda: Bucket(120, 1))
     controls: Bucket = field(default_factory=lambda: Bucket(12, 10))
+    views: Bucket = field(default_factory=lambda: Bucket(4, 1))
     latest_state: str | None = None
     state_queued: bool = False
     probe_id: int | None = None
@@ -101,10 +107,12 @@ class Room:
     reason: str = "waiting"
     revision: int = 0
     seq: int = 0
+    arena_view: dict | None = None
 
     def public(self):
         return dict(code=self.code, revision=self.revision, phase=self.match.phase, reason=self.reason,
                     settings=self.match.settings,
+                    arenaView=self.arena_view or dict(width=self.match.settings["courtWidth"]+48, height=750),
                     players=[dict(role="host" if i == 0 else "guest", color=s.color, connected=s.conn is not None)
                              if s else None for i, s in enumerate(self.seats)])
 
@@ -279,9 +287,12 @@ class VolleyballServer:
             "ping": {"id"}, "pong_ack": {"id"}, "input": {"seq", "mask"}, "create": {"color"},
             "join": {"code", "color"}, "resume": {"code", "token"}, "color": {"color"},
             "leave": set(), "settings": {"settings"}, "start": set(), "restart": set(),
-            "pause": {"paused"}, "extend": set(), "kick": set(),
+            "pause": {"paused"}, "extend": set(), "kick": set(), "arena_view": {"view"},
         }
-        if kind not in fields or msg.keys() != fields[kind] | {"type"}:
+        expected = fields.get(kind)
+        if kind == "create" and "arenaView" in msg:
+            expected = expected | {"arenaView"}
+        if expected is None or msg.keys() != expected | {"type"}:
             self.protocol_error(conn)
             return
         valid = True
@@ -297,6 +308,10 @@ class VolleyballServer:
             valid = valid and isinstance(msg["token"], str) and TOKEN.fullmatch(msg["token"])
         if kind == "pause":
             valid = type(msg["paused"]) is bool
+        if kind == "arena_view":
+            valid = valid_arena_view(msg["view"])
+        if kind == "create" and "arenaView" in msg:
+            valid = valid and valid_arena_view(msg["arenaView"])
         if not valid:
             self.protocol_error(conn)
             return
@@ -316,6 +331,17 @@ class VolleyballServer:
                 seat.last_seq, seat.mask, seat.last_input = msg["seq"], msg["mask"], now
                 if seat.mask:
                     seat.room.activity = now
+            return
+        if kind == "arena_view":
+            seat = self.require_member(conn, host=True)
+            if seat and seat.room.arena_view != msg["view"]:
+                if not conn.views.take(now):
+                    self.error(conn, "RATE_LIMIT")
+                    return
+                # View changes never reset physics, inputs or the current rally.
+                seat.room.arena_view = dict(msg["view"])
+                seat.room.revision += 1
+                self.broadcast_room(seat.room)
             return
         if not conn.controls.take(now):
             self.error(conn, "RATE_LIMIT")
@@ -340,6 +366,8 @@ class VolleyballServer:
                     self.error(conn, "SERVER_FULL")
                     return
                 room = Room(code, conn.ip)
+                if "arenaView" in msg:
+                    room.arena_view = dict(msg["arenaView"])
                 self.rooms[code] = room
                 self.attach(conn, room, 0, msg["color"])
             elif kind == "join":
