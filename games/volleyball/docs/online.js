@@ -1,6 +1,7 @@
 import { COLORS } from './shared/settings.js';
 import { PlayerPrediction } from './shared/prediction.js';
 import { SnapshotBuffer } from './shared/snapshots.js';
+import { createAppearance } from './appearance.js';
 const bridge=window.VolleyBridge;
 const $=id=>document.getElementById(id);
 const names=['Классик','Красный','Синий','Зелёный','Розовый'];
@@ -107,7 +108,7 @@ async function requestRoom(type){
   const code=$('joinCode').value.trim();if(type==='join'&&!/^[1-9][0-9]{3}$/.test(code)){toast('Введите четырёхзначный код комнаты.');$('joinCode').focus();return;}
   setBusy(true);status('Подключаемся к серверу… Первый запуск сервера может занять около минуты.');
   try{
-    await openSocket();send(type==='create'?{type:'create',color:0,arenaView:bridge.arenaView()}:{type:'join',code,color:1});
+    await openSocket();send(type==='create'?{type:'create',color:appearance.preferredColor(0),arenaView:bridge.arenaView()}:{type:'join',code,color:appearance.preferredColor(1)});
     clearTimeout(actionTimer);actionTimer=setTimeout(()=>{setBusy(false);status('Ответ задерживается. Попробуйте снова.',true);},10000);
   }catch(error){setBusy(false);status(error.message,true);}
 }
@@ -189,6 +190,7 @@ function renderRoom(){
   $('kickGuestButton').hidden=!host||!room.players[1];$('returnToMatch').hidden=room.phase==='lobby';
   const own=room.players[host?0:1]?.color??0;
   $('ownColors').querySelectorAll('button').forEach((button,i)=>button.setAttribute('aria-pressed',String(i===own)));
+  appearance.syncColor(own);
   const s=room.settings;
   const values=[['Сетка',s.netHeight+' ед.'],['Скорость игроков',s.speed1+' / '+s.speed2+'%'],['Прыжки',s.jump1+' / '+s.jump2+'%'],['Мяч',s.ballSpeed+'% · размер '+s.ballSize+'%'],['Гравитация',s.gravity+'%'],['Темп',s.tempo+'%'],['Касаний',s.maxTouches||'Без лимита'],['Победа','До '+s.winScore+(s.winByTwo?' · разница 2':'')]];
   const dl=$('roomSettingsSummary');dl.replaceChildren();
@@ -248,6 +250,7 @@ COLORS.forEach((color,index)=>{
   const button=document.createElement('button');button.type='button';button.className='color-swatch';button.setAttribute('aria-label',names[index]);button.setAttribute('aria-pressed','false');button.style.setProperty('--swatch',color);
   button.append(document.createElement('span'));button.addEventListener('click',()=>send({type:'color',color:index}));$('ownColors').append(button);
 });
+const appearance=createAppearance(bridge,color=>send({type:'color',color}));
 let pingId=0;
 function ping(){
   if(!networkOK)return;

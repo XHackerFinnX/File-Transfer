@@ -21,12 +21,17 @@ GAME_ROOT = Path(__file__).resolve().parents[1] / "games" / "volleyball"
 logger = logging.getLogger(__name__)
 CODE = re.compile(r"[1-9][0-9]{3}\Z")
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+COLOR = re.compile(r"#[0-9a-fA-F]{6}\Z")
 SNAPSHOT = object()
 
 
 def valid_arena_view(view):
     return (isinstance(view, dict) and view.keys() == {"width", "height"}
             and all(integer(view[key], 64, 16384) for key in ("width", "height")))
+
+
+def valid_color(color):
+    return integer(color, 0, 4) or (isinstance(color, str) and COLOR.fullmatch(color) is not None)
 
 
 class Bucket:
@@ -89,7 +94,7 @@ class Seat:
     room: "Room"
     token_hash: bytes
     conn: Connection | None
-    color: int
+    color: int | str
     mask: int = 0
     last_input: float = field(default_factory=time.monotonic)
     last_seq: int = -1
@@ -250,6 +255,7 @@ class VolleyballServer:
 
     def attach(self, conn, room, index, color):
         token = secrets.token_urlsafe(32)
+        color = color.lower() if isinstance(color, str) else color
         seat = Seat(index, room, hashlib.sha256(token.encode()).digest(), conn, color)
         conn.seat = room.seats[index] = seat
         self.joined(conn, token)
@@ -301,7 +307,7 @@ class VolleyballServer:
         elif kind == "input":
             valid = integer(msg["seq"], 0, 2147483647) and integer(msg["mask"], 0, 15)
         elif kind in {"create", "join", "color"}:
-            valid = integer(msg["color"], 0, 4)
+            valid = valid_color(msg["color"])
         if kind in {"join", "resume"}:
             valid = valid and isinstance(msg["code"], str) and CODE.fullmatch(msg["code"])
         if kind == "resume":
@@ -398,7 +404,7 @@ class VolleyballServer:
             return
         room = seat.room
         if kind == "color":
-            seat.color = msg["color"]
+            seat.color = msg["color"].lower() if isinstance(msg["color"], str) else msg["color"]
             room.activity = now
             room.revision += 1
             self.broadcast_room(room)

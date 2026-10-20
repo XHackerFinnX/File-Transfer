@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, normalizeSettings } from './settings.js';
+import './net.js';
 export const GROUND = 585;
 export const DT = 1000 / 60;
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
@@ -76,15 +77,7 @@ export class Match {
       const oldX=b.x,oldY=b.y;b.x+=b.vx*dt;b.y+=b.vy*dt;
       if(b.x<b.radius){b.x=b.radius;b.vx=Math.abs(b.vx);jelly(b,.63,1.37);}
       if(b.x>s.courtWidth-b.radius){b.x=s.courtWidth-b.radius;b.vx=-Math.abs(b.vx);jelly(b,.63,1.37);}
-      const cx=clamp(b.x,n.x-n.width,n.x+n.width),cy=clamp(b.y,n.y,GROUND);
-      let dx=b.x-cx,dy=b.y-cy,d=Math.hypot(dx,dy);
-      if(d<b.radius){
-        if(d<.001){if(oldY<n.y){dx=0;dy=-1;}else{dx=oldX<n.x?-1:1;dy=0;}d=1;}
-        const nx=dx/d,ny=dy/d;b.x=cx+nx*(b.radius+.1);b.y=cy+ny*(b.radius+.1);
-        const approach=b.vx*nx+b.vy*ny;
-        if(approach<0){const restitution=ny<-.5?.8:.7;b.vx-=(1+restitution)*approach*nx;b.vy-=(1+restitution)*approach*ny;n.bendVel=clamp(-approach*nx,-25,25);jelly(b,ny<-.5?1.37:.72,ny<-.5?.63:1.28);}
-        if(ny<-.5&&Math.abs(b.vx)<1.5)b.vx+=b.x>=n.x?3:-3;
-      }
+      globalThis.VolleyNet.resolve(b,n,oldX,oldY);
     }
   }
   step(inputs=[0,0]){
@@ -101,9 +94,11 @@ export class Match {
       this.serving=false;let distance=Math.hypot(dx,dy);if(distance===0){dx=0;dy=-1;distance=1;}
       const nx=dx/distance,ny=dy/distance,power=this.settings.hitPower/100;
       const bounce=Math.min(Math.hypot(b.vx,b.vy)*.8+10,18)*power;
+      const oldX=b.x,oldY=b.y;
       b.vx=nx*bounce+p.vx*.5;b.vy=ny*bounce-(closestY<p.y-p.radius?9:4)*power;
       b.x=p.x+nx*(combined+.1);b.y=closestY+ny*(combined+.1);
       p.hitTimer=15;jelly(b,1.37,.63);jelly(p,1.2,.8);
+      globalThis.VolleyNet.resolve(b,this.net,oldX,oldY);
       if(this.cooldown===0){
         this.combo++;if(this.possession!==i+1){this.possession=i+1;this.touches=1;}else this.touches++;
         this.emit('hit',{player:i+1,x:b.x,y:b.y,touches:this.touches,combo:this.combo});

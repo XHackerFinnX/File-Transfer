@@ -64,8 +64,9 @@ export class SnapshotBuffer {
         p.x=clamp(p.x+p.vx*steps, i===0?p.radius:middle+p.radius, i===0?middle-p.radius:settings.courtWidth-p.radius);
         p.y=Math.min(GROUND, p.y+p.vy*steps);
       }
-      result.ball.x=clamp(result.ball.x+result.ball.vx*steps, result.ball.radius, settings.courtWidth-result.ball.radius);
-      result.ball.y=Math.min(GROUND-result.ball.radius, result.ball.y+result.ball.vy*steps);
+      const ballSteps=steps*settings.ballSpeed/100;
+      result.ball.x=clamp(result.ball.x+result.ball.vx*ballSteps, result.ball.radius, settings.courtWidth-result.ball.radius);
+      result.ball.y=Math.min(GROUND-result.ball.radius, result.ball.y+result.ball.vy*ballSteps);
       result.time+=steps*.05;
     } else if (a.state.round===latest.state.round && b.state.round===latest.state.round && b.time>a.time) {
       const t=clamp((this.cursor-a.time)/(b.time-a.time),0,1);
@@ -78,6 +79,11 @@ export class SnapshotBuffer {
       result.players=a.state.players.map(p=>({...p}));result.ball={...a.state.ball};
       result.time=a.state.time;result.bend=a.state.bend;
     }
+    // Neither interpolation across an impact nor short visual extrapolation may
+    // draw the ball through the post. Physics remains authoritative on the server.
+    const origin=this.cursor>latest.time?latest.state.ball:a.state.ball;
+    if(!result.serving)globalThis.VolleyNet.resolve(result.ball,
+      {x:settings.courtWidth/2,y:GROUND-settings.netHeight,width:settings.netWidth},origin.x,origin.y);
     return result;
   }
 }

@@ -35,6 +35,25 @@
 .color-swatch { width:40px; height:40px; border:3px solid #000; background:#fff; padding:6px; }
 .color-swatch span { display:block; width:100%; height:100%; background:var(--swatch); }
 .color-swatch[aria-pressed=true] { box-shadow:4px 4px 0 #000; transform:translate(-2px,-2px); }
+.custom-color-button { display:flex; align-items:center; gap:8px; min-height:40px; }
+.custom-color-chip { width:18px; height:18px; border:1px solid #555; background:var(--custom-color,#663399); }
+.custom-color-button[aria-pressed=true] { box-shadow:4px 4px 0 #000; border-width:3px; }
+.room-appearance { margin:0 0 22px; }
+.room-appearance h2 { font-size:14px; margin:0 0 12px; }
+.room-appearance select { width:100%; min-height:44px; font:inherit; font-size:14px; border:2px solid #000; background:#fff; color:#000; padding:8px; }
+.appearance-note { margin:8px 0 0; font-size:11px; line-height:1.5; }
+.appearance-note:empty { display:none; }
+.color-dialog { width:min(400px,calc(100vw - 24px)); max-height:calc(var(--viewport-height,100dvh) - 24px); overflow-y:auto; padding:22px; border:3px solid #000; background:#fff; color:#000; font-family:inherit; box-shadow:6px 6px 0 #000; }
+.color-dialog::backdrop { background:rgba(255,255,255,.8); }
+.color-dialog h2 { margin:0 0 12px; font-size:22px; }
+.color-dialog p { font-size:12px; line-height:1.5; }
+.color-dialog label { display:block; font-size:12px; margin:12px 0 6px; }
+.color-dialog input { display:block; width:100%; min-height:44px; border:2px solid #000; background:#fff; color:#000; }
+.color-dialog input[type=text] { padding:8px; font-family:monospace; font-size:16px; user-select:text; }
+.color-dialog input[type=color] { height:64px; padding:4px; cursor:pointer; }
+.color-dialog-actions { display:flex; justify-content:flex-end; gap:12px; margin-top:16px; }
+#customColorError { color:#a80000; }
+body[data-mobile=true] .room-appearance { order:4; }
 .room-settings-summary { border-top:2px solid #000; padding-top:18px; }
 .room-section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .room-section-heading h2 { margin:0; }

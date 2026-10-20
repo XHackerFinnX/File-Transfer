@@ -1,14 +1,24 @@
 """Public game assets and the Python game's WebSocket endpoint."""
 
 from fastapi import APIRouter, HTTPException, WebSocket
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from config import config
 from security import normalize_allowed_origins, websocket_origin_allowed
 from services.volleyball import GAME_ROOT, volleyball_server
 
 router = APIRouter(prefix="/volleyball", tags=["volleyball"])
-PUBLIC_FILES = {"index.html", "config.js", "online.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js", "shared/snapshots.js"}
+PUBLIC_FILES = {"index.html", "config.js", "online.js", "appearance.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js", "shared/snapshots.js", "shared/net.js"}
+BACKGROUNDS = [
+    {"id": "blue", "label": "Синие волейбольные каракули", "file": "Синие волейбольные каракули на полях-1.png"},
+    {"id": "pencil", "label": "Карандашные зарисовки", "file": "Карандашные волейбольные зарисовки на полях-2.png"},
+    {"id": "doodles", "label": "Тетрадный лист с дудлами", "file": "Тетрадный лист с игривыми дудлами-3.png"},
+    {"id": "sea", "label": "Морские заметки", "file": "Морские заметки синей ручкой-4.png"},
+    {"id": "beach", "label": "Пляж с пальмами", "file": "Графитный пляжный пейзаж с пальмами-5.png"},
+    {"id": "lined", "label": "Линованный волейбольный лист", "file": "Линованный фон с волейбольными зарисовками-6.png"},
+    {"id": "forest", "label": "Лесная поляна", "file": "Графитовая поляна среди деревьев-7.png"},
+]
+BACKGROUND_FILES = {"assets/"+item["file"] for item in BACKGROUNDS}
 
 
 @router.get("/healthz")
@@ -27,7 +37,11 @@ async def volleyball_redirect():
 @router.api_route("/online/{filename:path}", methods=["GET", "HEAD"], include_in_schema=False)
 async def volleyball_asset(filename: str = "index.html"):
     filename = filename or "index.html"
-    if not config.VOLLEYBALL_ENABLED or filename not in PUBLIC_FILES:
+    if not config.VOLLEYBALL_ENABLED:
+        raise HTTPException(status_code=404)
+    if filename == "backgrounds.json":
+        return JSONResponse(BACKGROUNDS, headers={"Cache-Control": "no-cache"})
+    if filename not in PUBLIC_FILES | BACKGROUND_FILES:
         raise HTTPException(status_code=404)
     return FileResponse(
         GAME_ROOT / "docs" / filename,

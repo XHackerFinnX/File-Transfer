@@ -67,6 +67,65 @@ def animate(p):
         p[scale] += p[velocity]
 
 
+def resolve_net(ball, net, old_x, old_y):
+    """Sweep a circle against the net's capsule, also after player separation."""
+    radius = ball["radius"]+net["width"]
+    if (max(old_x, ball["x"]) < net["x"]-radius or min(old_x, ball["x"]) > net["x"]+radius
+            or max(old_y, ball["y"]) < net["y"]-radius or min(old_y, ball["y"]) > GROUND+radius):
+        return False
+    dx, dy = ball["x"]-old_x, ball["y"]-old_y
+    hits = []
+
+    def take(t, nx, ny):
+        if -1e-9 <= t <= 1:
+            hits.append((max(0, t), nx, ny))
+
+    start_y = clamp(old_y, net["y"], GROUND)
+    if math.hypot(old_x-net["x"], old_y-start_y) >= radius-1e-9:
+        if dx:
+            for nx in (-1, 1):
+                if dx*nx >= 0:
+                    continue
+                t = (net["x"]+nx*radius-old_x)/dx
+                y = old_y+dy*t
+                if net["y"] <= y <= GROUND:
+                    take(t, nx, 0)
+        a = dx*dx+dy*dy
+        if a:
+            for y in (net["y"], GROUND):
+                ox, oy = old_x-net["x"], old_y-y
+                b = 2*(ox*dx+oy*dy)
+                discriminant = b*b-4*a*(ox*ox+oy*oy-radius*radius)
+                if discriminant < 0:
+                    continue
+                t = (-b-math.sqrt(discriminant))/(2*a)
+                nx, ny = (ox+dx*t)/radius, (oy+dy*t)/radius
+                if dx*nx+dy*ny < 0:
+                    take(t, nx, ny)
+    if hits:
+        t, nx, ny = min(hits, key=lambda h: h[0])
+        ball["x"], ball["y"] = old_x+dx*t+nx*.1, old_y+dy*t+ny*.1
+    else:
+        y = clamp(ball["y"], net["y"], GROUND)
+        x_delta, y_delta = ball["x"]-net["x"], ball["y"]-y
+        distance = math.hypot(x_delta, y_delta)
+        if distance >= radius:
+            return False
+        nx = x_delta/distance if distance > 1e-9 else (-1 if old_x <= net["x"] else 1)
+        ny = y_delta/distance if distance > 1e-9 else 0
+        ball["x"], ball["y"] = net["x"]+nx*(radius+.1), y+ny*(radius+.1)
+    approach = ball["vx"]*nx+ball["vy"]*ny
+    if approach < 0:
+        restitution = .8 if ny < -.5 else .7
+        ball["vx"] -= (1+restitution)*approach*nx
+        ball["vy"] -= (1+restitution)*approach*ny
+        net["bendVel"] = clamp(-approach*nx, -25, 25)
+        jelly(ball, 1.37 if ny < -.5 else .72, .63 if ny < -.5 else 1.28)
+    if ny < -.5 and abs(ball["vx"]) < 1.5:
+        ball["vx"] += 3 if ball["x"] >= net["x"] else -3
+    return True
+
+
 def move_player(p, mask, index, settings):
     left, right, jump, down = (bool(mask & bit) for bit in (1, 2, 4, 8))
     speed = settings["speed1" if index == 0 else "speed2"] / 100
@@ -217,24 +276,7 @@ class Match:
             if b["x"] > s["courtWidth"]-b["radius"]:
                 b["x"], b["vx"] = s["courtWidth"]-b["radius"], -abs(b["vx"])
                 jelly(b, .63, 1.37)
-            cx, cy = clamp(b["x"], n["x"]-n["width"], n["x"]+n["width"]), clamp(b["y"], n["y"], GROUND)
-            dx, dy = b["x"]-cx, b["y"]-cy
-            distance = math.hypot(dx, dy)
-            if distance < b["radius"]:
-                if distance < .001:
-                    dx, dy = (0, -1) if old_y < n["y"] else (-1 if old_x < n["x"] else 1, 0)
-                    distance = 1
-                nx, ny = dx/distance, dy/distance
-                b["x"], b["y"] = cx+nx*(b["radius"]+.1), cy+ny*(b["radius"]+.1)
-                approach = b["vx"]*nx+b["vy"]*ny
-                if approach < 0:
-                    restitution = .8 if ny < -.5 else .7
-                    b["vx"] -= (1+restitution)*approach*nx
-                    b["vy"] -= (1+restitution)*approach*ny
-                    n["bendVel"] = clamp(-approach*nx, -25, 25)
-                    jelly(b, 1.37 if ny < -.5 else .72, .63 if ny < -.5 else 1.28)
-                if ny < -.5 and abs(b["vx"]) < 1.5:
-                    b["vx"] += 3 if b["x"] >= n["x"] else -3
+            resolve_net(b, n, old_x, old_y)
 
     def step(self, inputs=(0, 0)):
         if self.phase != "playing":
@@ -266,11 +308,13 @@ class Match:
                 dx, dy, distance = 0, -1, 1
             nx, ny, power = dx/distance, dy/distance, self.settings["hitPower"]/100
             bounce = min(math.hypot(b["vx"], b["vy"])*.8+10, 18)*power
+            old_x, old_y = b["x"], b["y"]
             b.update(vx=nx*bounce+p["vx"]*.5, vy=ny*bounce-(9 if closest_y < p["y"]-p["radius"] else 4)*power,
                      x=p["x"]+nx*(combined+.1), y=closest_y+ny*(combined+.1))
             p["hitTimer"] = 15
             jelly(b, 1.37, .63)
             jelly(p, 1.2, .8)
+            resolve_net(b, n, old_x, old_y)
             if self.cooldown == 0:
                 self.combo += 1
                 if self.possession != i+1:

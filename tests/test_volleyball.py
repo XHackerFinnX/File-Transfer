@@ -11,11 +11,12 @@ import unittest
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+from urllib.parse import quote
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from services.volleyball_physics import DEFAULT_SETTINGS, GROUND, Match, validate_settings
+from services.volleyball_physics import DEFAULT_SETTINGS, GROUND, Match, resolve_net, validate_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "http://volleyball.test"
@@ -63,6 +64,38 @@ class PhysicsTests(unittest.TestCase):
             m.ball.update(x=m.players[0]["x"], y=GROUND-150)
             m.step()
             self.assertEqual(m.score[1], 0 if max_touches == 0 else 1)
+
+    def test_small_ball_cannot_be_pushed_through_net_by_player(self):
+        for side in (-1, 1):
+            m = Match({"ballSize": 50, "netWidth": 4, "maxTouches": 0})
+            m.start()
+            m.serving = False
+            player = m.players[0 if side == -1 else 1]
+            player.update(x=m.net["x"]+side*45, y=GROUND)
+            m.ball.update(x=m.net["x"]+side*27, y=500, vx=-side*4, vy=0)
+            m.step()
+            self.assertGreater((m.ball["x"]-m.net["x"])*side, m.ball["radius"]+m.net["width"])
+            self.assertGreater(m.ball["vx"]*side, 0)
+            self.assertEqual(m.combo, 1)
+
+    def test_net_sweep_blocks_fast_motion_and_round_cap_but_allows_clearance(self):
+        for size in (50, 100, 150):
+            for width in (4, 24):
+                m = Match({"ballSize": size, "netWidth": width})
+                b, n = m.ball, m.net
+                for side in (-1, 1):
+                    old_x = n["x"]+side*250
+                    b.update(x=n["x"]-side*250, y=n["y"]+80, vx=-side*10000, vy=0)
+                    self.assertTrue(resolve_net(b, n, old_x, b["y"]))
+                    self.assertGreater((b["x"]-n["x"])*side, b["radius"]+width)
+                    self.assertGreater(b["vx"]*side, 0)
+                b.update(x=n["x"], y=n["y"]+200, vx=0, vy=10000)
+                self.assertTrue(resolve_net(b, n, n["x"], n["y"]-250))
+                self.assertLess(b["y"], n["y"]-width-b["radius"])
+                self.assertLess(b["vy"], 0)
+                y = n["y"]-width-b["radius"]-1
+                b.update(x=n["x"]+250, y=y, vx=10000, vy=0)
+                self.assertFalse(resolve_net(b, n, n["x"]-250, y))
 
     def test_weak_jump_reaches_serve_and_extreme_physics_is_finite(self):
         m = Match({"jump1": 50, "gravity": 180, "serveHeight": 420})
@@ -270,6 +303,43 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
                 async with connect(self.url, origin=origin, subprotocols=protocols, proxy=None):
                     self.fail("Unexpected upgrade")
             self.assertEqual(err.exception.response.status_code, 403)
+
+    async def test_custom_colors_are_shared_independent_validated_and_resumed(self):
+        host = await self.peer()
+        await host.send(type="create", color="#Ab19E3")
+        owner = await host.wait("joined")
+        guest = await self.peer()
+        await guest.send(type="join", code=owner["code"], color="#14B8A6")
+        visitor = await guest.wait("joined")
+        self.assertEqual([p["color"] for p in visitor["room"]["players"]], ["#ab19e3", "#14b8a6"])
+        await guest.send(type="color", color="#F5A623")
+        await host.wait("room", lambda p: (p["room"]["players"][1] or {}).get("color") == "#f5a623")
+        for color in ("red", "#fff"):
+            await guest.send(type="color", color=color)
+            self.assertEqual((await guest.wait("error"))["code"], "INVALID_MESSAGE")
+        await guest.ws.close()
+        await host.wait("room", lambda p: p["room"]["players"][1] and not p["room"]["players"][1]["connected"])
+        restored = await self.peer()
+        await restored.send(type="resume", code=owner["code"], token=visitor["token"])
+        colors = [p["color"] for p in (await restored.wait("joined"))["room"]["players"]]
+        self.assertEqual(colors, ["#ab19e3", "#f5a623"])
+        await restored.send(type="color", color=2)
+        await host.wait("room", lambda p: (p["room"]["players"][1] or {}).get("color") == 2)
+
+    async def test_background_catalog_serves_only_listed_images(self):
+        with urlopen(self.base+"/volleyball/online/backgrounds.json") as response:
+            catalog = json.load(response)
+        self.assertEqual(len(catalog), 7)
+        self.assertEqual(len({entry["id"] for entry in catalog}), 7)
+        for entry in catalog:
+            with urlopen(self.base+"/volleyball/online/assets/"+quote(entry["file"])) as response:
+                self.assertEqual(response.headers["Content-Type"], "image/png")
+                self.assertEqual(response.read(8), b"\x89PNG\r\n\x1a\n")
+        for path in ("assets/missing.png", "assets/../config.py", "assets/.env", "assets/%2e%2e/%2e%2e/config.py"):
+            with self.assertRaises(HTTPError) as err:
+                urlopen(self.base+"/volleyball/online/"+path)
+            self.assertEqual(err.exception.code, 404)
+            err.exception.close()
 
     async def test_bad_packets_and_payload_limits(self):
         for payload, code in [("x"*2049, 1009), (b"binary", 1003)]:

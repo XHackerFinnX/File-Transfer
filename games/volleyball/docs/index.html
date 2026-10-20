@@ -5,6 +5,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: ws:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <link rel="stylesheet" href="./online.css">
 <script src="./config.js"></script>
+<script src="./shared/net.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VOLLEY IO</title>
 
@@ -417,13 +418,24 @@ html, body { touch-action: manipulation; }
     <header class="room-heading"><div><span class="online-kicker">ВАША КОМНАТА</span><div class="room-code-row"><h1 id="roomCode">0000</h1><button type="button" class="small-button" id="copyRoomCode">КОПИРОВАТЬ КОД</button></div></div><span id="roomRole" class="role-tag">ХОЗЯИН</span></header>
     <p id="roomStatus" class="online-connect-status" role="status" aria-live="polite">Ожидаем второго игрока</p>
     <div class="room-players"><section class="room-player"><canvas id="onlinePlayer1" width="90" height="90" aria-label="Первый игрок"></canvas><div><strong id="onlineName1">Хозяин · слева</strong><p id="onlineStatus1">Подключён</p></div></section><section class="room-player"><canvas id="onlinePlayer2" width="90" height="90" aria-label="Второй игрок"></canvas><div><strong id="onlineName2">Гость · справа</strong><p id="onlineStatus2">Свободное место</p></div></section></div>
-    <section class="room-colors"><h2>ТВОЙ ЦВЕТ</h2><div id="ownColors" class="color-options" role="group" aria-label="Выбор своего цвета"></div></section>
+    <section class="room-colors"><h2>ТВОЙ ЦВЕТ</h2><div class="color-options"><div id="ownColors" class="color-options" role="group" aria-label="Выбор своего цвета"></div><button type="button" id="customColorButton" class="small-button custom-color-button" aria-haspopup="dialog" aria-controls="customColorDialog" aria-pressed="false"><span class="custom-color-chip" aria-hidden="true"></span>СВОЙ ЦВЕТ</button></div><p id="colorStatus" class="appearance-note" role="status"></p></section>
+    <section class="room-appearance"><h2><label for="backgroundSelect">ТВОЙ ФОН</label></h2><select id="backgroundSelect" aria-describedby="backgroundStatus"><option value="paper">Обычная тетрадь</option></select><p id="backgroundStatus" class="appearance-note" role="status">Фон виден только вам и сохраняется в этом браузере.</p></section>
     <section class="room-settings-summary"><div class="room-section-heading"><h2>ПАРАМЕТРЫ МАТЧА</h2><button type="button" class="small-button" id="hostSettingsButton" hidden>ИЗМЕНИТЬ</button></div><p id="guestSettingsNote" hidden>Параметры задаёт хозяин комнаты. Ты можешь выбрать свой цвет.</p><dl id="roomSettingsSummary"></dl></section>
     <div class="room-action-row"><button type="button" class="liquid-btn online-primary" id="hostStartButton" hidden>НАЧАТЬ МАТЧ</button><button type="button" class="small-button" id="returnToMatch" hidden>ВЕРНУТЬСЯ В МАТЧ</button><button type="button" class="small-button" id="hostPauseButton" hidden>ПАУЗА</button></div>
     <footer class="room-footer"><button type="button" class="text-button" id="leaveRoomButton">Покинуть комнату</button><button type="button" class="text-button" id="kickGuestButton" hidden>Освободить место гостя</button><span id="roomPing">—</span></footer>
   </main>
 </div>
 <div id="onlineToast" class="online-toast" role="status" aria-live="polite" hidden></div>
+<dialog id="customColorDialog" class="color-dialog" aria-labelledby="customColorTitle">
+  <form id="customColorForm">
+    <h2 id="customColorTitle">СВОЙ ЦВЕТ</h2>
+    <p>Выберите оттенок в палитре или введите его HEX-код.</p>
+    <label for="customColorPicker">Палитра</label><input type="color" id="customColorPicker" value="#663399">
+    <label for="customColorHex">HEX-код</label><input type="text" id="customColorHex" value="#663399" pattern="#[0-9a-fA-F]{6}" maxlength="7" required spellcheck="false" autocomplete="off">
+    <p id="customColorError" role="status"></p>
+    <div class="color-dialog-actions"><button type="button" class="small-button" id="cancelCustomColor">ОТМЕНА</button><button type="submit" class="small-button">СОХРАНИТЬ</button></div>
+  </form>
+</dialog>
 
 <div id="goalBannerUI" class="goal-banner-wrapper">
 <div class="goal-banner">
@@ -638,6 +650,7 @@ const pressedCodes = new Set();
 const touchPointers = new Map();
 const touchKeys = { a:false, d:false, w:false, s:false };
 let onlineKeyboardMask = 0, onlineHudKey = "";
+let onlinePlayerSkins = [null,null], backgroundImage = null;
 
         const TWO_PI = Math.PI * 2;
         const HALF_PI = Math.PI * 0.5;
@@ -735,6 +748,9 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
         ];
 
         let p1SkinIndex = 0; let p2SkinIndex = 1;
+        function playerSkin(index) {
+            return (onlineMode && onlinePlayerSkins[index]) || skinsList[index===0?p1SkinIndex:p2SkinIndex];
+        }
 
         const i18n = {
             'ru': {
@@ -814,7 +830,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
 
         function updateSkinDisplays() {
             const isRu = currentLang === 'ru';
-            const s1 = skinsList[p1SkinIndex]; const s2 = skinsList[p2SkinIndex];
+            const s1 = playerSkin(0); const s2 = playerSkin(1);
 
             document.getElementById('p1SkinDisplay').innerText = isRu ? s1.nameRu : s1.nameEn;
             document.getElementById('p2SkinDisplay').innerText = isRu ? s2.nameRu : s2.nameEn;
@@ -1008,7 +1024,7 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
         let keys = { a: false, d: false, w: false, s: false, left: false, right: false, up: false, down: false };
 
         function updateTheme() {
-            let s1 = skinsList[p1SkinIndex]; let s2 = skinsList[p2SkinIndex];
+            let s1 = playerSkin(0); let s2 = playerSkin(1);
             player1.color = s1.suit; player2.color = s2.suit;
         }
 
@@ -1099,8 +1115,8 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
                 let dict = i18n[currentLang] || i18n['en'];
 
                 let winnerName = score1 > score2 ?
-                    (currentLang === 'ru' ? skinsList[p1SkinIndex].nameRu : skinsList[p1SkinIndex].nameEn) :
-                    (currentLang === 'ru' ? skinsList[p2SkinIndex].nameRu : skinsList[p2SkinIndex].nameEn);
+                    (currentLang === 'ru' ? playerSkin(0).nameRu : playerSkin(0).nameEn) :
+                    (currentLang === 'ru' ? playerSkin(1).nameRu : playerSkin(1).nameEn);
 
                 uiWinnerText.innerText = dict.winTpl.replace('{name}', winnerName);
                 uiFinalScore.innerText = `${score1} - ${score2}`;
@@ -1319,12 +1335,14 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
 
                         let distance = Math.sqrt(distSq); if (distance === 0) { dx = 0; dy = -1; distance = 1; }
                         let nx = dx / distance; let ny = dy / distance;
+                        const oldX=ball.x, oldY=ball.y;
                         let speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy); let bounceSpeed = Math.min(speed * 0.8 + 10, 18) * appSettings.hitPower / 100;
                         ball.vx = nx * bounceSpeed + (p.vx * 0.5);
                         if (closestY < p.y - p.radius) { ball.vy = ny * bounceSpeed - 9 * appSettings.hitPower / 100; } else { ball.vy = ny * bounceSpeed - 4 * appSettings.hitPower / 100; }
                         ball.x = p.x + nx * (combinedRadius + .1); ball.y = closestY + ny * (combinedRadius + .1);
 
                         p.hitTimer = 15; triggerJelly(ball, 1.37, 0.63); triggerJelly(p, 1.2, 0.8);
+                        VolleyNet.resolve(ball,net,oldX,oldY,GROUND_Y);
                         spawnParticles(ball.x, ball.y + 10, p.color, 12);
 
                         if (touchCooldown === 0) {
@@ -1465,16 +1483,27 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
                 bgCtx.fillStyle = '#ffffff';
                 bgCtx.fillRect(0, 0, canvas.width, canvas.height);
 
+                if (backgroundImage) {
+                    const x=VIEW_OFFSET_X-24*GAME_SCALE_X,y=VIEW_OFFSET_Y;
+                    const w=(LOGICAL_WIDTH+48)*GAME_SCALE_X,h=LOGICAL_HEIGHT*GAME_SCALE_Y;
+                    const scale=Math.max(w/backgroundImage.naturalWidth,h/backgroundImage.naturalHeight);
+                    const iw=backgroundImage.naturalWidth*scale,ih=backgroundImage.naturalHeight*scale;
+                    bgCtx.save();bgCtx.beginPath();bgCtx.rect(x,y,w,h);bgCtx.clip();
+                    bgCtx.drawImage(backgroundImage,x+(w-iw)/2,y+(h-ih)/2,iw,ih);bgCtx.restore();
+                }
+
                 bgCtx.save();
                 bgCtx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); bgCtx.scale(GAME_SCALE_X, GAME_SCALE_Y); // Постоянные пропорции площадки
 
-                bgCtx.strokeStyle = '#add8e6'; bgCtx.lineWidth = 2;
-                bgCtx.beginPath();
-                for (let y = 50; y < LOGICAL_HEIGHT; y += 50) { bgCtx.moveTo(0, y); bgCtx.lineTo(LOGICAL_WIDTH, y); }
-                bgCtx.stroke();
+                if (!backgroundImage) {
+                    bgCtx.strokeStyle = '#add8e6'; bgCtx.lineWidth = 2;
+                    bgCtx.beginPath();
+                    for (let y = 50; y < LOGICAL_HEIGHT; y += 50) { bgCtx.moveTo(0, y); bgCtx.lineTo(LOGICAL_WIDTH, y); }
+                    bgCtx.stroke();
 
-                bgCtx.strokeStyle = '#ffb6c1'; bgCtx.lineWidth = 3;
-                bgCtx.beginPath(); bgCtx.moveTo(50, 0); bgCtx.lineTo(50, LOGICAL_HEIGHT); bgCtx.stroke();
+                    bgCtx.strokeStyle = '#ffb6c1'; bgCtx.lineWidth = 3;
+                    bgCtx.beginPath(); bgCtx.moveTo(50, 0); bgCtx.lineTo(50, LOGICAL_HEIGHT); bgCtx.stroke();
+                }
 
                 bgCtx.strokeStyle = '#000'; bgCtx.lineWidth = 4;
                 bgCtx.beginPath(); bgCtx.moveTo(0, GROUND_Y); bgCtx.lineTo(LOGICAL_WIDTH, GROUND_Y); bgCtx.stroke();
@@ -1492,7 +1521,8 @@ let onlineKeyboardMask = 0, onlineHudKey = "";
 
             ctx.translate(VIEW_OFFSET_X, VIEW_OFFSET_Y); ctx.scale(GAME_SCALE_X, GAME_SCALE_Y);
 
-            ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(net.x, GROUND_Y); ctx.quadraticCurveTo(net.x + net.bend, net.y + net.height / 2, net.x, net.y);
+            const netBend = Math.max(-net.width/2,Math.min(net.width/2,net.bend));
+            ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(net.x, GROUND_Y); ctx.quadraticCurveTo(net.x + netBend, net.y + net.height / 2, net.x, net.y);
             ctx.lineWidth = net.width * 1.5; ctx.strokeStyle = '#000'; ctx.stroke();
             ctx.lineWidth = Math.max(2, net.width / 2); ctx.strokeStyle = '#fff'; ctx.stroke();
 
@@ -1764,27 +1794,8 @@ function advanceBall() {
     ball.x += ball.vx * dt; ball.y += ball.vy * dt;
     if (ball.x < ball.radius) { ball.x = ball.radius; ball.vx = Math.abs(ball.vx); triggerJelly(ball,.63,1.37); spawnParticles(0,ball.y,'#000',5); }
     if (ball.x > LOGICAL_WIDTH-ball.radius) { ball.x = LOGICAL_WIDTH-ball.radius; ball.vx = -Math.abs(ball.vx); triggerJelly(ball,.63,1.37); spawnParticles(LOGICAL_WIDTH,ball.y,'#000',5); }
-    const closestX = Math.max(net.x-net.width,Math.min(net.x+net.width,ball.x));
-    const closestY = Math.max(net.y,Math.min(GROUND_Y,ball.y));
-    let dx = ball.x-closestX, dy = ball.y-closestY;
-    let distance = Math.hypot(dx,dy);
-    if (distance < ball.radius) {
-      if (distance < .001) {
-        if (prevY < net.y) { dx=0; dy=-1; } else { dx=prevX<net.x?-1:1; dy=0; }
-        distance=1;
-      }
-      const nx=dx/distance, ny=dy/distance;
-      ball.x=closestX+nx*(ball.radius+.1); ball.y=closestY+ny*(ball.radius+.1);
-      const approach=ball.vx*nx+ball.vy*ny;
-      if (approach < 0) {
-        const restitution = ny < -.5 ? .8 : .7;
-        ball.vx -= (1+restitution)*approach*nx; ball.vy -= (1+restitution)*approach*ny;
-        net.bendVel = Math.max(-25,Math.min(25,-approach*nx));
-        triggerJelly(ball,ny<-.5?1.37:.72,ny<-.5?.63:1.28);
-        if (-approach>2) spawnParticles(closestX,closestY,'#000',6);
-      }
-      if (ny<-.5 && Math.abs(ball.vx)<1.5) ball.vx += ball.x>=net.x?3:-3;
-    }
+    const hit=VolleyNet.resolve(ball,net,prevX,prevY,GROUND_Y);
+    if(hit&&hit.approach < -2)spawnParticles(ball.x,ball.y,'#000',6);
   }
 }
 function updateSettingsSummary() {
@@ -1955,7 +1966,8 @@ function advanceOnlineEffects(dt) {
 window.VolleyBridge = {
   hooks:onlineHooks,
   isOnline:()=>onlineMode,
-  isSettingsOpen:()=>settingsOpen,
+  isSettingsOpen:()=>settingsOpen||document.getElementById('customColorDialog').open,
+  background(image){backgroundImage=image;bgCanvas.width=0;},
   arenaView:()=>({...hostArenaView}),
   input:()=>({left:keys.a,right:keys.d,jump:keys.w,down:keys.s}),
   setInput(mask){onlineKeyboardMask=mask;applyOnlineInput();},
@@ -1964,6 +1976,7 @@ window.VolleyBridge = {
   openSettings,
   closeSettings,
   local(){
+    document.getElementById('customColorDialog').close();
     onlineArenaView=null;
     onlineMode=false;document.body.classList.remove('online-mode');document.getElementById('btnAgain').style.display='block';document.getElementById('btnContinueAd').style.display='block';document.getElementById('touchControls').classList.remove('visible');
     appSettings=normalizeSettings(readLocalSave().settings);WIN_SCORE=appSettings.winScore;isGameStarted=false;isGameOver=false;isPaused=false;
@@ -1986,14 +1999,17 @@ window.VolleyBridge = {
     const viewChanged=JSON.stringify(onlineArenaView)!==JSON.stringify(data.arenaView);
     onlineArenaView=data.arenaView;
     appSettings=next;
-    p1SkinIndex=data.players[0]?.color??0;p2SkinIndex=data.players[1]?.color??1;
+    const colors=data.players.map((p,i)=>p?.color??i);
+    p1SkinIndex=Number.isInteger(colors[0])?colors[0]:0;p2SkinIndex=Number.isInteger(colors[1])?colors[1]:1;
+    onlinePlayerSkins=colors.map(color=>typeof color==='string'
+      ? {nameRu:'Свой цвет',nameEn:'Custom',suit:color,hair:color,icon:'👤'}:null);
     if(changed){configurePlayers();clearPools();}
     if(changed||viewChanged)resize();
     updateSkinDisplays();
-    document.getElementById('badgeP1').textContent=(onlineRole==='host'?'ВЫ · ':'')+skinsList[p1SkinIndex].nameRu;
-    document.getElementById('badgeP2').textContent=(onlineRole==='guest'?'ВЫ · ':'')+skinsList[p2SkinIndex].nameRu;
-    drawSkinPreviewCanvas('onlinePlayer1',skinsList[p1SkinIndex],true);
-    drawSkinPreviewCanvas('onlinePlayer2',skinsList[p2SkinIndex],false);
+    document.getElementById('badgeP1').textContent=(onlineRole==='host'?'ВЫ · ':'')+playerSkin(0).nameRu;
+    document.getElementById('badgeP2').textContent=(onlineRole==='guest'?'ВЫ · ':'')+playerSkin(1).nameRu;
+    drawSkinPreviewCanvas('onlinePlayer1',playerSkin(0),true);
+    drawSkinPreviewCanvas('onlinePlayer2',playerSkin(1),false);
   },
   state(state){
     if(!state||!Array.isArray(state.players)||state.players.length!==2)return;
@@ -2013,7 +2029,7 @@ window.VolleyBridge = {
     }
     if(!isServing&&!isGameOver&&!isPaused){trailX[trailHead]=ball.x;trailY[trailHead]=ball.y;trailHead=(trailHead+1)%TRAIL_LEN;trailActiveCount=Math.min(TRAIL_LEN,trailActiveCount+1);}
     if(isGameOver){
-      const winner=score1>score2?skinsList[p1SkinIndex].nameRu:skinsList[p2SkinIndex].nameRu;
+      const winner=playerSkin(score1>score2?0:1).nameRu;
       uiWinnerText.textContent=winner+' ПОБЕДИЛ!';uiFinalScore.textContent=score1+' — '+score2;uiVictory.classList.add('show');
     }else uiVictory.classList.remove('show');
   },
