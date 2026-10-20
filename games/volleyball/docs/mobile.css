@@ -16,7 +16,7 @@ html, body { height: var(--viewport-height, 100dvh); }
 
 body[data-mobile=true] #touchControls {
   --touch-fit: calc((100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)) - 28px) / 3);
-  --touch-size: min(clamp(84px, 27dvh, 111px), var(--touch-fit));
+  --touch-size: min(clamp(67px, 21dvh, 88px), var(--touch-fit));
   position: fixed; left: 0; right: 0;
   bottom: max(12px, env(safe-area-inset-bottom));
   padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
@@ -29,13 +29,13 @@ body[data-mobile=true] .touch-group-left { gap: 14px; }
 body[data-mobile=true] .touch-btn {
   width: var(--touch-size); height: var(--touch-size);
   min-width: 0; min-height: 0; flex-shrink: 0; padding: 0;
-  border: 4px solid #000; border-radius: 24px; font-size: 42px;
+  border: 3px solid #000; border-radius: 18px; font-size: 28px;
   box-shadow: 3px 3px 0 #000; background: rgba(255,255,255,.92);
   backdrop-filter: none; -webkit-backdrop-filter: none;
   touch-action: none; transition: background .08s, color .08s;
 }
 body[data-mobile=true] #touchControls.visible .touch-btn { pointer-events: auto; }
-body[data-mobile=true] #tJump { flex-direction: column; gap: 3px; width: min(clamp(102px, 31.5dvh, 132px), var(--touch-fit)); }
+body[data-mobile=true] #tJump { flex-direction: column; gap: 3px; width: min(clamp(81px, 25dvh, 105px), var(--touch-fit)); }
 body[data-mobile=true] .touch-label { font-size: 15px; }
 body[data-mobile=true] .touch-btn[data-pressed=true] { color: #fff; background: #000; box-shadow: 1px 1px 0 #000; }
 body[data-mobile=false] #touchControls { display: none !important; }
