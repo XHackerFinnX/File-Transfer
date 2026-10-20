@@ -10,6 +10,7 @@ from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.volleyball_physics import GROUND, Match
+from tests.browser_volleyball_mobile import swipe
 
 
 NET_CHECK = r"""async expected => {
@@ -57,9 +58,45 @@ async def color(page, value):
     await page.locator('#customColorButton').click()
     await page.locator('#customColorDialog').wait_for(state='visible')
     await page.locator('#customColorHex').fill(value)
-    assert await page.locator('#customColorPicker').input_value() == value.lower()
+    assert await page.locator('#customColorPicker').evaluate('el => el.value') == value.lower()
     await page.locator('#customColorForm button[type=submit]').click()
     await page.wait_for_function('() => !document.getElementById("customColorDialog").open')
+
+
+async def check_palette(host,guest,contexts,artifacts):
+    await host.locator('#customColorButton').click()
+    await host.locator('#customColorPicker').click()
+    await host.locator('#colorPalette').wait_for(state='visible')
+    await host.locator('#customColorHue').press('Home')
+    assert await host.locator('#customColorHue').input_value()=='0'
+    box=await host.locator('#colorPalette').bounding_box()
+    assert box['width']>200 and box['height']>100,box
+    cdp=await contexts[0].new_cdp_session(host)
+    await swipe(host,cdp,(box['x']+box['width']*.2,box['y']+box['height']*.2),
+                (box['x']+box['width']*.8,box['y']+box['height']*.8))
+    chosen=await host.locator('#customColorHex').input_value()
+    assert chosen!='#12abcd',chosen
+    assert await host.locator('#customColorPicker').evaluate('el => el.value')==chosen
+    assert await host.evaluate('playersArr[0].color')=='#12abcd'
+    assert await guest.evaluate('playersArr[0].color')=='#12abcd'
+    await host.locator('#customColorHex').fill('#00ff00')
+    assert await host.locator('#customColorHue').input_value()=='120'
+    assert await host.locator('#colorPaletteMarker').evaluate('el => [el.style.left,el.style.top]')==['100%','0%']
+    await host.locator('#colorPalette').press('ArrowLeft')
+    assert await host.locator('#customColorHex').input_value()!='#00ff00'
+    if artifacts:
+        await host.screenshot(path=str(artifacts/'mobile-color-palette.png'))
+    await host.locator('#cancelCustomColor').click()
+    await guest.locator('#customColorButton').click()
+    await guest.locator('#customColorPicker').click()
+    box=await guest.locator('#colorPalette').bounding_box()
+    await guest.mouse.move(box['x']+box['width']*.2,box['y']+box['height']*.2)
+    await guest.mouse.down()
+    await guest.mouse.move(box['x']+box['width']*.7,box['y']+box['height']*.7,steps=5)
+    await guest.mouse.up()
+    assert await guest.locator('#customColorHex').input_value()!='#f59e0b'
+    await guest.locator('#cancelCustomColor').click()
+    print('PASS palette: big in-page color field, real touch/mouse dragging, hue, keyboard and HEX synchronization; preview is private until save')
 
 
 async def check(origin, chromium, artifacts=None):
@@ -101,6 +138,7 @@ async def check(origin, chromium, artifacts=None):
             await color(host,'#12aBcD');await color(guest,'#f59e0b')
             for page in (host,guest):
                 await page.wait_for_function("() => playersArr[0].color==='#12abcd' && playersArr[1].color==='#f59e0b'")
+            await check_palette(host,guest,contexts,artifacts)
             await host.locator('#customColorButton').click()
             await host.locator('#customColorHex').fill('invalid')
             await host.locator('#customColorForm button[type=submit]').click()
@@ -115,14 +153,22 @@ async def check(origin, chromium, artifacts=None):
             assert await host.locator('#customColorHex').input_value()=='#12abcd'
             await host.locator('#customColorForm button[type=submit]').click()
             await guest.wait_for_function("() => playersArr[0].color==='#12abcd'")
+            await guest.locator('#toggleStatsButton').click()
+            assert await guest.evaluate('document.body.dataset.stats')=='hidden'
+            assert await host.evaluate('document.body.dataset.stats')=='visible'
             await guest.reload()
             await guest.wait_for_function("() => onlineMode && playersArr[1].color==='#f59e0b' && backgroundImage?.complete")
             assert await guest.locator('#backgroundSelect').input_value()=='forest'
+            assert await guest.evaluate('document.body.dataset.stats')=='hidden'
+            assert await guest.locator('#toggleStatsButton').inner_text()=='ПОКАЗАТЬ ПИНГ И FPS'
             await host.wait_for_function("() => !document.getElementById('hostStartButton').disabled")
             await host.locator('#hostStartButton').click()
             for page in (host,guest):
                 await page.wait_for_function('() => isGameStarted && !isPaused')
                 await page.wait_for_function('() => getComputedStyle(document.getElementById("hiddenUI")).opacity === "1"')
+            for selector in ('#hostPing','#guestPing','#networkHealth'):
+                assert await guest.locator(selector).is_hidden(),selector
+                assert await host.locator(selector).is_visible(),selector
             if artifacts:
                 await host.screenshot(path=str(artifacts/'background-mobile-host.png'))
                 await guest.screenshot(path=str(artifacts/'background-desktop-guest.png'))
@@ -137,6 +183,10 @@ async def check(origin, chromium, artifacts=None):
                 await page.wait_for_function("() => onlineMode && playersArr[0].color==='#12abcd' && playersArr[1].color==='#f59e0b'")
             assert await host.locator('#backgroundSelect').input_value()=='beach'
             assert await guest.locator('#backgroundSelect').input_value()=='forest'
+            assert await guest.evaluate('document.body.dataset.stats')=='hidden'
+            await guest.locator('#toggleStatsButton').click()
+            assert await guest.evaluate('document.body.dataset.stats')=='visible'
+            print('PASS stats: ping/FPS hidden for only one player, saved across reload/rooms and shown again from the menu')
             assert not errors,errors
             print('PASS appearance: all 7 images, independent backgrounds, palette/HEX/save/cancel/presets, reload and new room')
         finally:

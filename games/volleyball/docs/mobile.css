@@ -15,6 +15,8 @@ html, body { height: var(--viewport-height, 100dvh); }
 .touch-label { font-size: 10px; line-height: 1; }
 
 body[data-mobile=true] #touchControls {
+  --touch-fit: calc((100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)) - 28px) / 3);
+  --touch-size: min(clamp(84px, 27dvh, 111px), var(--touch-fit));
   position: fixed; left: 0; right: 0;
   bottom: max(12px, env(safe-area-inset-bottom));
   padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
@@ -25,17 +27,20 @@ body[data-mobile=true] #touchControls:not(.visible) { visibility: hidden; }
 body[data-mobile=true] #touchControls.visible { visibility: visible; }
 body[data-mobile=true] .touch-group-left { gap: 14px; }
 body[data-mobile=true] .touch-btn {
-  width: clamp(56px, 18dvh, 74px); height: clamp(56px, 18dvh, 74px);
-  min-width: 56px; min-height: 56px; padding: 0;
-  border: 3px solid #000; border-radius: 16px; font-size: 28px;
+  width: var(--touch-size); height: var(--touch-size);
+  min-width: 0; min-height: 0; flex-shrink: 0; padding: 0;
+  border: 4px solid #000; border-radius: 24px; font-size: 42px;
   box-shadow: 3px 3px 0 #000; background: rgba(255,255,255,.92);
   backdrop-filter: none; -webkit-backdrop-filter: none;
   touch-action: none; transition: background .08s, color .08s;
 }
 body[data-mobile=true] #touchControls.visible .touch-btn { pointer-events: auto; }
-body[data-mobile=true] #tJump { flex-direction: column; gap: 2px; width: clamp(68px, 21dvh, 88px); }
+body[data-mobile=true] #tJump { flex-direction: column; gap: 3px; width: min(clamp(102px, 31.5dvh, 132px), var(--touch-fit)); }
+body[data-mobile=true] .touch-label { font-size: 15px; }
 body[data-mobile=true] .touch-btn[data-pressed=true] { color: #fff; background: #000; box-shadow: 1px 1px 0 #000; }
 body[data-mobile=false] #touchControls { display: none !important; }
+body[data-stats=hidden] .player-ping, body[data-stats=hidden] .network-health,
+body[data-stats=hidden] #roomPing { display: none !important; }
 
 body[data-mobile=true] .online-screen {
   padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
@@ -72,6 +77,7 @@ body[data-mobile=true] .settings-modal { padding: max(8px, env(safe-area-inset-t
 body[data-mobile=true] .settings-window { height: calc(var(--viewport-height, 100dvh) - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom))); max-width: 100%; }
 body[data-mobile=true] .settings-head, body[data-mobile=true] .settings-foot { flex-shrink: 0; }
 body[data-mobile=true] .settings-scroll { touch-action: pan-y; }
+input[type=range][data-setting], #tempoSlider { touch-action: pan-y; }
 body[data-mobile=true] .param-top label { min-width: 0; overflow-wrap: anywhere; }
 body[data-mobile=true] .param input[type=number], body[data-mobile=true] .param select { font-size: 16px; }
 body[data-mobile=true] .close-settings { width: 40px; height: 40px; }

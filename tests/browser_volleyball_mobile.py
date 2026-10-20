@@ -17,6 +17,66 @@ async def visible_inside(page, selector):
     return box
 
 
+async def swipe(page, cdp, start, end, cancel=False):
+    def point(x,y):
+        return dict(id=7,x=x,y=y,radiusX=5,radiusY=5)
+    await cdp.send('Input.dispatchTouchEvent',dict(type='touchStart',touchPoints=[point(*start)]))
+    for step in range(1,9):
+        x=start[0]+(end[0]-start[0])*step/8
+        y=start[1]+(end[1]-start[1])*step/8
+        await cdp.send('Input.dispatchTouchEvent',dict(type='touchMove',touchPoints=[point(x,y)]))
+        await page.wait_for_timeout(16)
+    await page.wait_for_timeout(80)
+    await cdp.send('Input.dispatchTouchEvent',dict(type='touchCancel' if cancel else 'touchEnd',touchPoints=[]))
+
+
+async def settings_gestures(page, cdp):
+    scroll=page.locator('.settings-scroll')
+    await scroll.evaluate('el => el.scrollTop=0')
+    slider=page.locator('#range-netHeight')
+    await slider.scroll_into_view_if_needed()
+    box=await slider.bounding_box()
+    draft=await page.evaluate('JSON.stringify(settingsDraft)')
+    before=await scroll.evaluate('el => el.scrollTop')
+    start=(box['x']+box['width']*.65,box['y']+box['height']/2)
+    await swipe(page,cdp,start,(start[0],start[1]-90))
+    await page.wait_for_function('v => document.querySelector(".settings-scroll").scrollTop>v+20',arg=before)
+    assert await page.evaluate('JSON.stringify(settingsDraft)')==draft
+    # Start the return swipe directly over another visible slider.
+    point=await page.evaluate('''() => {
+        const area=document.querySelector('.settings-scroll').getBoundingClientRect();
+        for(const input of document.querySelectorAll('.settings-scroll input[type=range]')){
+            const box=input.getBoundingClientRect();
+            if(box.top>=area.top+5&&box.bottom<=area.bottom-5)return [box.x+box.width*.5,box.y+box.height/2];
+        }
+        throw Error('No visible range for reverse scroll');
+    }''')
+    before=await scroll.evaluate('el => el.scrollTop')
+    await swipe(page,cdp,point,(point[0],point[1]+80))
+    await page.wait_for_function('v => document.querySelector(".settings-scroll").scrollTop<v-15',arg=before)
+    assert await page.evaluate('JSON.stringify(settingsDraft)')==draft
+    await slider.scroll_into_view_if_needed()
+    box=await slider.bounding_box()
+    x,y=box['x']+box['width']*.8,box['y']+box['height']/2
+    await cdp.send('Input.dispatchTouchEvent',dict(type='touchStart',touchPoints=[dict(id=7,x=x,y=y)]))
+    assert await page.evaluate('JSON.stringify(settingsDraft)')==draft
+    await cdp.send('Input.dispatchTouchEvent',dict(type='touchEnd',touchPoints=[]))
+    assert await page.evaluate('JSON.stringify(settingsDraft)')==draft
+    await swipe(page,cdp,(box['x']+box['width']*.3,y),(x,y))
+    assert await page.evaluate('JSON.stringify(settingsDraft)')!=draft
+    value=await slider.input_value()
+    assert await page.locator('#number-netHeight').input_value()==value
+    # An interrupted horizontal gesture restores its original value.
+    await swipe(page,cdp,(x,y),(box['x']+box['width']*.2,y),cancel=True)
+    assert await slider.input_value()==value
+    assert await page.locator('#number-netHeight').input_value()==value
+    await slider.press('ArrowRight')
+    assert float(await slider.input_value())==float(value)+.5
+    await page.mouse.click(box['x']+box['width']*.2,y)
+    assert float(await slider.input_value())<float(value)
+    print('PASS settings: real touch scroll in both directions leaves sliders unchanged; horizontal drag, cancel, mouse and keyboard work')
+
+
 async def check(origin, chromium, artifacts=None):
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(executable_path=chromium, headless=True, args=['--no-sandbox'])
@@ -56,6 +116,11 @@ async def check(origin, chromium, artifacts=None):
             left = await host.locator('#tLeft').bounding_box()
             jump = await host.locator('#tJump').bounding_box()
             assert left['x'] < 852/2 < jump['x']
+            old_arrow=min(74,max(56,393*.18))
+            old_jump=min(88,max(68,393*.21))
+            assert abs(left['width']-old_arrow*1.5)<1,left
+            assert abs(left['height']-old_arrow*1.5)<1,left
+            assert abs(jump['width']-old_jump*1.5)<1,jump
             cdp = await contexts[0].new_cdp_session(host)
             def finger(identity, box):
                 return dict(id=identity, x=box['x']+box['width']/2, y=box['y']+box['height']/2, radiusX=5, radiusY=5)
@@ -95,6 +160,9 @@ async def check(origin, chromium, artifacts=None):
                 assert await host.evaluate('canvas.width <= innerWidth*2+1 && canvas.height <= innerHeight*2+1')
                 assert await host.evaluate('Object.values(VolleyBridge.input()).every(v => !v)')
                 assert await host.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                right=await host.locator('#tRight').bounding_box()
+                jump_box=await host.locator('#tJump').bounding_box()
+                assert right['x']+right['width']<jump_box['x'],(right,jump_box)
                 if width > height:
                     arena = await host.evaluate('''() => {
                         const dpr=canvas.width/innerWidth;
@@ -119,6 +187,7 @@ async def check(origin, chromium, artifacts=None):
                     await button.scroll_into_view_if_needed()
                     box = await button.bounding_box()
                     assert box['y']+box['height'] <= height+1, box
+            await settings_gestures(host,cdp)
             if artifacts:
                 await host.screenshot(path=str(artifacts/'mobile-settings.png'))
             assert len(sockets) == 2, sockets
