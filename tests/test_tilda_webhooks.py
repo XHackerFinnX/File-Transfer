@@ -76,6 +76,31 @@ def tilda_order():
 
 
 class PayloadTests(unittest.TestCase):
+    def test_taplink_envelopes_and_older_form_records_expose_the_order(self):
+        raw = taplink_order()
+        encoded = json.dumps(raw, ensure_ascii=False)
+        for saved_payload in (
+            {"data": raw},
+            {"data": encoded, "event": "order"},
+            {"payload": {"data": encoded}},
+            {"data": [raw]},
+            {"_raw": encoded},
+            {encoded: ""},
+        ):
+            with self.subTest(wrapper=list(saved_payload)[0][:30]):
+                original = copy.deepcopy(saved_payload)
+                summary = shop._submission_summary({"id": "old", "payload": saved_payload})
+                self.assertEqual(summary["customer_name"], raw["fullname"])
+                self.assertEqual(summary["customer_email"], raw["email"])
+                self.assertEqual(summary["order_payload"]["payment"]["products"][0]["price"], "30")
+                self.assertEqual(order_identity(saved_payload), raw["order_id"])
+                self.assertEqual(order_number(saved_payload), "27")
+                self.assertFalse(can_auto_update_cdek(saved_payload))
+                self.assertEqual(saved_payload, original)
+                self.assertEqual(summary["payload"], original)
+        lead = {"Name": "Покупатель", "Email": "buyer@example.test", "data": {"email": "tracking@example.test"}}
+        self.assertIs(normalize_order_payload(lead), lead)
+
     def test_taplink_prices_options_shipping_and_identity(self):
         raw = taplink_order()
         before = copy.deepcopy(raw)
@@ -270,6 +295,44 @@ class WebhookTests(unittest.TestCase):
         self.assertIn("Сумма заказа: 30,00 RUB", body)
         self.assertIn("размер: S", body)
 
+    def test_wrapped_form_webhook_exposes_email_and_can_send_a_notification(self):
+        raw = taplink_order()
+        response = self.client.post("/tilda/shelwear/webhook", data={
+            "event": "order", "data": json.dumps(raw, ensure_ascii=False),
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["auto_actions"]["email_sent"])
+        submission = self.submissions()[0]
+        self.assertEqual(submission["customer_email"], raw["email"])
+        self.assertEqual(submission["order_payload"]["payment"]["products"][0]["price"], "30")
+        response = self.client.post("/tilda/shelwear/form/email/send?secret=test-only", json={
+            "submission_id": submission["id"], "message_type": "order_notification", "to_email": raw["email"],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.smtp.call_count, 2)
+        self.assertIn("№27", self.smtp.call_args.args[1])
+
+    def test_json_body_with_a_form_content_type_is_not_saved_as_a_form_key(self):
+        raw = taplink_order()
+        for index, content_type in enumerate(("application/x-www-form-urlencoded", "text/plain", "")):
+            with self.subTest(content_type=content_type):
+                body = {**raw, "order_id": f"mislabeled-{index}"}
+                response = self.client.post(
+                    "/tilda/shelwear/webhook", content=json.dumps(body, ensure_ascii=False).encode(),
+                    headers={"Content-Type": content_type},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()["auto_actions"]["email_sent"])
+                self.assertEqual(self.submissions()[-1]["payload"], body)
+
+    def test_dashboard_assets_are_versioned_and_responses_are_not_cached(self):
+        response = self.client.get("/tilda/shelwear/form?secret=test-only")
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(response.text, r'/static/js/tilda/form\.js\?v=[a-f0-9]+')
+        self.assertIn("no-store", response.headers["cache-control"])
+        response = self.client.get("/tilda/shelwear/form/submissions?secret=test-only")
+        self.assertIn("no-store", response.headers["cache-control"])
+
     def test_taplink_cdek_automatic_and_manual_number_changes(self):
         raw = taplink_order()
         raw["shipping_fields"] = {"shipping_method": "Доставка в ПВЗ СДЭК", "city": "Город"}
@@ -334,6 +397,7 @@ class DatabaseTests(unittest.TestCase):
         raw = taplink_order()
         self.assertEqual(self.save("one", raw), ("one", True))
         self.assertEqual(self.save("retry", raw), ("one", False))
+        self.assertEqual(self.save("wrapped-retry", {"data": json.dumps(raw)}), ("one", False))
         raw2 = {**raw, "order_id": "different-id"}
         self.assertEqual(self.save("two", raw2), ("two", True))
         storage._save_tilda_email_message("test-db", {

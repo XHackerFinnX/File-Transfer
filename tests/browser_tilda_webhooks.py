@@ -19,6 +19,19 @@ async def check(origin, chromium, artifacts=None):
             page = await context.new_page()
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
+            await context.request.post(origin + "/__test__/legacy-taplink")
+            await page.goto(origin + "/tilda/shelwear/form?secret=test-only")
+            await page.locator(".submission-card").wait_for()
+            await page.locator(".submission-header").click()
+            assert "30,00" in await page.locator("[data-products-sum]").inner_text()
+            assert "S" in await page.locator(".compact tbody tr").inner_text()
+            await page.locator("[data-email-modal]").click()
+            assert "buyer@example.test" in await page.locator(".email-modal").inner_text()
+            await page.locator("[data-email-send]").click()
+            await page.locator(".email-modal-backdrop").wait_for(state="detached")
+            await page.locator(".submission-header").click()
+            assert "История писем · 1" in await page.locator(".email-history summary").inner_text()
+            await context.request.post(origin + "/__test__/reset")
             raw = {
                 "fullname": "Тестовый Покупатель", "email": "buyer@example.test", "phone": "79000000000",
                 "order_id": "browser-one", "order_number": "27", "budget": "30", "shipping_price": "0",
@@ -27,9 +40,10 @@ async def check(origin, chromium, artifacts=None):
                             "amount": "1", "budget": "30", "options": ["Размер: S"]}],
                 "shipping_fields": json.dumps({"shipping_method": "Доставка Яндекс ПВЗ", "city": "Тестовый город", "addr1": "Тестовая улица, 1"}),
             }
-            response = await context.request.post(origin + "/tilda/shelwear/webhook", data=raw)
+            envelope = {"event": "order", "data": json.dumps(raw, ensure_ascii=False)}
+            response = await context.request.post(origin + "/tilda/shelwear/webhook", form=envelope)
             assert response.ok
-            response = await context.request.post(origin + "/tilda/shelwear/webhook", data=raw)
+            response = await context.request.post(origin + "/tilda/shelwear/webhook", form=envelope)
             assert (await response.json())["duplicate"]
             await page.goto(origin + "/tilda/shelwear/form?secret=test-only")
             await page.locator(".submission-card").wait_for()
@@ -106,7 +120,7 @@ async def check(origin, chromium, artifacts=None):
             assert "6\u00a0088,77" in await page.locator("[data-total-sum]").inner_text()
             assert "688,77" in await page.locator("[data-delivery-sum]").inner_text()
             assert not errors, errors
-            print("Browser: cards, discounted totals, zero prices, email, CDEK rename, search and CSV passed")
+            print("Browser: legacy Taplink envelopes, email buttons and sending, live form webhooks, totals, CDEK, search and CSV passed")
         finally:
             await browser.close()
 

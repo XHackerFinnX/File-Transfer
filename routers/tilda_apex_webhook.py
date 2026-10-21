@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -47,6 +48,12 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 TILDA_SITE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+FORM_ASSETS_VERSION = hashlib.sha256(b"".join(
+    (PROJECT_ROOT / "static" / relative).read_bytes()
+    for relative in ("js/tilda/form.js", "js/tilda/custom_filters.js",
+                     "css/tilda/form.css", "css/tilda/custom_filters.css")
+)).hexdigest()[:12]
+PRIVATE_FORM_HEADERS = {"Cache-Control": "private, no-store"}
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +237,7 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         payload = {}
     order_payload = normalize_order_payload(payload)
+    customer_email = str(_first_value(order_payload, ["Email", "email", "Почта"]) or "").strip().lower()
 
     customer_name = (
         order_payload.get("Name")
@@ -259,6 +267,7 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "created_at": submission.get("created_at", ""),
         "payload_type": submission.get("payload_type", ""),
         "customer_name": str(customer_name),
+        "customer_email": customer_email,
         "contact": str(contact),
         "payload": payload,
         "cookies": submission.get("cookies", {}),
@@ -267,10 +276,10 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "im_number": im_number,
         "email_messages": submission.get("email_messages") or [],
     }
-    if is_taplink_payload(payload):
+    if order_payload is not payload:
         summary.update({
             "order_payload": order_payload,
-            "order_source": "taplink",
+            "order_source": "taplink" if is_taplink_payload(payload) else "tilda",
             "external_order_id": order_identity(payload),
         })
     return summary
@@ -283,16 +292,17 @@ async def _extract_payload(request: Request) -> tuple[dict[str, Any], str]:
     if len(body) > MAX_BODY_BYTES:
         return {"_error": "payload_too_large", "size": len(body)}, "too_large"
 
-    if "application/json" in content_type:
+    decoded_body = body.decode("utf-8-sig", errors="replace")
+    if "application/json" in content_type or decoded_body.lstrip().startswith(("{", "[")):
         try:
-            parsed = json.loads(body.decode("utf-8") or "{}")
+            parsed = json.loads(decoded_body or "{}")
         except json.JSONDecodeError:
-            return {"_raw": body.decode("utf-8", errors="replace")}, "invalid_json"
-        if isinstance(parsed, dict):
-            return {
-                str(key): _json_safe(value) for key, value in parsed.items()
-            }, "json"
-        return {"value": _json_safe(parsed)}, "json"
+            if "application/json" in content_type:
+                return {"_raw": decoded_body}, "invalid_json"
+        else:
+            if isinstance(parsed, dict):
+                return {str(key): _json_safe(value) for key, value in parsed.items()}, "json"
+            return {"value": _json_safe(parsed)}, "json"
 
     if "application/x-www-form-urlencoded" in content_type or not content_type:
         parsed = parse_qs(
@@ -933,7 +943,8 @@ async def tilda_form_page(name: str, request: Request):
     return templates.TemplateResponse(
         request=request,
         name="tilda/form.html",
-        context={"site_name": site_name},
+        context={"site_name": site_name, "assets_version": FORM_ASSETS_VERSION},
+        headers=PRIVATE_FORM_HEADERS,
     )
 
 
@@ -946,7 +957,8 @@ async def tilda_form_submissions(name: str, request: Request):
             "ok": True,
             "site": site_name,
             "submissions": await _read_submissions(site_name),
-        }
+        },
+        headers=PRIVATE_FORM_HEADERS,
     )
 
 

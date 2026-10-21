@@ -3,12 +3,13 @@
 All storage, SMTP and CDEK calls use in-memory test doubles.
 """
 import json
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from tests.test_tilda_webhooks import MemoryOrders, shop
+from tests.test_tilda_webhooks import MemoryOrders, shop, taplink_order
 
 
 def create_app():
@@ -34,6 +35,17 @@ def create_app():
     async def reset():
         orders.rows.clear()
         orders.keys.clear()
+        return {"ok": True}
+
+    @app.post("/__test__/legacy-taplink")
+    async def legacy_taplink():
+        # Reproduce an envelope saved before nested Taplink data was decoded.
+        orders.rows["legacy-taplink"] = {
+            "id": "legacy-taplink", "site": "shelwear",
+            "created_at": datetime.now(timezone.utc).isoformat(), "payload_type": "form",
+            "payload": {"event": "order", "data": json.dumps(taplink_order(), ensure_ascii=False)},
+            "im_number": "", "email_messages": [],
+        }
         return {"ok": True}
 
     return app

@@ -513,7 +513,7 @@
                 firstValue(payload, ["Phone", "phone", "Телефон"]),
             );
             const email = stringifyValue(
-                firstValue(payload, ["Email", "email", "Почта"]),
+                firstValue(payload, ["Email", "email", "Почта"]) || submission.customer_email,
             ).toLowerCase();
             const delivery = deliveryInfo(payload, rawText);
             const orderId = stringifyValue(
@@ -941,12 +941,10 @@
     }
 
     function customerEmail(first, submission) {
-        const email =
-            first.email ||
-            submission.payload?.Email ||
-            submission.payload?.email ||
-            "";
-        return email && email !== "—" ? email : "";
+        return [first.email, submission.customer_email,
+            submission.order_payload?.Email, submission.payload?.Email, submission.payload?.email]
+            .map((value) => String(value || "").trim())
+            .find((value) => value.includes("@")) || "";
     }
 
     function emailStats(submission) {
@@ -1441,6 +1439,7 @@
                 `/tilda/${encodeURIComponent(siteName)}/form/submissions?${params}`,
                 {
                     headers: { Accept: "application/json" },
+                    cache: "no-store",
                 },
             );
             if (!response.ok)

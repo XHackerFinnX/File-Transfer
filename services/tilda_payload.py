@@ -23,9 +23,59 @@ def _structured(value: Any, expected: type) -> Any:
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             pass
     return value if isinstance(value, expected) else expected()
+
+
+def _object(value: Any) -> dict[str, Any]:
+    for _ in range(3):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, RecursionError):
+                return {}
+        elif isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        else:
+            break
+    return value if isinstance(value, dict) else {}
+
+
+def unpack_order_payload(payload: Any) -> dict[str, Any]:
+    """Find an order in provider envelopes and previously misparsed form bodies.
+
+    Taplink's ``data`` form field may contain a JSON string. Keep the stored
+    envelope intact; only consumers of order fields use this decoded view.
+    """
+    root = _object(payload)
+    candidates = [(root, 0)]
+    fallback = root
+    fallback_score = 0
+    for current, depth in candidates:
+        if any(key in current for key in ("offers", "payment", "Payment", "Оплата", "shipping_fields")):
+            return current
+        contact_score = sum(bool(current.get(key)) for key in (
+            "Name", "fullname", "Email", "email", "Phone", "phone",
+        ))
+        if contact_score > fallback_score:
+            fallback = current
+            fallback_score = contact_score
+        if depth >= 5 or len(candidates) >= 32:
+            continue
+        for key in ("data", "payload", "order", "body", "value", "_raw"):
+            nested = _object(current.get(key))
+            if nested:
+                candidates.append((nested, depth + 1))
+        # Older versions parsed a JSON body with a form Content-Type as one
+        # form field whose *name* was the complete JSON document.
+        if len(current) == 1:
+            key, value = next(iter(current.items()))
+            if value in (None, ""):
+                nested = _object(key)
+                if nested:
+                    candidates.append((nested, depth + 1))
+    return fallback
 
 
 def payment_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -33,6 +83,7 @@ def payment_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_taplink_payload(payload: dict[str, Any]) -> bool:
+    payload = unpack_order_payload(payload)
     return "offers" in payload or (
         "shipping_fields" in payload and any(
             key in payload for key in ("order_id", "order_number", "lead_id")
@@ -42,6 +93,7 @@ def is_taplink_payload(payload: dict[str, Any]) -> bool:
 
 def order_identity(payload: dict[str, Any]) -> str:
     """Stable identity for retries; never deduplicate Taplink by order_number."""
+    payload = unpack_order_payload(payload)
     payment = payment_payload(payload)
     if is_taplink_payload(payload):
         return str(first_value(payload, ["order_id", "lead_id"])).strip()
@@ -94,6 +146,7 @@ def _options(value: Any) -> list[dict[str, Any]]:
 
 def normalize_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a Tilda-compatible view, preserving the original input verbatim."""
+    payload = unpack_order_payload(payload)
     if not is_taplink_payload(payload):
         return payload
 

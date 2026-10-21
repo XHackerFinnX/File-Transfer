@@ -7,8 +7,8 @@
         <meta name="robots" content="noindex, nofollow" />
         <meta name="yandex-verification" content="7dc2a7a6a28ded74" />
         <title>Tilda {{ site_name }} — заявки и статистика</title>
-        <link rel="stylesheet" href="/static/css/tilda/form.css" />
-        <link rel="stylesheet" href="/static/css/tilda/custom_filters.css" />
+        <link rel="stylesheet" href="/static/css/tilda/form.css?v={{ assets_version }}" />
+        <link rel="stylesheet" href="/static/css/tilda/custom_filters.css?v={{ assets_version }}" />
     </head>
     <body>
         <main class="dashboard" data-site-name="{{ site_name }}">
@@ -216,7 +216,7 @@
                 ></div>
             </section>
         </main>
-        <script src="/static/js/tilda/form.js" defer></script>
-        <script src="/static/js/tilda/custom_filters.js" defer></script>
+        <script src="/static/js/tilda/form.js?v={{ assets_version }}" defer></script>
+        <script src="/static/js/tilda/custom_filters.js?v={{ assets_version }}" defer></script>
     </body>
 </html>
