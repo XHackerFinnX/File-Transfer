@@ -26,6 +26,7 @@ from email.mime.text import MIMEText
 from typing import Any
 
 from config import config
+from services.tilda_payload import normalize_order_payload, payment_payload
 
 import requests
 
@@ -140,9 +141,8 @@ def build_item_name(product: dict[str, Any]) -> str:
 
 
 def _payment(webhook_data: dict[str, Any]) -> dict[str, Any]:
-    payload = webhook_data.get("payload", {})
-    payment = payload.get("payment") or payload.get("Payment") or {}
-    return payment if isinstance(payment, dict) else {}
+    payload = normalize_order_payload(webhook_data.get("payload", webhook_data))
+    return payment_payload(payload)
 
 
 def cdek_order_number(order_id: str | int, prefix: str | None = None) -> str:
@@ -160,7 +160,8 @@ def cdek_order_number(order_id: str | int, prefix: str | None = None) -> str:
 def build_cdek_order_payload(
     webhook_data: dict[str, Any], account_name: str
 ) -> dict[str, Any]:
-    """Map the Tilda/Tinkoff payment webhook into POST /v2/orders payload."""
+    """Map a stored or raw Tilda/Taplink webhook into POST /v2/orders payload."""
+    payload = normalize_order_payload(webhook_data.get("payload", webhook_data))
     payment = _payment(webhook_data)
     products = (
         payment.get("products") if isinstance(payment.get("products"), list) else []
@@ -188,11 +189,12 @@ def build_cdek_order_payload(
         "recipient": {
             "name": webhook_data.get("customer_name")
             or payment.get("delivery_fio")
+            or payload.get("Name")
             or "",
             "phones": [
-                {"number": normalize_phone(str(webhook_data.get("contact") or ""))}
+                {"number": normalize_phone(str(payload.get("Phone") or webhook_data.get("contact") or ""))}
             ],
-            "email": webhook_data.get("payload", {}).get("Email"),
+            "email": payload.get("Email") or payload.get("email"),
         },
         "packages": [
             {

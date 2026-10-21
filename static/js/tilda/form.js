@@ -241,7 +241,7 @@
 
     function firstValue(payload, keys) {
         for (const key of keys) {
-            if (payload?.[key] !== undefined && payload[key] !== "")
+            if (payload?.[key] != null && payload[key] !== "")
                 return payload[key];
         }
         return "";
@@ -254,9 +254,15 @@
     }
 
     function paymentPayload(payload) {
-        return asObject(
-            payload?.payment || payload?.Payment || payload?.Оплата,
-        );
+        const value = payload?.payment || payload?.Payment || payload?.Оплата;
+        if (typeof value === "string") {
+            try {
+                return asObject(JSON.parse(value));
+            } catch {
+                return {};
+            }
+        }
+        return asObject(value);
     }
 
     function optionValue(product, optionNames) {
@@ -352,6 +358,7 @@
             pickupId: stringifyValue(payment.delivery_pickup_id || ""),
             deliveryFio: stringifyValue(payment.delivery_fio || ""),
             deliveryCity: stringifyValue(payment.delivery_city || ""),
+            deliveryRegion: stringifyValue(payment.delivery_region || ""),
             deliveryZip: stringifyValue(payment.delivery_zip || ""),
             deliveryComment: stringifyValue(payment.delivery_comment || ""),
         };
@@ -367,7 +374,9 @@
             payload?.items ||
             [];
         if (Array.isArray(productSource) && productSource.length) {
-            return productSource.map((product) => {
+            return productSource.filter(
+                (product) => product && typeof product === "object" && !Array.isArray(product),
+            ).map((product) => {
                 const productName = stringifyValue(
                     product.name ||
                         product.title ||
@@ -385,17 +394,14 @@
                     10,
                 );
                 const itemPrice = parseMoney(
-                    product.price ||
-                        product.item_price ||
-                        product["Цена"] ||
-                        product["Стоимость"],
+                    firstValue(product, ["price", "item_price", "Цена", "Стоимость"]),
                 );
-                const size = stringifyValue(
+                const size = String(
                     optionValue(product, ["Размер", "size", "Size"]) || "",
-                ).toUpperCase();
-                const colorName = stringifyValue(
+                ).trim().toUpperCase();
+                const colorName = String(
                     optionValue(product, ["Цвет", "color", "Color"]) || "",
-                );
+                ).trim();
                 return {
                     productName,
                     sku: stringifyValue(product.sku || ""),
@@ -404,6 +410,8 @@
                     ),
                     itemsCount: itemsCount || 1,
                     itemPrice,
+                    itemsSum: product.line_total != null && product.line_total !== ""
+                        ? parseMoney(product.line_total) : null,
                     size,
                     colorName,
                     productType:
@@ -470,7 +478,7 @@
 
     function normalizeRows(items) {
         return items.flatMap((submission) => {
-            const payload = submission.payload || {};
+            const payload = submission.order_payload || submission.payload || {};
             const rawText = [
                 payload.text,
                 payload.message,
@@ -483,18 +491,14 @@
             const paymentMatch = /Payment Amount:\s*([\d.,]+)\s*RUB/i.exec(
                 rawText,
             );
-            const orderSumTotal = parseMoney(
-                payment.amount ||
-                    firstValue(payload, [
-                        "payment_amount",
-                        "Payment Amount",
-                        "amount",
-                        "total",
-                        "sum",
-                        "Сумма",
-                    ]) ||
-                    paymentMatch?.[1],
-            );
+            const paymentTotal = firstValue(payment, ["amount"]);
+            const fallbackTotal = firstValue(payload, [
+                "payment_amount", "Payment Amount", "amount", "total", "sum", "Сумма",
+            ]);
+            const totalValue = paymentTotal !== "" ? paymentTotal
+                : fallbackTotal !== "" ? fallbackTotal : paymentMatch?.[1];
+            const orderSumTotal = totalValue == null || totalValue === ""
+                ? null : parseMoney(totalValue);
             const buyerName = stringifyValue(
                 firstValue(payload, [
                     "Name",
@@ -513,7 +517,8 @@
             ).toLowerCase();
             const delivery = deliveryInfo(payload, rawText);
             const orderId = stringifyValue(
-                payment.orderid || payment.order_id || "",
+                payment.orderid || payment.order_id ||
+                    firstValue(payload, ["orderid", "order_id", "Order ID", "Номер заказа"]),
             );
             const paymentSystem = stringifyValue(
                 payment.sys ||
@@ -547,6 +552,7 @@
                     phone,
                     email,
                     orderId,
+                    externalOrderId: submission.external_order_id || orderId,
                     imNumber:
                         submissionImNumber && submissionImNumber !== "—"
                             ? submissionImNumber
@@ -566,7 +572,7 @@
                     size: product.size || "Не указан",
                     itemsCount: product.itemsCount || 0,
                     itemPrice: product.itemPrice || 0,
-                    itemsSum:
+                    itemsSum: product.itemsSum ??
                         (product.itemsCount || 0) * (product.itemPrice || 0),
                     deliveryType: delivery.deliveryType,
                     deliverySum: delivery.deliverySum,
@@ -575,8 +581,10 @@
                     pickupId: delivery.pickupId,
                     deliveryFio: delivery.deliveryFio,
                     deliveryCity: delivery.deliveryCity,
+                    deliveryRegion: delivery.deliveryRegion,
                     deliveryZip: delivery.deliveryZip,
                     deliveryComment: delivery.deliveryComment,
+                    isCdek: /сд[еэ]к|cdek/i.test(delivery.deliveryText),
                     orderSumTotal,
                     socialNetwork: socialNetwork.key,
                     socialNetworkLabel: socialNetwork.label,
@@ -600,6 +608,7 @@
                     row.deliveryText,
                     row.deliveryAddress,
                     row.deliveryCity,
+                    row.deliveryRegion,
                     row.deliveryFio,
                     row.socialNetworkLabel,
                 ]
@@ -649,7 +658,7 @@
         });
         const orders = [...uniqueOrders.values()].map((order) => {
             const fallbackTotal = order.productsSum + order.deliverySum;
-            const total = order.orderSumTotal || fallbackTotal;
+            const total = order.orderSumTotal ?? fallbackTotal;
 
             // Если сумма товаров уже равна итоговой сумме,
             // значит доставка передана отдельно и из итога её вычитать не нужно.
@@ -720,7 +729,7 @@
                 stats.internationalOrders.add(row.submissionId);
                 stats.internationalBySize.set(row.size, item);
             }
-            if (row.deliveryType === "DELIVERY") {
+            if (row.isCdek) {
                 const item = stats.cdekBySize.get(row.size) || {
                     items: 0,
                     orders: new Set(),
@@ -869,7 +878,7 @@
     }
 
     function renderCustomerSection(submission, rows) {
-        const payload = submission.payload || {};
+        const payload = submission.order_payload || submission.payload || {};
         const first = rows[0] || {};
         return `<section class="pretty-section">
             <h3>Покупатель</h3>
@@ -895,10 +904,11 @@
                 ${renderKeyValue("Платёжная система", first.paymentSystem)}
                 ${renderKeyValue("Товары", fmtMoney(subtotal))}
                 ${renderKeyValue("Доставка", fmtMoney(first.deliverySum || 0))}
-                ${renderKeyValue("Итого", fmtMoney(first.orderSumTotal || subtotal + (first.deliverySum || 0)))}
+                ${renderKeyValue("Итого", fmtMoney(first.orderSumTotal ?? subtotal + (first.deliverySum || 0)))}
                 ${renderKeyValue("Тип доставки", first.deliveryText || (first.deliveryType === "PICKUP" ? "Самовывоз" : first.deliveryType === "INTERNATIONAL" ? "Международные заказы" : "Доставка"))}
                 ${renderKeyValue("ПВЗ", first.pickupId)}
                 ${renderKeyValue("Город", first.deliveryCity)}
+                ${renderKeyValue("Регион", first.deliveryRegion)}
                 ${renderKeyValue("Индекс", first.deliveryZip)}
                 ${renderKeyValue("Адрес", first.deliveryAddress)}
                 ${renderKeyValue("Комментарий", first.deliveryComment)}
@@ -1014,7 +1024,7 @@
                     <div class="email-preview">
                         <b>Данные для уведомления</b>
                         <span>Заказ: ${escapeHtml(first.orderId || submission.id)}</span>
-                        <span>Итого: ${escapeHtml(fmtMoney(first.orderSumTotal || subtotal + (first.deliverySum || 0)))}</span>
+                        <span>Итого: ${escapeHtml(fmtMoney(first.orderSumTotal ?? subtotal + (first.deliverySum || 0)))}</span>
                         <span>Доставка: ${escapeHtml(first.deliveryText || first.deliveryType || "Не указана")}, ${escapeHtml(fmtMoney(first.deliverySum || 0))}</span>
                     </div>
                     <div class="email-modal-actions">
@@ -1078,7 +1088,7 @@
                                 "",
                             order_id: first.orderId || submission.id,
                             order_sum: fmtMoney(
-                                first.orderSumTotal ||
+                                first.orderSumTotal ??
                                     subtotal + (first.deliverySum || 0),
                             ),
                             delivery_sum: fmtMoney(first.deliverySum || 0),
@@ -1160,7 +1170,7 @@
         const raw = JSON.stringify(submission, null, 2);
         const first = rows[0] || {};
         const orderSum =
-            first.orderSumTotal ||
+            first.orderSumTotal ??
             rows.reduce((sum, row) => sum + row.itemsSum, 0);
         const items = rows.reduce((sum, row) => sum + row.itemsCount, 0);
         const title =
@@ -1169,6 +1179,7 @@
         const email = customerEmail(first, submission);
         const orderId = first.orderId || "";
         const imNumber = first.imNumber || orderId;
+        const canChangeImNumber = imNumber && (submission.order_source !== "taplink" || first.isCdek);
         const isCustomImNumber = Boolean(
             orderId && imNumber && imNumber !== orderId,
         );
@@ -1196,7 +1207,7 @@
                             email || imNumber
                                 ? `<div class="submission-actions submission-body-actions">
                                 ${email ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
-                                ${imNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(orderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
+                                ${canChangeImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(first.externalOrderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
                             </div>`
                                 : ""
                         }
@@ -1378,6 +1389,8 @@
             "buyerName",
             "phone",
             "email",
+            "orderId",
+            "imNumber",
             "productName",
             "colorLabel",
             "productType",

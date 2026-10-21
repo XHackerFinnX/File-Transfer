@@ -10,31 +10,18 @@ from psycopg.types.json import Jsonb
 
 from db.connections import get_pool
 from db.schemas import TILDA_EMAIL_MESSAGES_TABLE, TILDA_SUBMISSIONS_TABLE
+from services.tilda_payload import order_identity, order_number
 
 
 def _extract_order_id(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    payment = (
-        payload.get("payment") or payload.get("Payment") or payload.get("Оплата") or {}
-    )
-    if not isinstance(payment, dict):
-        payment = {}
-    value = (
-        payment.get("orderid")
-        or payment.get("order_id")
-        or payload.get("orderid")
-        or payload.get("order_id")
-        or payload.get("Order ID")
-        or payload.get("Номер заказа")
-        or ""
-    )
-    return str(value).strip()
+    return order_identity(payload)
 
 
 def _webhook_key(payload: dict[str, Any]) -> str:
-    """Return a stable identity for retries of the same Tilda webhook."""
+    """Return a stable identity for retries of the same shop webhook."""
     order_id = _extract_order_id(payload)
     if order_id:
         return f"order:{order_id}"
@@ -77,7 +64,7 @@ def _save_tilda_submission(
         "cookies": Jsonb(submission.get("cookies", {})),
         "client": Jsonb(submission.get("client", {})),
         "headers": Jsonb(submission.get("headers", {})),
-        "im_number": _extract_order_id(submission.get("payload", {})),
+        "im_number": order_number(submission.get("payload", {})),
         "webhook_key": _webhook_key(submission.get("payload", {})),
     }
     
@@ -186,12 +173,19 @@ def _update_tilda_submission_im_number(
         WHERE site = %(site)s
           AND (
               (%(submission_id)s <> '' AND id = %(submission_id)s)
-              OR (payload #>> '{{payment,orderid}}' = %(order_id)s)
+              OR (%(submission_id)s = '' AND %(order_id)s <> '' AND (
+                 (payload #>> '{{payment,orderid}}' = %(order_id)s)
               OR (payload #>> '{{payment,order_id}}' = %(order_id)s)
+              OR (payload #>> '{{Payment,orderid}}' = %(order_id)s)
+              OR (payload #>> '{{Payment,order_id}}' = %(order_id)s)
+              OR (payload #>> '{{Оплата,orderid}}' = %(order_id)s)
+              OR (payload #>> '{{Оплата,order_id}}' = %(order_id)s)
               OR (payload ->> 'orderid' = %(order_id)s)
               OR (payload ->> 'order_id' = %(order_id)s)
               OR (payload ->> 'Order ID' = %(order_id)s)
               OR (payload ->> 'Номер заказа' = %(order_id)s)
+              OR (payload ->> 'lead_id' = %(order_id)s AND COALESCE(payload ->> 'order_id', '') = '')
+              ))
           )
     """
 

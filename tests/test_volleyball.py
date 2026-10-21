@@ -144,7 +144,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         env.update({"TURN_SECRET": "test-only", "POSTGRESQL_HOST": "127.0.0.1", "POSTGRESQL_USER": "test",
                     "POSTGRESQL_PASSWORD": "test-only", "SMTP_PASSWORD": "", "ALLOWED_ORIGINS": json.dumps([ORIGIN]),
                     "VOLLEYBALL_ENABLED": "true", "VOLLEYBALL_MAX_ROOMS": "1", "VOLLEYBALL_MAX_CONNECTIONS_PER_IP": "6"})
-        for suffix in ("", "_APEX", "_REAL_BABY", "_AMA_LIVING", "_WAYFS", "_FERALRU"):
+        for suffix in ("", "_APEX", "_REAL_BABY", "_AMA_LIVING", "_WAYFS", "_FERALRU", "_SHELWEAR"):
             env["POSTGRESQL_DATABASE"+suffix] = "unused_test_database"
         self.test_env = env
         with socket.socket() as sock:

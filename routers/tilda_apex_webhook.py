@@ -28,6 +28,16 @@ from services.tilda_cdek import (
     send_customer_email,
     update_cdek_order_number,
 )
+from services.tilda_payload import (
+    can_auto_update_cdek,
+    decimal_value,
+    first_value as _first_value,
+    is_taplink_payload,
+    normalize_order_payload,
+    order_identity,
+    order_number,
+    payment_payload as _payment_payload,
+)
 
 router = APIRouter()
 
@@ -219,26 +229,32 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
     payload = submission.get("payload")
     if not isinstance(payload, dict):
         payload = {}
+    order_payload = normalize_order_payload(payload)
 
     customer_name = (
-        payload.get("Name")
-        or payload.get("name")
-        or payload.get("Имя")
-        or payload.get("fio")
-        or payload.get("ФИО")
+        order_payload.get("Name")
+        or order_payload.get("name")
+        or order_payload.get("Имя")
+        or order_payload.get("fio")
+        or order_payload.get("ФИО")
         or "Без имени"
     )
     contact = (
-        payload.get("Phone")
-        or payload.get("phone")
-        or payload.get("Телефон")
-        or payload.get("Email")
-        or payload.get("email")
-        or payload.get("Почта")
+        order_payload.get("Phone")
+        or order_payload.get("phone")
+        or order_payload.get("Телефон")
+        or order_payload.get("Email")
+        or order_payload.get("email")
+        or order_payload.get("Почта")
         or ""
     )
 
-    return {
+    im_number = str(submission.get("im_number") or "")
+    if is_taplink_payload(payload) and im_number == order_identity(payload):
+        # Older rows were initialized with the technical Taplink order_id.
+        im_number = order_number(payload)
+
+    summary = {
         "id": submission.get("id", ""),
         "created_at": submission.get("created_at", ""),
         "payload_type": submission.get("payload_type", ""),
@@ -248,9 +264,16 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "cookies": submission.get("cookies", {}),
         "client": submission.get("client", {}),
         "headers": submission.get("headers", {}),
-        "im_number": str(submission.get("im_number") or ""),
+        "im_number": im_number,
         "email_messages": submission.get("email_messages") or [],
     }
+    if is_taplink_payload(payload):
+        summary.update({
+            "order_payload": order_payload,
+            "order_source": "taplink",
+            "external_order_id": order_identity(payload),
+        })
+    return summary
 
 
 async def _extract_payload(request: Request) -> tuple[dict[str, Any], str]:
@@ -335,14 +358,6 @@ async def _read_submissions(name: str) -> list[dict[str, Any]]:
     return [_submission_summary(submission) for submission in submissions]
 
 
-def _first_value(source: dict[str, Any], keys: list[str]) -> Any:
-    for key in keys:
-        value = source.get(key)
-        if value not in (None, ""):
-            return value
-    return ""
-
-
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -353,14 +368,6 @@ def _format_detail_value(value: Any) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False, indent=2)
     return str(value).strip()
-
-
-def _payment_payload(order_payload: dict[str, Any]) -> dict[str, Any]:
-    return _as_dict(
-        order_payload.get("payment")
-        or order_payload.get("Payment")
-        or order_payload.get("Оплата")
-    )
 
 
 def _option_value(product: dict[str, Any], names: list[str]) -> str:
@@ -381,7 +388,7 @@ def _option_value(product: dict[str, Any], names: list[str]) -> str:
 
 
 def _order_details_from_submission(submission: dict[str, Any] | None) -> dict[str, Any]:
-    order_payload = _as_dict((submission or {}).get("payload"))
+    order_payload = normalize_order_payload(_as_dict((submission or {}).get("payload")))
     payment = _payment_payload(order_payload)
     product_source = (
         payment.get("products")
@@ -447,6 +454,7 @@ def _order_details_from_submission(submission: dict[str, Any] | None) -> dict[st
             ),
             "address": _format_detail_value(payment.get("delivery_address")),
             "city": _format_detail_value(payment.get("delivery_city")),
+            "region": _format_detail_value(payment.get("delivery_region")),
             "zip": _format_detail_value(payment.get("delivery_zip")),
             "pickup_id": _format_detail_value(payment.get("delivery_pickup_id")),
             "fio": _format_detail_value(payment.get("delivery_fio")),
@@ -479,6 +487,18 @@ def _build_order_email(
     site_name: str,
     submission: dict[str, Any] | None = None,
 ) -> tuple[str, str, str]:
+    if submission:
+        defaults = _email_request_from_submission(
+            payload.submission_id,
+            {**_as_dict(submission.get("payload")), "Email": payload.to_email},
+            site_name,
+        )
+        if defaults:
+            payload = payload.model_copy(update={
+                key: getattr(defaults, key)
+                for key in ("customer_name", "order_id", "order_sum", "delivery_sum", "delivery_text")
+                if not getattr(payload, key)
+            })
     customer_name = (payload.customer_name or "покупатель").strip() or "покупатель"
     order_id = (payload.order_id or payload.submission_id).strip()
     order_sum = (payload.order_sum or "—").strip()
@@ -503,6 +523,7 @@ def _build_order_email(
                 "Способ": details["delivery"]["type"] or delivery_text,
                 "ФИО получателя": details["delivery"]["fio"],
                 "Город": details["delivery"]["city"],
+                "Регион": details["delivery"]["region"],
                 "Индекс": details["delivery"]["zip"],
                 "Адрес": details["delivery"]["address"],
                 "ПВЗ": details["delivery"]["pickup_id"],
@@ -555,6 +576,7 @@ def _build_order_email(
             _html_detail_row("Способ", details["delivery"]["type"] or delivery_text),
             _html_detail_row("ФИО получателя", details["delivery"]["fio"]),
             _html_detail_row("Город", details["delivery"]["city"]),
+            _html_detail_row("Регион", details["delivery"]["region"]),
             _html_detail_row("Индекс", details["delivery"]["zip"]),
             _html_detail_row("Адрес", details["delivery"]["address"]),
             _html_detail_row("ПВЗ", details["delivery"]["pickup_id"]),
@@ -609,27 +631,20 @@ def _build_order_email(
 def _money_text(value: Any) -> str:
     if value in (None, ""):
         return "—"
-    try:
-        amount = float(str(value).replace(" ", "").replace(",", "."))
-    except ValueError:
+    amount = decimal_value(value)
+    if amount is None:
         return str(value)
     return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + " RUB"
 
 
 def _order_id_from_payload(payload: dict[str, Any]) -> str:
-    payment = _payment_payload(payload)
-    return str(
-        payment.get("orderid")
-        or payment.get("order_id")
-        or payload.get("orderid")
-        or payload.get("order_id")
-        or ""
-    ).strip()
+    return order_number(payload)
 
 
 def _email_request_from_submission(
     submission_id: str, payload: dict[str, Any], site_name: str
 ) -> TildaEmailSendRequest | None:
+    payload = normalize_order_payload(payload)
     payment = _payment_payload(payload)
     to_email = (
         str(_first_value(payload, ["Email", "email", "Почта"]) or "").strip().lower()
@@ -646,12 +661,14 @@ def _email_request_from_submission(
         ),
         order_id=_order_id_from_payload(payload) or submission_id,
         order_sum=_money_text(
-            payment.get("amount")
-            or _first_value(payload, ["amount", "total", "sum", "Сумма"])
+            _first_value(payment, ["amount"])
+            if payment.get("amount") not in (None, "")
+            else _first_value(payload, ["amount", "total", "sum", "Сумма"])
         ),
         delivery_sum=_money_text(
-            payment.get("delivery_price")
-            or _first_value(payload, ["delivery_sum", "Стоимость доставки"])
+            _first_value(payment, ["delivery_price"])
+            if payment.get("delivery_price") not in (None, "")
+            else _first_value(payload, ["delivery_sum", "Стоимость доставки"])
         ),
         delivery_text=str(
             payment.get("delivery")
@@ -698,6 +715,8 @@ def _cdek_im_number_prefix(account_name: str) -> str:
 async def _auto_update_cdek_im_number(
     database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
 ) -> str | None:
+    if not can_auto_update_cdek(payload):
+        return None
     order_id = _order_id_from_payload(payload)
     if not order_id:
         return None
@@ -712,7 +731,7 @@ async def _auto_update_cdek_im_number(
         return None
     await asyncio.to_thread(update_cdek_order_number, order_uuid, new_im_number, token)
     await update_tilda_submission_im_number(
-        database_target, site_name, submission_id, order_id, new_im_number
+        database_target, site_name, submission_id, order_identity(payload), new_im_number
     )
     return new_im_number
 
