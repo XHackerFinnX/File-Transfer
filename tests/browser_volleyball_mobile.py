@@ -116,11 +116,11 @@ async def check(origin, chromium, artifacts=None):
             left = await host.locator('#tLeft').bounding_box()
             jump = await host.locator('#tJump').bounding_box()
             assert left['x'] < 852/2 < jump['x']
-            old_arrow=min(74,max(56,393*.18))
-            old_jump=min(88,max(68,393*.21))
-            assert abs(left['width']-old_arrow*1.5)<1,left
-            assert abs(left['height']-old_arrow*1.5)<1,left
-            assert abs(jump['width']-old_jump*1.5)<1,jump
+            expected_arrow=min(88,max(67,393*.21))
+            expected_jump=min(105,max(81,393*.25))
+            assert abs(left['width']-expected_arrow)<1,left
+            assert abs(left['height']-expected_arrow)<1,left
+            assert abs(jump['width']-expected_jump)<1,jump
             cdp = await contexts[0].new_cdp_session(host)
             def finger(identity, box):
                 return dict(id=identity, x=box['x']+box['width']/2, y=box['y']+box['height']/2, radiusX=5, radiusY=5)

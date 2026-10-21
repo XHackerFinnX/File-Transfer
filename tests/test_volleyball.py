@@ -156,19 +156,25 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
                 pass_fds=(sock.fileno(),), stdout=self.log, stderr=subprocess.STDOUT,
             )
         self.base, self.url, self.peers = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}/volleyball/ws", []
-        for _ in range(150):
+        # A cold Python import can exceed three seconds in the cloud workspace.
+        # Wait for actual readiness rather than a fixed count of quick refusals.
+        deadline = time.monotonic()+15
+        last_error = None
+        while time.monotonic() < deadline:
             try:
                 response = await asyncio.to_thread(urlopen, self.base+"/volleyball/healthz", timeout=.2)
                 response.close()
                 return
-            except (OSError, URLError):
+            except (OSError, URLError) as error:
+                last_error = repr(error)
                 if self.proc.poll() is not None:
                     self.log.seek(0)
                     self.fail(self.log.read())
-                await asyncio.sleep(.02)
+                await asyncio.sleep(.05)
         self.proc.terminate()
         await asyncio.to_thread(self.proc.wait, timeout=5)
-        self.fail("Game startup timed out")
+        self.log.seek(0)
+        self.fail(f"Game startup timed out: {last_error}\n"+self.log.read())
 
     async def asyncTearDown(self):
         for peer in self.peers:
@@ -335,6 +341,12 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
             with urlopen(self.base+"/volleyball/online/assets/"+quote(entry["file"])) as response:
                 self.assertEqual(response.headers["Content-Type"], "image/png")
                 self.assertEqual(response.read(8), b"\x89PNG\r\n\x1a\n")
+            with urlopen(self.base+"/volleyball/online/"+entry["thumbnail"]) as response:
+                self.assertEqual(response.headers["Content-Type"], "image/webp")
+                signature=response.read(12)
+                self.assertEqual(signature[:4], b"RIFF")
+                self.assertEqual(signature[8:], b"WEBP")
+                self.assertLess(int(response.headers["Content-Length"]), 30000)
         for path in ("assets/missing.png", "assets/../config.py", "assets/.env", "assets/%2e%2e/%2e%2e/config.py"):
             with self.assertRaises(HTTPError) as err:
                 urlopen(self.base+"/volleyball/online/"+path)
@@ -374,7 +386,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
     async def test_public_assets_and_private_file_denial(self):
         for path in ["/volleyball/online/", "/volleyball/online", "/volleyball/online/config.js", "/volleyball/online/online.js",
                      "/volleyball/online/online.css", "/volleyball/online/mobile.css", "/volleyball/online/shared/prediction.js",
-                     "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js", "/volleyball/online/shared/snapshots.js"]:
+                     "/volleyball/online/shared/physics.js", "/volleyball/online/shared/settings.js", "/volleyball/online/shared/snapshots.js", "/volleyball/online/shared/balls.js"]:
             with urlopen(self.base+path) as response:
                 self.assertEqual(response.status, 200)
                 body = response.read().decode()

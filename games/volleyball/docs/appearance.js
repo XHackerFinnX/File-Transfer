@@ -15,11 +15,68 @@ function toHex({h,s,v}){
   return '#'+rgb.map(value=>Math.round((value+m)*255).toString(16).padStart(2,'0')).join('');
 }
 
+let activeChoiceMenu=null;
+function choiceMenu(trigger,menu,thumbnail,onChoose,onPreview){
+  let options=[],selected=null;
+  const close=(focus=false)=>{
+    menu.hidden=true;trigger.setAttribute('aria-expanded','false');
+    if(activeChoiceMenu===api)activeChoiceMenu=null;
+    if(focus)trigger.focus({preventScroll:true});
+  };
+  const open=()=>{
+    if(activeChoiceMenu&&activeChoiceMenu!==api)activeChoiceMenu.close();
+    activeChoiceMenu=api;menu.hidden=false;trigger.setAttribute('aria-expanded','true');
+    menu.firstElementChild?.scrollIntoView({block:'nearest'});
+  };
+  function setValue(id){
+    const option=options.find(item=>item.id===id);if(!option)return;
+    selected=id;trigger.value=id;
+    trigger.querySelector('.appearance-selected-name').textContent=option.label;
+    const current=trigger.querySelector('.appearance-current-thumbnail');
+    current.classList.remove('notebook-sample');current.replaceChildren(thumbnail(option));
+    for(const row of menu.children){
+      const chosen=row.dataset.id===id;row.dataset.selected=String(chosen);
+      row.querySelector('.appearance-choice-name').setAttribute('aria-pressed',String(chosen));
+    }
+  }
+  function setOptions(next){
+    options=next;menu.replaceChildren();
+    for(const option of options){
+      const row=document.createElement('div');row.className='appearance-choice';row.dataset.id=option.id;
+      const preview=document.createElement('button');preview.type='button';preview.className='appearance-thumbnail-button';
+      preview.setAttribute('aria-label','Предпросмотр: '+option.label);preview.setAttribute('aria-haspopup','dialog');
+      preview.append(thumbnail(option));preview.addEventListener('click',()=>onPreview(option,preview));
+      const name=document.createElement('button');name.type='button';name.className='appearance-choice-name';
+      name.dataset.choice=option.id;name.textContent=option.label;
+      name.addEventListener('click',()=>{close(true);onChoose(option.id);});
+      row.append(preview,name);menu.append(row);
+    }
+    setValue(selected||trigger.value);
+  }
+  trigger.addEventListener('click',()=>menu.hidden?open():close());
+  trigger.addEventListener('keydown',event=>{
+    if(event.key==='ArrowDown'){event.preventDefault();open();menu.querySelector('.appearance-choice-name')?.focus();}
+    if(event.key==='Escape'&&!menu.hidden){event.preventDefault();event.stopPropagation();close(true);}
+  });
+  menu.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);return;}
+    if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;
+    const buttons=[...menu.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);
+    const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:index+(event.key==='ArrowDown'?1:-1);
+    event.preventDefault();buttons[(next+buttons.length)%buttons.length]?.focus();
+  });
+  document.addEventListener('pointerdown',event=>{
+    if(!menu.hidden&&!document.querySelector('dialog[open]')&&!menu.contains(event.target)&&!trigger.contains(event.target))close();
+  });
+  const api={setOptions,setValue,close};return api;
+}
+
 export function createAppearance(bridge,chooseColor){
   let saved={};try{saved=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
   const prefs={color:validColor(saved.color)?saved.color:null,
     customColor:typeof saved.customColor==='string'&&/^#[0-9a-f]{6}$/i.test(saved.customColor)?saved.customColor:'#663399',
-    background:typeof saved.background==='string'?saved.background:'paper',showStats:saved.showStats!==false};
+    background:typeof saved.background==='string'?saved.background:'paper',showStats:saved.showStats!==false,
+    ballDesign:VolleyBalls.designs.some(design=>design.id===saved.ballDesign)?saved.ballDesign:'classic'};
   const store=()=>{try{localStorage.setItem(key,JSON.stringify(prefs));return true;}catch{return false;}};
   const button=$('customColorButton'),dialog=$('customColorDialog'),picker=$('customColorPicker'),hex=$('customColorHex');
   const panel=$('colorPalettePanel'),palette=$('colorPalette'),marker=$('colorPaletteMarker'),hue=$('customColorHue');
@@ -100,8 +157,43 @@ export function createAppearance(bridge,chooseColor){
   showStats(prefs.showStats);
   $('toggleStatsButton').addEventListener('click',()=>{prefs.showStats=!prefs.showStats;showStats(prefs.showStats);store();});
 
-  const select=$('backgroundSelect'),note=$('backgroundStatus');
-  let generation=0,selected='paper',catalog=[];
+  const note=$('backgroundStatus'),previewDialog=$('appearancePreviewDialog'),previewContent=$('appearancePreviewContent');
+  const previewNote=$('appearancePreviewStatus');
+  let previewGeneration=0,previewReturn=null;
+  function preview(option,source,kind){
+    const current=++previewGeneration;previewReturn=source;
+    $('appearancePreviewTitle').textContent=option.label;previewNote.textContent='';previewContent.replaceChildren();
+    if(kind==='ball'){
+      const canvas=document.createElement('canvas');canvas.width=canvas.height=400;canvas.className='appearance-preview-ball';
+      canvas.setAttribute('aria-label',option.label);VolleyBalls.render(canvas,option.id);previewContent.append(canvas);
+    }else if(option.id==='paper'){
+      const paper=document.createElement('div');paper.className='notebook-sample appearance-preview-paper';previewContent.append(paper);
+    }else{
+      const image=new Image();image.alt=option.label;image.decoding='async';previewNote.textContent='Загружаем предпросмотр…';
+      image.onload=()=>{if(current===previewGeneration)previewNote.textContent='';};
+      image.onerror=()=>{if(current===previewGeneration)previewNote.textContent='Не удалось загрузить изображение. Закройте предпросмотр и попробуйте ещё раз.';};
+      image.src='./assets/'+encodeURIComponent(option.file);previewContent.append(image);
+    }
+    if(!previewDialog.open)previewDialog.showModal();$('closeAppearancePreview').focus();
+  }
+  $('closeAppearancePreview').addEventListener('click',()=>previewDialog.close());
+  previewDialog.addEventListener('close',()=>{
+    previewGeneration++;previewContent.replaceChildren();previewNote.textContent='';
+    if(previewReturn?.getClientRects().length)previewReturn.focus({preventScroll:true});
+  });
+  previewDialog.addEventListener('click',event=>{
+    const box=previewDialog.getBoundingClientRect();
+    if(event.target===previewDialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom))previewDialog.close();
+  });
+  function backgroundThumbnail(option){
+    if(option.id==='paper'){const paper=document.createElement('span');paper.className='notebook-sample';return paper;}
+    const image=new Image();image.alt='';image.loading='lazy';image.decoding='async';
+    image.src=option.thumbnail?'./'+option.thumbnail:'./assets/'+encodeURIComponent(option.file);return image;
+  }
+  const backgroundMenu=choiceMenu($('backgroundSelect'),$('backgroundMenu'),backgroundThumbnail,setBackground,
+    (option,source)=>preview(option,source,'background'));
+  backgroundMenu.setOptions([{id:'paper',label:'Обычная тетрадь'}]);
+  let generation=0,catalog=[];
   async function setBackground(id){
     const current=++generation,entry=catalog.find(item=>item.id===id);
     if(id!=='paper'&&!entry)return;
@@ -110,18 +202,28 @@ export function createAppearance(bridge,chooseColor){
     try{
       if(entry){image=new Image();image.decoding='async';image.src='./assets/'+encodeURIComponent(entry.file);await image.decode();}
     }catch{
-      if(current===generation){select.value=selected;note.textContent='Не удалось загрузить фон. Выберите его ещё раз.';}
+      if(current===generation)note.textContent='Не удалось загрузить фон. Выберите его ещё раз.';
       return;
     }
     if(current!==generation)return;
-    bridge.background(image);selected=id;prefs.background=id;select.value=id;
-    note.textContent=store()?'Фон виден только вам и сохранён в этом браузере.':'Фон виден только вам. Браузер не разрешил сохранить выбор после закрытия страницы.';
+    bridge.background(image);prefs.background=id;backgroundMenu.setValue(id);
+    note.textContent=store()?'Картинка — предпросмотр, название — выбор. Фон сохранён только у вас.':'Фон виден только вам. Браузер не разрешил сохранить выбор после закрытия страницы.';
   }
-  select.addEventListener('change',()=>setBackground(select.value));
   fetch('./backgrounds.json').then(response=>{if(!response.ok)throw Error();return response.json();}).then(entries=>{
     catalog=entries;
-    for(const entry of catalog){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.label;select.append(option);}
+    backgroundMenu.setOptions([{id:'paper',label:'Обычная тетрадь'},...catalog]);
     return setBackground(catalog.some(entry=>entry.id===prefs.background)?prefs.background:'paper');
   }).catch(()=>{note.textContent='Список фонов недоступен. Обновите страницу, чтобы попробовать ещё раз.';});
+  function ballThumbnail(option){
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=96;canvas.setAttribute('aria-hidden','true');
+    VolleyBalls.render(canvas,option.id);return canvas;
+  }
+  function chooseBall(id){
+    bridge.ballDesign(id);prefs.ballDesign=id;ballMenu.setValue(id);
+    $('ballStatus').textContent=store()?'Дизайн сохранён только у вас. Размер и физика мяча не меняются.':'Дизайн выбран. Браузер не разрешил сохранить его после закрытия страницы.';
+  }
+  const ballMenu=choiceMenu($('ballSelect'),$('ballMenu'),ballThumbnail,chooseBall,
+    (option,source)=>preview(option,source,'ball'));
+  ballMenu.setOptions(VolleyBalls.designs);ballMenu.setValue(prefs.ballDesign);bridge.ballDesign(prefs.ballDesign);
   return {preferredColor:fallback=>validColor(prefs.color)?prefs.color:fallback,syncColor};
 }

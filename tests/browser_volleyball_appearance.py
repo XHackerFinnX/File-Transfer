@@ -49,7 +49,9 @@ NET_CHECK = r"""async expected => {
 
 
 async def background(page, value):
-    await page.locator('#backgroundSelect').select_option(value)
+    if await page.locator('#backgroundSelect').get_attribute('aria-expanded')!='true':
+        await page.locator('#backgroundSelect').click()
+    await page.locator('#backgroundMenu .appearance-choice-name[data-choice="'+value+'"]').click()
     await page.wait_for_function('''id => JSON.parse(localStorage.getItem('volley.appearance.v1')).background === id
         && (id === 'paper' ? backgroundImage === null : backgroundImage?.complete)''', arg=value)
 
@@ -61,6 +63,70 @@ async def color(page, value):
     assert await page.locator('#customColorPicker').evaluate('el => el.value') == value.lower()
     await page.locator('#customColorForm button[type=submit]').click()
     await page.wait_for_function('() => !document.getElementById("customColorDialog").open')
+
+
+async def choose_ball(page, value):
+    if await page.locator('#ballSelect').get_attribute('aria-expanded')!='true':
+        await page.locator('#ballSelect').click()
+    await page.locator('#ballMenu .appearance-choice-name[data-choice="'+value+'"]').click()
+    await page.wait_for_function('id => ballDesign===id',arg=value)
+
+
+async def check_visual_menus(host,guest,artifacts):
+    await host.locator('#backgroundSelect').click()
+    thumbnail=host.locator('#backgroundMenu [data-id="beach"] .appearance-thumbnail-button')
+    await thumbnail.scroll_into_view_if_needed()
+    await host.wait_for_function('''() => {
+        const image=document.querySelector('#backgroundMenu [data-id="beach"] img');
+        return image.complete&&image.naturalWidth===240;
+    }''')
+    if artifacts:
+        await host.screenshot(path=str(artifacts/'background-thumbnail-menu.png'))
+    await thumbnail.click()
+    await host.wait_for_function('''() => {
+        const image=document.querySelector('#appearancePreviewContent img');
+        return document.getElementById('appearancePreviewDialog').open&&image?.complete&&image.naturalWidth>1000;
+    }''')
+    assert await host.locator('#backgroundSelect').evaluate('el => el.value')=='paper'
+    assert await host.evaluate('backgroundImage===null')
+    assert await guest.evaluate('backgroundImage===null')
+    if artifacts:
+        await host.screenshot(path=str(artifacts/'background-preview.png'))
+    await host.locator('#closeAppearancePreview').click()
+    assert await host.locator('#backgroundMenu').is_visible()
+    assert await thumbnail.evaluate('el => document.activeElement===el')
+    await thumbnail.click();await host.keyboard.press('Escape')
+    assert not await host.locator('#appearancePreviewDialog').is_visible()
+    assert await host.locator('#backgroundSelect').evaluate('el => el.value')=='paper'
+    await background(host,'beach')
+    assert await host.locator('#backgroundMenu').is_hidden()
+    assert await host.locator('#backgroundSelectedName').inner_text()=='Пляж с пальмами'
+    assert await guest.evaluate('backgroundImage===null')
+    await background(host,'paper')
+    await host.locator('#ballSelect').click()
+    assert await host.locator('#ballMenu .appearance-choice').count()==6
+    await host.locator('#ballMenu [data-id="neon"] .appearance-thumbnail-button').click()
+    assert await host.locator('#appearancePreviewContent canvas').is_visible()
+    assert await host.evaluate('ballDesign')=='classic'
+    await host.locator('#closeAppearancePreview').click()
+    state=await host.evaluate('JSON.stringify({ball,settings:appSettings})')
+    sprites=set()
+    for design in ('classic','match','beach','basketball','football','neon'):
+        await choose_ball(host,design)
+        sprites.add(await host.evaluate('ballCanvas.toDataURL()'))
+        assert await host.evaluate('JSON.stringify({ball,settings:appSettings})')==state
+        assert await guest.evaluate('ballDesign')=='classic'
+    assert len(sprites)==6
+    await choose_ball(guest,'basketball')
+    assert await host.evaluate('ballDesign')=='neon'
+    sprite=await host.evaluate('ballCanvas.toDataURL()')
+    await host.evaluate('resize()')
+    assert await host.evaluate('ballCanvas.toDataURL()')==sprite
+    if artifacts:
+        await host.locator('#ballSelect').click()
+        await host.screenshot(path=str(artifacts/'ball-design-menu.png'))
+        await host.keyboard.press('Escape')
+    print('PASS visual menus: thumbnail opens/escapes preview without selecting; name selects; six distinct ball designs preserve physics and stay private')
 
 
 async def check_palette(host,guest,contexts,artifacts):
@@ -117,7 +183,7 @@ async def check(origin, chromium, artifacts=None):
                 page.on('pageerror',lambda error:errors.append(str(error)))
                 page.on('websocket',lambda ws:ws.on('framesent',lambda raw:frames.append(json.loads(raw))))
                 await page.goto(origin+'/volleyball/online/')
-                await page.wait_for_function('() => document.querySelectorAll("#backgroundSelect option").length===8')
+                await page.wait_for_function('() => document.querySelectorAll("#backgroundMenu .appearance-choice").length===8')
             await host.evaluate(NET_CHECK,expected)
             print('PASS net: Python/JS agree; small-ball player pushes, local game, extrapolation and cap interpolation')
             await host.locator('#createRoomButton').click()
@@ -126,6 +192,7 @@ async def check(origin, chromium, artifacts=None):
             await guest.locator('#joinCode').fill(code);await guest.locator('#joinRoomButton').click()
             await host.wait_for_function("() => !document.getElementById('hostStartButton').disabled")
             frame_count=len(frames)
+            await check_visual_menus(host,guest,artifacts)
             # Decode every supplied image; restore the original and choose two
             # different backgrounds without sending match settings to the peer.
             for value in ('blue','pencil','doodles','sea','beach','lined','forest','paper','beach'):
@@ -158,7 +225,9 @@ async def check(origin, chromium, artifacts=None):
             assert await host.evaluate('document.body.dataset.stats')=='visible'
             await guest.reload()
             await guest.wait_for_function("() => onlineMode && playersArr[1].color==='#f59e0b' && backgroundImage?.complete")
-            assert await guest.locator('#backgroundSelect').input_value()=='forest'
+            assert await guest.locator('#backgroundSelect').evaluate('el => el.value')=='forest'
+            assert await guest.evaluate('ballDesign')=='basketball'
+            assert await host.evaluate('ballDesign')=='neon'
             assert await guest.evaluate('document.body.dataset.stats')=='hidden'
             assert await guest.locator('#toggleStatsButton').inner_text()=='ПОКАЗАТЬ ПИНГ И FPS'
             await host.wait_for_function("() => !document.getElementById('hostStartButton').disabled")
@@ -181,8 +250,10 @@ async def check(origin, chromium, artifacts=None):
             await guest.locator('#joinRoomButton').click()
             for page in (host,guest):
                 await page.wait_for_function("() => onlineMode && playersArr[0].color==='#12abcd' && playersArr[1].color==='#f59e0b'")
-            assert await host.locator('#backgroundSelect').input_value()=='beach'
-            assert await guest.locator('#backgroundSelect').input_value()=='forest'
+            assert await host.locator('#backgroundSelect').evaluate('el => el.value')=='beach'
+            assert await guest.locator('#backgroundSelect').evaluate('el => el.value')=='forest'
+            assert await guest.locator('#ballSelect').evaluate('el => el.value')=='basketball'
+            assert await host.locator('#ballSelect').evaluate('el => el.value')=='neon'
             assert await guest.evaluate('document.body.dataset.stats')=='hidden'
             await guest.locator('#toggleStatsButton').click()
             assert await guest.evaluate('document.body.dataset.stats')=='visible'

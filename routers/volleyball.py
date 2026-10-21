@@ -8,7 +8,7 @@ from security import normalize_allowed_origins, websocket_origin_allowed
 from services.volleyball import GAME_ROOT, volleyball_server
 
 router = APIRouter(prefix="/volleyball", tags=["volleyball"])
-PUBLIC_FILES = {"index.html", "config.js", "online.js", "appearance.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js", "shared/snapshots.js", "shared/net.js"}
+PUBLIC_FILES = {"index.html", "config.js", "online.js", "appearance.js", "online.css", "mobile.css", "shared/settings.js", "shared/physics.js", "shared/prediction.js", "shared/snapshots.js", "shared/net.js", "shared/balls.js"}
 BACKGROUNDS = [
     {"id": "blue", "label": "Синие волейбольные каракули", "file": "Синие волейбольные каракули на полях-1.png"},
     {"id": "pencil", "label": "Карандашные зарисовки", "file": "Карандашные волейбольные зарисовки на полях-2.png"},
@@ -19,6 +19,9 @@ BACKGROUNDS = [
     {"id": "forest", "label": "Лесная поляна", "file": "Графитовая поляна среди деревьев-7.png"},
 ]
 BACKGROUND_FILES = {"assets/"+item["file"] for item in BACKGROUNDS}
+for background in BACKGROUNDS:
+    background["thumbnail"] = "assets/thumbnails/"+background["id"]+".webp"
+BACKGROUND_FILES.update(item["thumbnail"] for item in BACKGROUNDS)
 
 
 @router.get("/healthz")
