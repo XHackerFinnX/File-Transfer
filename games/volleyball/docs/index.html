@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="./online.css">
 <script src="./config.js"></script>
 <script src="./shared/net.js"></script>
+<script src="./shared/balls.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VOLLEY IO</title>
 
@@ -419,13 +420,29 @@ html, body { touch-action: manipulation; }
     <p id="roomStatus" class="online-connect-status" role="status" aria-live="polite">Ожидаем второго игрока</p>
     <div class="room-players"><section class="room-player"><canvas id="onlinePlayer1" width="90" height="90" aria-label="Первый игрок"></canvas><div><strong id="onlineName1">Хозяин · слева</strong><p id="onlineStatus1">Подключён</p></div></section><section class="room-player"><canvas id="onlinePlayer2" width="90" height="90" aria-label="Второй игрок"></canvas><div><strong id="onlineName2">Гость · справа</strong><p id="onlineStatus2">Свободное место</p></div></section></div>
     <section class="room-colors"><h2>ТВОЙ ЦВЕТ</h2><div class="color-options"><div id="ownColors" class="color-options" role="group" aria-label="Выбор своего цвета"></div><button type="button" id="customColorButton" class="small-button custom-color-button" aria-haspopup="dialog" aria-controls="customColorDialog" aria-pressed="false"><span class="custom-color-chip" aria-hidden="true"></span>СВОЙ ЦВЕТ</button></div><p id="colorStatus" class="appearance-note" role="status"></p></section>
-    <section class="room-appearance"><h2><label for="backgroundSelect">ТВОЙ ФОН</label></h2><select id="backgroundSelect" aria-describedby="backgroundStatus"><option value="paper">Обычная тетрадь</option></select><p id="backgroundStatus" class="appearance-note" role="status">Фон виден только вам и сохраняется в этом браузере.</p></section>
+    <section class="room-appearance">
+      <h2 id="backgroundHeading">ТВОЙ ФОН</h2>
+      <button type="button" id="backgroundSelect" class="appearance-select" value="paper" aria-expanded="false" aria-controls="backgroundMenu" aria-labelledby="backgroundHeading backgroundSelectedName" aria-describedby="backgroundStatus"><span class="appearance-current-thumbnail notebook-sample" aria-hidden="true"></span><span id="backgroundSelectedName" class="appearance-selected-name">Обычная тетрадь</span><span aria-hidden="true">▾</span></button>
+      <div id="backgroundMenu" class="appearance-menu" role="group" aria-label="Выбор фона" hidden></div>
+      <p id="backgroundStatus" class="appearance-note" role="status">Картинка — предпросмотр, название — выбор. Фон виден только вам.</p>
+    </section>
+    <section class="room-appearance">
+      <h2 id="ballHeading">ТВОЙ МЯЧ</h2>
+      <button type="button" id="ballSelect" class="appearance-select" value="classic" aria-expanded="false" aria-controls="ballMenu" aria-labelledby="ballHeading ballSelectedName" aria-describedby="ballStatus"><span class="appearance-current-thumbnail" aria-hidden="true"></span><span id="ballSelectedName" class="appearance-selected-name">Классический</span><span aria-hidden="true">▾</span></button>
+      <div id="ballMenu" class="appearance-menu" role="group" aria-label="Выбор дизайна мяча" hidden></div>
+      <p id="ballStatus" class="appearance-note" role="status">Меняется только внешний вид мяча на вашем экране.</p>
+    </section>
     <section class="room-settings-summary"><div class="room-section-heading"><h2>ПАРАМЕТРЫ МАТЧА</h2><button type="button" class="small-button" id="hostSettingsButton" hidden>ИЗМЕНИТЬ</button></div><p id="guestSettingsNote" hidden>Параметры задаёт хозяин комнаты. Ты можешь выбрать свой цвет.</p><dl id="roomSettingsSummary"></dl></section>
     <div class="room-action-row"><button type="button" class="liquid-btn online-primary" id="hostStartButton" hidden>НАЧАТЬ МАТЧ</button><button type="button" class="small-button" id="returnToMatch" hidden>ВЕРНУТЬСЯ В МАТЧ</button><button type="button" class="small-button" id="hostPauseButton" hidden>ПАУЗА</button><button type="button" class="small-button" id="toggleStatsButton" aria-pressed="true">СКРЫТЬ ПИНГ И FPS</button></div>
     <footer class="room-footer"><button type="button" class="text-button" id="leaveRoomButton">Покинуть комнату</button><button type="button" class="text-button" id="kickGuestButton" hidden>Освободить место гостя</button><span id="roomPing">—</span></footer>
   </main>
 </div>
 <div id="onlineToast" class="online-toast" role="status" aria-live="polite" hidden></div>
+<dialog id="appearancePreviewDialog" class="appearance-preview-dialog" aria-labelledby="appearancePreviewTitle">
+  <header class="appearance-preview-heading"><h2 id="appearancePreviewTitle">ПРЕДПРОСМОТР</h2><button type="button" id="closeAppearancePreview" class="small-button" aria-label="Закрыть предпросмотр">ЗАКРЫТЬ ×</button></header>
+  <p id="appearancePreviewStatus" class="appearance-note" role="status"></p>
+  <div id="appearancePreviewContent"></div>
+</dialog>
 <dialog id="customColorDialog" class="color-dialog" aria-labelledby="customColorTitle">
   <form id="customColorForm">
     <h2 id="customColorTitle">СВОЙ ЦВЕТ</h2>
@@ -658,7 +675,7 @@ const pressedCodes = new Set();
 const touchPointers = new Map();
 const touchKeys = { a:false, d:false, w:false, s:false };
 let onlineKeyboardMask = 0, onlineHudKey = "";
-let onlinePlayerSkins = [null,null], backgroundImage = null;
+let onlinePlayerSkins = [null,null], backgroundImage = null, ballDesign = 'classic';
 
         const TWO_PI = Math.PI * 2;
         const HALF_PI = Math.PI * 0.5;
@@ -993,7 +1010,7 @@ let onlinePlayerSkins = [null,null], backgroundImage = null;
         });
         document.addEventListener('click', (e) => { if (!selectWrapper.contains(e.target)) optionsContainer.classList.remove('open'); });
 
-        const ballCanvas = document.createElement('canvas'); const bCtx = ballCanvas.getContext('2d');
+        const ballCanvas = document.createElement('canvas');
         // Повышено качество рендеринга мяча для поддержки высокого DPI
         let BALL_RENDER_SIZE = 150;
 
@@ -1001,19 +1018,7 @@ let onlinePlayerSkins = [null,null], backgroundImage = null;
             let dpr = window.devicePixelRatio || 1;
             BALL_RENDER_SIZE = 100 * Math.ceil(dpr);
             ballCanvas.width = BALL_RENDER_SIZE; ballCanvas.height = BALL_RENDER_SIZE;
-            bCtx.clearRect(0, 0, BALL_RENDER_SIZE, BALL_RENDER_SIZE);
-
-            bCtx.save();
-            bCtx.scale(BALL_RENDER_SIZE / 100, BALL_RENDER_SIZE / 100);
-            let r = 42; let cx = 50; let cy = 50;
-            bCtx.translate(cx, cy);
-
-            bCtx.lineWidth = 6; bCtx.strokeStyle = '#000'; bCtx.fillStyle = '#fff';
-            bCtx.beginPath(); bCtx.arc(0, 0, r, 0, TWO_PI); bCtx.fill(); bCtx.stroke();
-            bCtx.beginPath(); bCtx.moveTo(-r, 0); bCtx.quadraticCurveTo(0, -r / 2, r, 0); bCtx.stroke();
-            bCtx.beginPath(); bCtx.moveTo(-r * 0.7, -r * 0.7); bCtx.quadraticCurveTo(0, r / 2, r * 0.7, -r * 0.7); bCtx.stroke();
-            bCtx.beginPath(); bCtx.moveTo(-r * 0.7, r * 0.7); bCtx.quadraticCurveTo(0, r / 2, r * 0.7, r * 0.7); bCtx.stroke();
-            bCtx.restore();
+            VolleyBalls.render(ballCanvas,ballDesign);
         }
         preRenderBall();
 
@@ -2022,8 +2027,9 @@ function advanceOnlineEffects(dt) {
 window.VolleyBridge = {
   hooks:onlineHooks,
   isOnline:()=>onlineMode,
-  isSettingsOpen:()=>settingsOpen||document.getElementById('customColorDialog').open,
+  isSettingsOpen:()=>settingsOpen||document.getElementById('customColorDialog').open||document.getElementById('appearancePreviewDialog').open,
   background(image){backgroundImage=image;bgCanvas.width=0;},
+  ballDesign(id){if(VolleyBalls.designs.some(design=>design.id===id)){ballDesign=id;preRenderBall();}},
   arenaView:()=>({...hostArenaView}),
   input:()=>({left:keys.a,right:keys.d,jump:keys.w,down:keys.s}),
   setInput(mask){onlineKeyboardMask=mask;applyOnlineInput();},
@@ -2033,6 +2039,7 @@ window.VolleyBridge = {
   closeSettings,
   local(){
     document.getElementById('customColorDialog').close();
+    document.getElementById('appearancePreviewDialog').close();
     onlineArenaView=null;
     onlineMode=false;document.body.classList.remove('online-mode');document.getElementById('btnAgain').style.display='block';document.getElementById('btnContinueAd').style.display='block';document.getElementById('touchControls').classList.remove('visible');
     appSettings=normalizeSettings(readLocalSave().settings);WIN_SCORE=appSettings.winScore;isGameStarted=false;isGameOver=false;isPaused=false;
