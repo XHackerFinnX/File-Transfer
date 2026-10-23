@@ -12,8 +12,7 @@ from routers import (
     tilda_apex_webhook_router,
 )
 from config import config
-from db.connections import close_database_pools, open_database_pools
-from db.schemas import create_tilda_submissions_schema
+from routers.tilda_apex_webhook import tilda_storage_lifespan
 from security import normalize_allowed_origins, extract_origin_from_url
 from routers.volleyball import router as volleyball_router
 from services.volleyball import volleyball_lifespan
@@ -31,23 +30,9 @@ def ignore_windows_disconnect_noise(loop, context):
 async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(ignore_windows_disconnect_noise)
-    tilda_database_targets = {
-        config.TILDA_APEX_DATABASE_TARGET,
-        config.TILDA_REAL_BABY_DATABASE_TARGET,
-        config.TILDA_AMA_LIVING_DATABASE_TARGET,
-        config.TILDA_WAYFS_DATABASE_TARGET,
-        config.TILDA_FERALRU_DATABASE_TARGET,
-        config.TILDA_SHELWEAR_DATABASE_TARGET
-    }
-    await asyncio.to_thread(open_database_pools, *tilda_database_targets)
-    for database_target in tilda_database_targets:
-        await create_tilda_submissions_schema(database_target)
-
-    try:
+    async with tilda_storage_lifespan():
         async with volleyball_lifespan():
             yield
-    finally:
-        await asyncio.to_thread(close_database_pools)
 
 app = FastAPI(
     title="P2P Chat & File Transfer",

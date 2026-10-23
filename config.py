@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     TILDA_FERALRU_DATABASE_TARGET: str = "feralru"
     TILDA_SHELWEAR_DATABASE_TARGET: str = "shelwear"
     POSTGRESQL_SSLMODE: str = "disable"
+    POSTGRESQL_POOL_TIMEOUT_SECONDS: float = Field(default=3, gt=0, le=30)
+    POSTGRESQL_CONNECT_TIMEOUT_SECONDS: int = Field(default=5, ge=1, le=30)
+    POSTGRESQL_STATEMENT_TIMEOUT_MS: int = Field(default=10000, ge=100, le=120000)
+    TILDA_QUEUE_PATH: str = "var/tilda-outbox.sqlite3"
     
     SMTP_PASSWORD: SecretStr
     

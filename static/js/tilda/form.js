@@ -55,6 +55,8 @@
     let visibleRows = [];
     let currentPage = 1;
     let pageSize = 10;
+    let databaseAvailable = true;
+    let pendingCount = 0;
 
     const colorRules = [
         ["white", "Белые", /(^|[^а-яё])бел[а-яё]*/i],
@@ -1175,9 +1177,10 @@
             first.buyerName || submission.customer_name || "Без имени";
 
         const email = customerEmail(first, submission);
+        const queued = submission.storage_status === "queued";
         const orderId = first.orderId || "";
         const imNumber = first.imNumber || orderId;
-        const canChangeImNumber = imNumber && (submission.order_source !== "taplink" || first.isCdek);
+        const canChangeImNumber = !queued && imNumber && (submission.order_source !== "taplink" || first.isCdek);
         const isCustomImNumber = Boolean(
             orderId && imNumber && imNumber !== orderId,
         );
@@ -1193,6 +1196,7 @@
                                 <span class="badge warning">${escapeHtml(fmtInt(items))} шт</span>
                                 ${first.socialNetworkLabel ? `<span class="badge social-badge" data-social-icon="${escapeHtml(first.socialNetworkIcon)}">${escapeHtml(first.socialNetworkLabel)}</span>` : ""}
                                 ${renderEmailBadges(submission)}
+                                ${queued ? '<span class="badge warning">Сохранён локально · ожидает БД</span>' : ""}
                                 ${imNumber ? `<span class="badge ${isCustomImNumber ? "im-custom" : ""}">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                             </div>
                         </div>
@@ -1204,7 +1208,7 @@
                         ${
                             email || imNumber
                                 ? `<div class="submission-actions submission-body-actions">
-                                ${email ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
+                                ${email && !queued ? `<button class="action-button" type="button" data-email-modal data-submission-id="${escapeHtml(submission.id)}">Написать на почту</button>` : ""}
                                 ${canChangeImNumber ? `<button class="action-button" type="button" data-change-im-number data-current-im-number="${escapeHtml(imNumber)}" data-default-im-number="${escapeHtml(imNumber)}" data-order-id="${escapeHtml(first.externalOrderId)}" data-submission-id="${escapeHtml(submission.id)}">Изменить Номер ИМ</button>` : ""}
                             </div>`
                                 : ""
@@ -1357,6 +1361,8 @@
         renderStats(visibleRows);
         visibleCount.textContent = `${fmtInt(visibleSubmissions.length)} заявок / ${fmtInt(visibleRows.length)} строк товаров`;
         status.textContent = `Показано: ${fmtInt(visibleSubmissions.length)} заявок, ${fmtInt(visibleRows.length)} товарных строк`;
+        if (!databaseAvailable) status.textContent += ". БД недоступна: показаны заказы из локальной очереди.";
+        if (pendingCount) status.textContent += ` Ожидают записи в БД: ${fmtInt(pendingCount)}. Повторная попытка каждую минуту.`;
         list.innerHTML = paginatedSubmissions.length
             ? paginatedSubmissions.map(renderSubmission).join("")
             : '<div class="empty-state">Заявок пока нет или ничего не найдено.</div>';
@@ -1449,6 +1455,8 @@
                         : `HTTP ${response.status}`,
                 );
             const data = await response.json();
+            databaseAvailable = data.database_available !== false;
+            pendingCount = Number(data.pending_count) || 0;
             submissions = Array.isArray(data.submissions)
                 ? data.submissions
                 : [];

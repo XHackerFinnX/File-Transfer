@@ -4,3 +4,4 @@ docker-compose.yml
 turnserver.conf
 test
 .env
+var/

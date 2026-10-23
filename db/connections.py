@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from typing import Mapping
+from threading import RLock
 from urllib.parse import quote_plus
 
 from psycopg_pool import ConnectionPool
@@ -61,6 +62,7 @@ def _configured_database_targets() -> Mapping[str, DatabaseTarget]:
 DATABASE_TARGETS: Mapping[str, DatabaseTarget] = _configured_database_targets()
 
 _pools: dict[str, ConnectionPool] = {}
+_pools_lock = RLock()
 
 
 def get_database_target(name: str) -> DatabaseTarget:
@@ -76,23 +78,29 @@ def get_database_target(name: str) -> DatabaseTarget:
 
 def get_pool(name: str = "default") -> ConnectionPool:
     target = get_database_target(name)
-    pool = _pools.get(target.name)
-    if pool is None:
-        pool = ConnectionPool(
-            target.dsn,
-            open=False,
-            check=ConnectionPool.check_connection,
-        )
-        _pools[target.name] = pool
-    return pool
+    with _pools_lock:
+        pool = _pools.get(target.name)
+        if pool is None or pool.closed:
+            pool = ConnectionPool(
+                target.dsn, open=True, min_size=0, max_size=4, max_waiting=20,
+                timeout=config.POSTGRESQL_POOL_TIMEOUT_SECONDS,
+                kwargs={
+                    "connect_timeout": config.POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
+                    "options": f"-c statement_timeout={config.POSTGRESQL_STATEMENT_TIMEOUT_MS} -c lock_timeout=3000",
+                },
+                check=ConnectionPool.check_connection,
+            )
+            _pools[target.name] = pool
+        return pool
 
 
-def open_database_pools(*names: str) -> None:
+def open_database_pools(*names: str, wait: bool = False) -> None:
     for name in names:
-        get_pool(name).open(wait=True)
+        get_pool(name).open(wait=wait)
 
 
 def close_database_pools() -> None:
-    for pool in _pools.values():
-        pool.close()
-    _pools.clear()
+    with _pools_lock:
+        for pool in _pools.values():
+            pool.close()
+        _pools.clear()

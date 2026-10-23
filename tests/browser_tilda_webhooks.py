@@ -119,8 +119,26 @@ async def check(origin, chromium, artifacts=None):
             await page.locator(".submission-card").wait_for()
             assert "6\u00a0088,77" in await page.locator("[data-total-sum]").inner_text()
             assert "688,77" in await page.locator("[data-delivery-sum]").inner_text()
+            await context.request.post(origin + "/__test__/database/down")
+            offline_order = {**raw, "order_id": "browser-offline", "order_number": "30"}
+            response = await context.request.post(origin + "/tilda/shelwear/webhook", data=offline_order)
+            assert response.ok and (await response.json())["queued"]
+            await page.goto(origin + "/tilda/shelwear/form?secret=test-only")
+            await page.locator(".submission-card").wait_for()
+            assert "БД недоступна" in await page.locator("[data-status]").inner_text()
+            assert "Сохранён локально" in await page.locator(".submission-meta").inner_text()
+            await page.locator(".submission-header").click()
+            assert await page.locator("[data-email-modal]").count() == 0
+            if artifacts:
+                await page.screenshot(path=str(artifacts / "orders-database-outage.png"), full_page=True)
+            await context.request.post(origin + "/__test__/database/recover")
+            await page.locator("[data-refresh]").click()
+            await page.wait_for_function("document.querySelectorAll('.submission-card').length === 4")
+            assert "БД недоступна" not in await page.locator("[data-status]").inner_text()
+            assert await page.locator(".submission-card").count() == 4
+            assert "Сохранён локально" not in await page.locator("[data-submissions]").inner_text()
             assert not errors, errors
-            print("Browser: legacy Taplink envelopes, email buttons and sending, live form webhooks, totals, CDEK, search and CSV passed")
+            print("Browser: Taplink/Tilda, email, CDEK, local queue during database outage and automatic replay passed")
         finally:
             await browser.close()
 

@@ -1,16 +1,15 @@
 import asyncio
-import hashlib
-import json
 from datetime import datetime
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import PoolClosed, PoolTimeout, TooManyRequests
 
 from db.connections import get_pool
 from db.schemas import TILDA_EMAIL_MESSAGES_TABLE, TILDA_SUBMISSIONS_TABLE
-from services.tilda_payload import order_identity, order_number
+from services.tilda_payload import order_identity, order_number, webhook_key as _webhook_key
 
 
 def _extract_order_id(payload: dict[str, Any]) -> str:
@@ -20,23 +19,14 @@ def _extract_order_id(payload: dict[str, Any]) -> str:
     return order_identity(payload)
 
 
-def _webhook_key(payload: dict[str, Any]) -> str:
-    """Return a stable identity for retries of the same shop webhook."""
-    order_id = _extract_order_id(payload)
-    if order_id:
-        return f"order:{order_id}"
-    canonical_payload = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-    )
-    return f"payload:{hashlib.sha256(canonical_payload.encode('utf-8')).hexdigest()}"
-
-
 def _with_database_retry(database_name: str, operation):
     """Run a database operation and retry once if the pooled connection is stale."""
     pool = get_pool(database_name)
     try:
         with pool.connection() as conn:
             return operation(conn)
+    except (PoolTimeout, PoolClosed, TooManyRequests):
+        raise
     except (psycopg.OperationalError, psycopg.InterfaceError):
         pool.check()
         with pool.connection() as conn:
@@ -230,6 +220,7 @@ def _save_tilda_email_message(
             %(id)s, %(submission_id)s, %(site)s, %(created_at)s, %(message_type)s,
             %(to_email)s, %(subject)s, %(body)s, %(body_html)s, %(status)s
         )
+        ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
         RETURNING id, submission_id, site, created_at, message_type, to_email, subject, body, status
     """
 

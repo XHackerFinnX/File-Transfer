@@ -4,7 +4,10 @@ import html
 import json
 import logging
 import re
+import sqlite3
+import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from config import config
+from db.connections import close_database_pools, open_database_pools
+from db.errors import DATABASE_ERRORS, database_error_code
+from db.schemas import create_tilda_submissions_schema
 from db.tilda_orders import (
     read_tilda_submissions,
     save_tilda_email_message,
@@ -38,7 +44,9 @@ from services.tilda_payload import (
     order_identity,
     order_number,
     payment_payload as _payment_payload,
+    webhook_key,
 )
+from services.tilda_outbox import Delivery, LeaseLost, TildaOutbox
 
 router = APIRouter()
 
@@ -74,6 +82,8 @@ if not WEBHOOK_LOGGER.handlers:
 
 def _short_webhook_error(exc: Exception) -> str:
     """Короткое описание ошибки без traceback и длинного URL."""
+    if isinstance(exc, DATABASE_ERRORS):
+        return database_error_code(exc)
     response = getattr(exc, "response", None)
     status_code = getattr(response, "status_code", None)
     reason = str(getattr(response, "reason", "") or "").strip()
@@ -275,6 +285,9 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "headers": submission.get("headers", {}),
         "im_number": im_number,
         "email_messages": submission.get("email_messages") or [],
+        "storage_status": submission.get("storage_status", "database"),
+        "queue_attempts": submission.get("queue_attempts", 0),
+        "queue_error": submission.get("queue_error", ""),
     }
     if order_payload is not payload:
         summary.update({
@@ -357,15 +370,43 @@ async def _save_submission(
             if key.lower() not in {"authorization"}
         },
     }
-    return await save_tilda_submission(_database_target_or_404(name), meta)
+    outbox = _get_tilda_outbox()
+    await outbox.initialize()
+    return await outbox.enqueue(_database_target_or_404(name), meta)
 
 
 async def _read_submissions(name: str) -> list[dict[str, Any]]:
-    submissions = await read_tilda_submissions(
-        _database_target_or_404(name),
-        _site_name_or_404(name),
-    )
-    return [_submission_summary(submission) for submission in submissions]
+    submissions, _, _ = await _read_submission_state(name)
+    return submissions
+
+
+async def _read_submission_state(name):
+    target, site = _database_target_or_404(name), _site_name_or_404(name)
+    outbox = _get_tilda_outbox()
+    await outbox.initialize()
+    available = outbox.blocked_until.get(target, 0) <= time.time()
+    submissions = []
+    if available:
+        try:
+            submissions = await read_tilda_submissions(target, site)
+        except DATABASE_ERRORS as exc:
+            available = False
+            outbox.blocked_until[target] = time.time() + outbox.retry_seconds
+            outbox.ready.discard(target)
+            outbox._wake.set()
+            _log_webhook(logging.WARNING, site, "", "БД недоступна: показываем локальную очередь",
+                         error=_short_webhook_error(exc))
+    pending = await outbox.pending_submissions(target, site)
+    indexed = {webhook_key(row.get("payload", {})): row for row in submissions}
+    for row in pending:
+        key = webhook_key(row.get("payload", {}))
+        if key in indexed:
+            indexed[key] = {**indexed[key], "storage_status": "queued",
+                            "queue_attempts": row["queue_attempts"], "queue_error": row["queue_error"]}
+        else:
+            indexed[key] = row
+    result = sorted(indexed.values(), key=lambda row: str(row.get("created_at", "")), reverse=True)
+    return [_submission_summary(row) for row in result], available, len(pending)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -689,17 +730,31 @@ def _email_request_from_submission(
 
 
 async def _send_order_notification_for_submission(
-    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any],
+    delivery: Delivery | None = None,
 ) -> dict[str, Any] | None:
+    action = delivery.state.setdefault("email", {}) if delivery else {}
+    if action.get("status") in {"failed", "unknown", "skipped"}:
+        return None
+    if action.get("status") == "saved":
+        return action["message"]
+    if action.get("status") == "sending":
+        action["status"] = "unknown"
+        await delivery.checkpoint()
+        _log_webhook(logging.ERROR, site_name, submission_id,
+                     "Исход SMTP после перезапуска неизвестен: автоматический повтор письма пропущен",
+                     submission_id=submission_id)
+        return None
     email_payload = _email_request_from_submission(submission_id, payload, site_name)
     if not email_payload:
+        if delivery:
+            action["status"] = "skipped"
+            await delivery.checkpoint()
         return None
-    submission = {"id": submission_id, "payload": payload}
-    subject, body, body_html = _build_order_email(email_payload, site_name, submission)
-    await asyncio.to_thread(send_customer_email, email_payload.to_email, subject, body, body_html)
-    return await save_tilda_email_message(
-        database_target,
-        {
+    if action.get("status") != "sent":
+        submission = {"id": submission_id, "payload": payload}
+        subject, body, body_html = _build_order_email(email_payload, site_name, submission)
+        action["message"] = {
             "id": f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}",
             "submission_id": submission_id,
             "site": site_name,
@@ -710,8 +765,25 @@ async def _send_order_notification_for_submission(
             "body": body,
             "body_html": body_html,
             "status": "sent",
-        },
-    )
+        }
+        if delivery:
+            action["status"] = "sending"
+            await delivery.checkpoint()
+        try:
+            await asyncio.to_thread(send_customer_email, email_payload.to_email, subject, body, body_html)
+        except Exception:
+            if delivery:
+                action["status"] = "failed"
+                await delivery.checkpoint()
+            raise
+        if delivery:
+            action["status"] = "sent"
+            await delivery.checkpoint()
+    message = await save_tilda_email_message(database_target, action["message"])
+    if delivery:
+        action["status"] = "saved"
+        await delivery.checkpoint()
+    return message
 
 
 def _cdek_im_number_prefix(account_name: str) -> str:
@@ -723,26 +795,46 @@ def _cdek_im_number_prefix(account_name: str) -> str:
 
 
 async def _auto_update_cdek_im_number(
-    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any]
+    database_target: str, site_name: str, submission_id: str, payload: dict[str, Any],
+    delivery: Delivery | None = None,
 ) -> str | None:
     if not can_auto_update_cdek(payload):
         return None
     order_id = _order_id_from_payload(payload)
     if not order_id:
         return None
-    cdek_account = _cdek_account_or_404(site_name)
-    new_im_number = f"{_cdek_im_number_prefix(cdek_account)}{order_id}"
-    if new_im_number == order_id:
+    action = delivery.state.setdefault("cdek", {}) if delivery else {}
+    if action.get("status") == "failed":
         return None
-    token = await asyncio.to_thread(cdek_get_token, cdek_account)
-    order = await asyncio.to_thread(find_cdek_order, order_id, token, by="im_number")
-    order_uuid = str(order.get("uuid") or "")
-    if not order_uuid:
-        return None
-    await asyncio.to_thread(update_cdek_order_number, order_uuid, new_im_number, token)
+    if action.get("status") == "saved":
+        return action["number"]
+    if action.get("status") != "updated":
+        cdek_account = _cdek_account_or_404(site_name)
+        new_im_number = action.get("number") or f"{_cdek_im_number_prefix(cdek_account)}{order_id}"
+        if new_im_number == order_id:
+            return None
+        token = await asyncio.to_thread(cdek_get_token, cdek_account)
+        order_uuid = action.get("uuid", "")
+        if not order_uuid:
+            order = await asyncio.to_thread(find_cdek_order, order_id, token, by="im_number")
+            order_uuid = str(order.get("uuid") or "")
+        if not order_uuid:
+            return None
+        action.update(status="updating", uuid=order_uuid, number=new_im_number)
+        if delivery:
+            await delivery.checkpoint()
+        await asyncio.to_thread(update_cdek_order_number, order_uuid, new_im_number, token)
+        if delivery:
+            action["status"] = "updated"
+            delivery.state["im_number"] = new_im_number
+            await delivery.checkpoint()
+    new_im_number = action["number"]
     await update_tilda_submission_im_number(
         database_target, site_name, submission_id, order_identity(payload), new_im_number
     )
+    if delivery:
+        action["status"] = "saved"
+        await delivery.checkpoint()
     return new_im_number
 
 
@@ -755,6 +847,38 @@ def _build_custom_email(payload: TildaEmailSendRequest) -> tuple[str, str, str]:
         + "</div>"
     )
     return subject, body, body_html
+
+
+_tilda_outbox: TildaOutbox | None = None
+
+
+def _get_tilda_outbox() -> TildaOutbox:
+    global _tilda_outbox
+    if _tilda_outbox is None:
+        _tilda_outbox = TildaOutbox(config.TILDA_QUEUE_PATH, _deliver_queued_submission,
+                                  prepare=create_tilda_submissions_schema)
+    return _tilda_outbox
+
+
+@asynccontextmanager
+async def tilda_storage_lifespan():
+    global _tilda_outbox
+    targets = {config.TILDA_APEX_DATABASE_TARGET, config.TILDA_REAL_BABY_DATABASE_TARGET,
+               config.TILDA_AMA_LIVING_DATABASE_TARGET, config.TILDA_WAYFS_DATABASE_TARGET,
+               config.TILDA_FERALRU_DATABASE_TARGET, config.TILDA_SHELWEAR_DATABASE_TARGET}
+    if config.TILDA_PROJECTS_JSON.strip():
+        targets.update(_project_config_maps()[1].values())
+    outbox = _get_tilda_outbox()
+    try:
+        # Opening min_size=0 pools starts no blocking connection checks.
+        await asyncio.to_thread(open_database_pools, *targets, wait=False)
+        await outbox.start(targets)
+        yield
+    finally:
+        await outbox.stop()
+        await asyncio.to_thread(close_database_pools)
+        if _tilda_outbox is outbox:
+            _tilda_outbox = None
 
 
 @router.options("/tilda/{name}/webhook")
@@ -810,55 +934,49 @@ async def tilda_webhook(name: str, request: Request):
             {"ok": True, "site": site_name, "message": "Tilda webhook test received"}
         )
 
-    database_target = _database_target_or_404(site_name)
-
+    _database_target_or_404(site_name)
     try:
-        submission_id, created = await _save_submission(
-            site_name, request, payload, payload_type
-        )
+        submission_id, created = await _save_submission(site_name, request, payload, payload_type)
+        result = await _get_tilda_outbox().process(submission_id)
     except Exception as exc:
-        _log_webhook(
-            logging.ERROR,
-            name,
-            trace_id,
-            "Ошибка сохранения заказа",
-            order_id=order_id,
-            error=_short_webhook_error(exc),
-        )
-        raise
-
+        _log_webhook(logging.ERROR, name, trace_id,
+                     "Не удалось подтвердить локальное хранение заказа: отправителю нужно повторить webhook",
+                     order_id=order_id, error=type(exc).__name__)
+        return JSONResponse({"ok": False, "error": "local_storage_unavailable"},
+                            status_code=503, headers={"Retry-After": "60"})
     if not created:
-        _log_webhook(
-            logging.INFO,
-            name,
-            trace_id,
-            "Повторный webhook: заказ уже существует",
-            order_id=order_id,
-            submission_id=submission_id,
-        )
-        return JSONResponse(
-            {
-                "ok": True,
-                "site": site_name,
-                "submission_id": submission_id,
-                "duplicate": True,
-            }
-        )
+        result = {**result, "duplicate": True}
+    if result.get("queued"):
+        _log_webhook(logging.WARNING, name, trace_id,
+                     "Заказ принят и сохранён локально, ожидает записи в БД; повторная попытка через 60 секунд",
+                     order_id=order_id, submission_id=submission_id)
+    return JSONResponse(result)
 
-    _log_webhook(
-        logging.INFO,
-        name,
-        trace_id,
-        "Заказ сохранён",
-        order_id=order_id,
-        submission_id=submission_id,
-    )
+
+async def _deliver_queued_submission(item: Delivery) -> dict[str, Any]:
+    database_target = item.target
+    site_name = name = item.submission["site"]
+    payload = item.submission["payload"]
+    trace_id = item.id
+    order_id = _order_id_from_payload(payload)
+    if "database_id" not in item.state:
+        saved_id, created = await save_tilda_submission(database_target, item.submission)
+        # A commit may have succeeded before a connection dropped or the process
+        # stopped. An existing row with our original ID is still this delivery.
+        item.state.update(database_id=saved_id, owned=created or saved_id == item.id)
+        await item.checkpoint()
+    submission_id = item.state["database_id"]
+    if not item.state["owned"]:
+        return {"ok": True, "site": site_name, "submission_id": submission_id,
+                "duplicate": True, "queued": False, "storage": "database"}
+    _log_webhook(logging.INFO, name, trace_id, "Заказ подтверждён в БД",
+                 order_id=order_id, submission_id=submission_id)
 
     auto_actions: dict[str, Any] = {"email_sent": False, "im_number_updated": False}
 
     try:
         email_message = await _send_order_notification_for_submission(
-            database_target, site_name, submission_id, payload
+            database_target, site_name, submission_id, payload, delivery=item
         )
         auto_actions["email_sent"] = bool(email_message)
 
@@ -869,13 +987,17 @@ async def tilda_webhook(name: str, request: Request):
             (
                 "Письмо клиенту отправлено"
                 if email_message
-                else "Письмо клиенту пропущено: email не указан"
+                else "Автоматическое письмо не отправлено: " + item.state.get("email", {}).get("status", "skipped")
             ),
             order_id=order_id,
             submission_id=submission_id,
         )
+    except (*DATABASE_ERRORS, sqlite3.Error, LeaseLost):
+        raise
     except Exception as exc:
-        auto_actions["email_error"] = str(exc)
+        item.state["email"]["error"] = type(exc).__name__
+        await item.checkpoint()
+        auto_actions["email_error"] = _short_webhook_error(exc)
         _log_webhook(
             logging.ERROR,
             name,
@@ -888,7 +1010,7 @@ async def tilda_webhook(name: str, request: Request):
 
     try:
         new_im_number = await _auto_update_cdek_im_number(
-            database_target, site_name, submission_id, payload
+            database_target, site_name, submission_id, payload, delivery=item
         )
         auto_actions["im_number_updated"] = bool(new_im_number)
 
@@ -906,8 +1028,12 @@ async def tilda_webhook(name: str, request: Request):
             order_id=order_id,
             submission_id=submission_id,
         )
+    except (*DATABASE_ERRORS, sqlite3.Error, LeaseLost):
+        raise
     except Exception as exc:
-        auto_actions["im_number_error"] = str(exc)
+        item.state.setdefault("cdek", {}).update(status="failed", error=type(exc).__name__)
+        await item.checkpoint()
+        auto_actions["im_number_error"] = _short_webhook_error(exc)
         _log_webhook(
             logging.ERROR,
             name,
@@ -927,14 +1053,11 @@ async def tilda_webhook(name: str, request: Request):
         submission_id=submission_id,
     )
 
-    return JSONResponse(
-        {
-            "ok": True,
-            "site": site_name,
-            "submission_id": submission_id,
-            "auto_actions": auto_actions,
-        }
-    )
+    if item.state.get("email", {}).get("status") in {"unknown", "failed"}:
+        auto_actions["email_status"] = item.state["email"]["status"]
+    return {"ok": True, "site": site_name, "submission_id": submission_id,
+            "auto_actions": auto_actions, "queued": False, "storage": "database"}
+
 
 @router.get("/tilda/{name}/form", response_class=HTMLResponse)
 async def tilda_form_page(name: str, request: Request):
@@ -952,11 +1075,19 @@ async def tilda_form_page(name: str, request: Request):
 async def tilda_form_submissions(name: str, request: Request):
     site_name = _site_name_or_404(name)
     _form_secret_or_403(site_name, request)
+    try:
+        submissions, available, pending = await _read_submission_state(site_name)
+    except (sqlite3.Error, OSError) as exc:
+        _log_webhook(logging.ERROR, site_name, "", "Локальная очередь недоступна", error=type(exc).__name__)
+        return JSONResponse({"ok": False, "error": "local_storage_unavailable"}, status_code=503,
+                            headers={**PRIVATE_FORM_HEADERS, "Retry-After": "60"})
     return JSONResponse(
         {
             "ok": True,
             "site": site_name,
-            "submissions": await _read_submissions(site_name),
+            "submissions": submissions,
+            "database_available": available,
+            "pending_count": pending,
         },
         headers=PRIVATE_FORM_HEADERS,
     )
@@ -978,15 +1109,19 @@ async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendR
         return JSONResponse(
             {"ok": False, "error": "valid_email_required"}, status_code=400
         )
+    try:
+        rows, available, _ = await _read_submission_state(site_name)
+    except (sqlite3.Error, OSError):
+        return JSONResponse({"ok": False, "error": "local_storage_unavailable"}, status_code=503)
+    if not available:
+        return JSONResponse({"ok": False, "error": "database_unavailable", "detail": "БД недоступна. Отправка будет доступна после восстановления."},
+                            status_code=503, headers={"Retry-After": "60"})
+    submission = next((item for item in rows if item.get("id") == submission_id), None)
+    if submission is None:
+        return JSONResponse({"ok": False, "error": "submission_not_found"}, status_code=404)
+    if submission.get("storage_status") == "queued":
+        return JSONResponse({"ok": False, "error": "order_waiting_for_database"}, status_code=409)
     if message_type == "order_notification":
-        submission = next(
-            (
-                item
-                for item in await _read_submissions(site_name)
-                if item.get("id") == submission_id
-            ),
-            None,
-        )
         subject, body, body_html = _build_order_email(payload, site_name, submission)
     elif message_type == "custom_message":
         subject, body, body_html = _build_custom_email(payload)
@@ -1016,9 +1151,14 @@ async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendR
                 "status": "sent",
             },
         )
+    except DATABASE_ERRORS as exc:
+        _log_webhook(logging.ERROR, site_name, "", "Не удалось сохранить историю отправленного письма",
+                     submission_id=submission_id, error=_short_webhook_error(exc))
+        return JSONResponse({"ok": False, "error": "email_history_database_unavailable",
+                             "email_sent": True, "detail": "Письмо отправлено, но БД не подтвердила историю. Не отправляйте повторно."}, status_code=503)
     except Exception as exc:
         return JSONResponse(
-            {"ok": False, "error": "email_send_failed", "detail": str(exc)},
+            {"ok": False, "error": "email_send_failed", "detail": _short_webhook_error(exc)},
             status_code=502,
         )
 
@@ -1047,6 +1187,14 @@ async def tilda_update_cdek_im_number(
             {"ok": False, "error": "current_im_number_or_uuid_required"},
             status_code=400,
         )
+    if submission_id:
+        rows, available, _ = await _read_submission_state(site_name)
+        if not available:
+            return JSONResponse({"ok": False, "error": "database_unavailable"}, status_code=503,
+                                headers={"Retry-After": "60"})
+        submission = next((row for row in rows if row["id"] == submission_id), None)
+        if not submission or submission["storage_status"] == "queued":
+            return JSONResponse({"ok": False, "error": "order_not_ready"}, status_code=409)
 
     try:
         cdek_account = _cdek_account_or_404(site_name)
@@ -1070,7 +1218,7 @@ async def tilda_update_cdek_im_number(
         )
     except Exception as exc:
         return JSONResponse(
-            {"ok": False, "error": "cdek_update_failed", "detail": str(exc)},
+            {"ok": False, "error": "cdek_update_failed", "detail": _short_webhook_error(exc)},
             status_code=502,
         )
 

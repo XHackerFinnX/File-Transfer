@@ -5,9 +5,18 @@ mail templates. Technical IDs remain separate from customer-facing numbers.
 """
 
 import json
+import hashlib
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+
+def webhook_key(payload: dict[str, Any]) -> str:
+    identity = order_identity(payload)
+    if identity:
+        return f"order:{identity}"
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return "payload:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def first_value(source: dict[str, Any], keys: list[str]) -> Any:

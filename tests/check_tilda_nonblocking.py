@@ -49,6 +49,7 @@ async def check():
              patch.object(shop,'save_tilda_email_message',new_callable=AsyncMock,return_value={'id':'sent'}) as save, \
              patch.object(shop,'_site_name_or_404',return_value='shop'), \
              patch.object(shop,'_form_secret_or_403'), \
+             patch.object(shop,'_read_submission_state',new_callable=AsyncMock,return_value=([{'id':'submission'}],True,0)), \
              patch.object(shop,'_database_target_or_404',return_value='test-db'):
             await during(shop._send_order_notification_for_submission('test-db','shop','submission',{'email':'test@example.invalid','orderid':'42'}))
             response=await during(shop.tilda_send_email('shop',None,shop.TildaEmailSendRequest(submission_id='submission',to_email='test@example.invalid',message_type='custom_message',custom_body='test body')))

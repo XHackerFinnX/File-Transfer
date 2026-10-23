@@ -6,11 +6,13 @@ Optional SQL checks use a private schema in TEST_TILDA_DATABASE_DSN.
 import copy
 import json
 import os
+import sqlite3
+import tempfile
 import unittest
 import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -31,6 +33,7 @@ from services.tilda_payload import (
     can_auto_update_cdek, decimal_value, normalize_order_payload, order_identity, order_number,
 )
 from services import tilda_cdek
+from services.tilda_outbox import TildaOutbox
 
 
 def taplink_order():
@@ -221,7 +224,9 @@ class MemoryOrders:
         return copy.deepcopy([row for row in self.rows.values() if row["site"] == site])
 
     async def email(self, target, message):
-        self.rows[message["submission_id"]]["email_messages"].append(copy.deepcopy(message))
+        messages = self.rows[message["submission_id"]]["email_messages"]
+        if not any(existing["id"] == message["id"] for existing in messages):
+            messages.append(copy.deepcopy(message))
         return message
 
     async def update(self, target, site, submission_id, external_id, im_number):
@@ -249,6 +254,9 @@ class WebhookTests(unittest.TestCase):
         self.find = self.stack.enter_context(patch.object(shop, "find_cdek_order", return_value={"uuid": "test-uuid"}))
         self.rename = self.stack.enter_context(patch.object(shop, "update_cdek_order_number", return_value="request-uuid"))
         self.stack.enter_context(patch.object(shop, "_cdek_im_number_prefix", return_value="shop_"))
+        directory = self.stack.enter_context(tempfile.TemporaryDirectory())
+        self.outbox = TildaOutbox(os.path.join(directory, "outbox.sqlite3"), shop._deliver_queued_submission)
+        self.stack.enter_context(patch.object(shop, "_get_tilda_outbox", return_value=self.outbox))
         app = FastAPI()
         app.include_router(shop.router)
         self.client = self.stack.enter_context(TestClient(app))
@@ -323,13 +331,75 @@ class WebhookTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertTrue(response.json()["auto_actions"]["email_sent"])
-                self.assertEqual(self.submissions()[-1]["payload"], body)
+                rows = self.submissions()
+                self.assertEqual(next(row for row in rows if row["id"] == response.json()["submission_id"])["payload"], body)
 
     def test_dashboard_assets_are_versioned_and_responses_are_not_cached(self):
         response = self.client.get("/tilda/shelwear/form?secret=test-only")
         self.assertEqual(response.status_code, 200)
         self.assertRegex(response.text, r'/static/js/tilda/form\.js\?v=[a-f0-9]+')
         self.assertIn("no-store", response.headers["cache-control"])
+
+    def test_database_outage_is_accepted_locally_and_replayed_without_a_new_webhook(self):
+        from psycopg_pool import PoolTimeout
+
+        with patch.object(shop, "save_tilda_submission", new_callable=AsyncMock,
+                          side_effect=PoolTimeout("database unavailable")):
+            response = self.client.post("/tilda/shelwear/webhook", json=taplink_order())
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["queued"])
+            self.assertEqual(response.json()["storage"], "local")
+            duplicate = self.client.post("/tilda/shelwear/webhook", json=taplink_order())
+            self.assertTrue(duplicate.json()["duplicate"])
+            self.assertEqual(duplicate.json()["submission_id"], response.json()["submission_id"])
+            with patch.object(shop, "read_tilda_submissions", new_callable=AsyncMock,
+                              side_effect=PoolTimeout("database unavailable")):
+                state = self.client.get("/tilda/shelwear/form/submissions?secret=test-only").json()
+            self.assertFalse(state["database_available"])
+            self.assertEqual(state["pending_count"], 1)
+            self.assertEqual(state["submissions"][0]["storage_status"], "queued")
+            self.assertEqual(state["submissions"][0]["payload"], taplink_order())
+            self.smtp.assert_not_called()
+        self.outbox.blocked_until.clear()
+        with self.outbox._connect() as conn:
+            conn.execute("UPDATE webhook_outbox SET retry_at=0")
+        self.client.portal.call(self.outbox.run_once)
+        state = self.client.get("/tilda/shelwear/form/submissions?secret=test-only").json()
+        self.assertTrue(state["database_available"])
+        self.assertEqual(state["pending_count"], 0)
+        self.assertEqual(len(state["submissions"]), 1)
+        self.smtp.assert_called_once()
+
+    def test_disk_failure_returns_retryable_error_without_acknowledging_or_sending(self):
+        with patch.object(self.outbox, "_enqueue", side_effect=sqlite3.OperationalError("disk is full")):
+            response = self.client.post("/tilda/shelwear/webhook", json=taplink_order())
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["ok"])
+        self.assertEqual(response.headers["retry-after"], "60")
+        self.smtp.assert_not_called()
+        self.assertEqual(self.orders.rows, {})
+
+    def test_read_pool_timeout_returns_queue_status_instead_of_http_500(self):
+        from psycopg_pool import PoolTimeout
+
+        with patch.object(shop, "read_tilda_submissions", new_callable=AsyncMock,
+                          side_effect=PoolTimeout("database unavailable")):
+            response = self.client.get("/tilda/shelwear/form/submissions?secret=test-only")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["database_available"])
+        self.assertEqual(response.json()["pending_count"], 0)
+
+    def test_pending_order_cannot_send_a_second_notification_manually(self):
+        from psycopg_pool import PoolTimeout
+
+        with patch.object(shop, "save_tilda_submission", new_callable=AsyncMock,
+                          side_effect=PoolTimeout("database unavailable")):
+            response = self.client.post("/tilda/shelwear/webhook", json=taplink_order()).json()
+        manual = self.client.post("/tilda/shelwear/form/email/send?secret=test-only", json={
+            "submission_id": response["submission_id"], "message_type": "order_notification", "to_email": "buyer@example.test",
+        })
+        self.assertEqual(manual.status_code, 503)
+        self.smtp.assert_not_called()
         response = self.client.get("/tilda/shelwear/form/submissions?secret=test-only")
         self.assertIn("no-store", response.headers["cache-control"])
 
@@ -400,11 +470,12 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.save("wrapped-retry", {"data": json.dumps(raw)}), ("one", False))
         raw2 = {**raw, "order_id": "different-id"}
         self.assertEqual(self.save("two", raw2), ("two", True))
-        storage._save_tilda_email_message("test-db", {
+        message = storage._save_tilda_email_message("test-db", {
             "id": "mail", "submission_id": "one", "site": "shelwear",
             "created_at": datetime.now(timezone.utc).isoformat(), "message_type": "order_notification",
             "to_email": "buyer@example.test", "subject": "test", "body": "test", "body_html": "test", "status": "sent",
         })
+        storage._save_tilda_email_message("test-db", {**message, "body_html": "test"})
         rows = {row["id"]: row for row in storage._read_tilda_submissions("test-db", "shelwear", None)}
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows["one"]["payload"], raw)
@@ -426,6 +497,35 @@ class DatabaseTests(unittest.TestCase):
         rows = {row["id"]: row for row in storage._read_tilda_submissions("test-db", "shelwear", None)}
         self.assertEqual(rows["two"]["im_number"], "by-external-id")
         self.assertEqual(storage._read_tilda_submissions("test-db", "another", None)[0]["im_number"], "27")
+
+    def test_local_queue_replays_into_real_postgresql_with_email_history(self):
+        import asyncio
+        from pathlib import Path
+        from psycopg_pool import PoolTimeout
+
+        async def check(path):
+            box = TildaOutbox(path, shop._deliver_queued_submission)
+            await box.initialize()
+            raw = taplink_order()
+            record = {"id": "queued-order", "site": "shelwear", "payload_type": "json", "payload": raw,
+                      "created_at": datetime.now(timezone.utc).isoformat()}
+            with patch.object(storage, "get_pool", side_effect=PoolTimeout("offline")):
+                item_id, _ = await box.enqueue("test-db", record)
+                self.assertTrue((await box.process(item_id))["queued"])
+            box.blocked_until.clear()
+            with box._connect() as conn:
+                conn.execute("UPDATE webhook_outbox SET retry_at=0")
+            await box.run_once()
+            self.assertEqual(await box.pending_submissions("test-db", "shelwear"), [])
+            rows = storage._read_tilda_submissions("test-db", "shelwear", None)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["id"], "queued-order")
+            self.assertEqual(rows[0]["payload"], raw)
+            self.assertEqual(len(rows[0]["email_messages"]), 1)
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(shop, "send_customer_email") as smtp:
+            asyncio.run(check(Path(directory) / "outbox.sqlite3"))
+            smtp.assert_called_once()
 
 
 if __name__ == "__main__":
