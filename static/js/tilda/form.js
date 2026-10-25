@@ -622,14 +622,13 @@
         });
     }
 
-    function matchesFilters(row) {
+    function matchesFilters(row, skus) {
         const query = search?.value.trim().toLowerCase() || "";
         const from = dateFrom?.value || "";
         const to = dateTo?.value || "";
         const delivery = deliveryFilter?.value || "all";
         const size = sizeFilter?.value || "all";
         const productType = productTypeFilter?.value || "all";
-        const sku = skuFilter?.value || "";
         const color = colorFilter?.value || "all";
         const social = socialFilter?.value || "all";
         return (
@@ -638,7 +637,7 @@
             (!to || row.date <= to) &&
             (delivery === "all" || row.deliveryType === delivery) &&
             (productType === "all" || row.productType === productType) &&
-            (!sku || row.sku === sku) &&
+            (!skus.size || skus.has(row.sku)) &&
             (size === "all" || row.size === size) &&
             (color === "all" || row.color === color) &&
             (social === "all" || row.socialNetwork === social)
@@ -1230,7 +1229,7 @@
     function updateFilterOptions() {
         const selectedSize = sizeFilter.value;
         const selectedProductType = productTypeFilter.value;
-        const selectedSku = skuFilter?.value || "";
+        const selectedSkus = new Set(Array.from(skuFilter?.selectedOptions || [], (option) => option.value));
         const selectedColor = colorFilter.value;
         const selectedSocial = socialFilter.value;
         const sizes = [
@@ -1287,10 +1286,12 @@
                 )
                 .join("");
         if (skuFilter) {
-            skuFilter.innerHTML = '<option value="">Все SKU</option>' + skus
+            skuFilter.innerHTML = skus
                 .map((sku) => `<option value="${escapeHtml(sku)}">${escapeHtml(sku)}</option>`)
                 .join("");
-            skuFilter.value = skus.includes(selectedSku) ? selectedSku : "";
+            Array.from(skuFilter.options).forEach((option) => {
+                option.selected = selectedSkus.has(option.value);
+            });
         }
         socialFilter.innerHTML =
             '<option value="all">Все соц. сети</option>' +
@@ -1319,7 +1320,7 @@
         if (deliveryFilter) deliveryFilter.value = "all";
         if (sizeFilter) sizeFilter.value = "all";
         if (productTypeFilter) productTypeFilter.value = "all";
-        if (skuFilter) skuFilter.value = "";
+        if (skuFilter) Array.from(skuFilter.options).forEach((option) => { option.selected = false; });
         if (colorFilter) colorFilter.value = "all";
         if (socialFilter) socialFilter.value = "all";
         document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
@@ -1359,7 +1360,8 @@
     }
 
     function render() {
-        visibleRows = orderRows.filter(matchesFilters);
+        const skus = new Set(Array.from(skuFilter?.selectedOptions || [], (option) => option.value).filter(Boolean));
+        visibleRows = orderRows.filter((row) => matchesFilters(row, skus));
         const visibleSubmissionIds = new Set(
             visibleRows.map((row) => row.submissionId),
         );

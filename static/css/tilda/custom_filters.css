@@ -132,6 +132,57 @@
     font-weight: 500;
 }
 
+.custom-filter__search {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.custom-filter__search input {
+    min-width: 0;
+    flex: 1;
+}
+
+.custom-filter__clear {
+    flex-shrink: 0;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+}
+
+.custom-filter__clear:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.custom-filter__check {
+    cursor: pointer;
+}
+
+.custom-filter__check[hidden] {
+    display: none;
+}
+
+.custom-filter__check input {
+    width: 16px;
+    height: 16px;
+    min-height: 0;
+    flex: 0 0 16px;
+    padding: 0;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.custom-filter__empty {
+    padding: 10px 14px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
 /* ---------- Панель выбора даты ---------- */
 
 .custom-date-picker {

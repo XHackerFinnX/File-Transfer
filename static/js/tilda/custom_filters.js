@@ -28,7 +28,131 @@
         button.setAttribute("aria-expanded", String(open));
     };
 
+    function buildMultiSelect(filter, select) {
+        filter.classList.add("custom-filter--multiple");
+        select.setAttribute("aria-hidden", "true");
+        select.tabIndex = -1;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "custom-filter__button";
+        button.setAttribute("aria-haspopup", "dialog");
+        button.setAttribute("aria-expanded", "false");
+        const caption = document.createElement("span");
+        button.append(caption);
+        const panel = document.createElement("div");
+        panel.id = `${select.id}-panel`;
+        panel.className = "custom-filter__panel";
+        panel.setAttribute("role", "dialog");
+        panel.setAttribute("aria-label", "Выбор SKU");
+        button.setAttribute("aria-controls", panel.id);
+        const header = document.createElement("div");
+        header.className = "custom-filter__search";
+        const search = document.createElement("input");
+        search.type = "search";
+        search.placeholder = "Поиск по SKU";
+        search.setAttribute("aria-label", "Поиск по SKU");
+        search.autocomplete = "off";
+        const clear = document.createElement("button");
+        clear.type = "button";
+        clear.className = "custom-filter__clear";
+        clear.textContent = "Сбросить";
+        clear.setAttribute("aria-label", "Сбросить выбор SKU");
+        header.append(search, clear);
+        const options = document.createElement("div");
+        options.className = "custom-filter__options";
+        const empty = document.createElement("div");
+        empty.className = "custom-filter__empty";
+        empty.setAttribute("role", "status");
+        panel.append(header, options, empty);
+        select.after(button, panel);
+        let rows = [];
+
+        const sync = () => {
+            const selected = Array.from(select.selectedOptions);
+            caption.textContent = selected.length > 1 ? `Выбрано SKU: ${selected.length}`
+                : selected[0]?.textContent || "Все SKU";
+            button.title = selected.map((option) => option.textContent).join("\n");
+            button.setAttribute("aria-label", `Фильтр SKU: ${caption.textContent}`);
+            for (const row of rows) {
+                row.checkbox.checked = row.option.selected;
+                row.label.classList.toggle("is-selected", row.option.selected);
+            }
+            clear.disabled = !selected.length && !search.value;
+        };
+        const applySearch = () => {
+            const query = search.value.trim().toLowerCase();
+            let visible = 0;
+            for (const row of rows) {
+                row.label.hidden = !row.option.textContent.toLowerCase().includes(query);
+                if (!row.label.hidden) visible++;
+            }
+            empty.textContent = rows.length ? "SKU не найдены" : "В заказах нет SKU";
+            empty.hidden = visible > 0;
+            clear.disabled = !select.selectedOptions.length && !search.value;
+        };
+        const rebuild = () => {
+            const scrollTop = options.scrollTop;
+            rows = Array.from(select.options).filter((option) => option.value).map((option) => {
+                const label = document.createElement("label");
+                label.className = "custom-filter__option custom-filter__check";
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.value = option.value;
+                const text = document.createElement("span");
+                text.textContent = option.textContent;
+                label.append(checkbox, text);
+                checkbox.addEventListener("change", () => {
+                    option.selected = checkbox.checked;
+                    emitNativeEvents(select);
+                });
+                return {option, label, checkbox};
+            });
+            options.replaceChildren(...rows.map((row) => row.label));
+            sync();
+            applySearch();
+            options.scrollTop = scrollTop;
+        };
+        button.addEventListener("click", () => {
+            const open = !filter.classList.contains("is-open");
+            closeAll(filter);
+            setOpen(filter, button, open);
+            if (open) {
+                search.value = "";
+                applySearch();
+                search.focus();
+            }
+        });
+        search.addEventListener("input", applySearch);
+        clear.addEventListener("click", () => {
+            Array.from(select.options).forEach((option) => { option.selected = false; });
+            search.value = "";
+            applySearch();
+            emitNativeEvents(select);
+            search.focus();
+        });
+        panel.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setOpen(filter, button, false);
+                button.focus();
+            }
+        });
+        select.addEventListener("change", sync);
+        document.addEventListener("tilda:filters-options-updated", rebuild);
+        document.addEventListener("tilda:filters-reset", () => {
+            search.value = "";
+            sync();
+            applySearch();
+        });
+        rebuild();
+    }
+
     function buildSelect(filter, select) {
+        if (select.multiple) {
+            buildMultiSelect(filter, select);
+            return;
+        }
         const button = document.createElement("button");
         button.type = "button";
         button.className = "custom-filter__button";
