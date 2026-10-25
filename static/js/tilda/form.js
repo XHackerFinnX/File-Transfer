@@ -21,6 +21,7 @@
         "[data-product-type-filter]",
     );
     const colorFilter = document.querySelector("[data-color-filter]");
+    const skuFilter = document.querySelector("[data-sku-filter]");
     const socialFilter = document.querySelector("[data-social-filter]");
     const visibleCount = document.querySelector("[data-visible-count]");
     const paginationContainers = document.querySelectorAll("[data-pagination]");
@@ -628,6 +629,7 @@
         const delivery = deliveryFilter?.value || "all";
         const size = sizeFilter?.value || "all";
         const productType = productTypeFilter?.value || "all";
+        const sku = skuFilter?.value || "";
         const color = colorFilter?.value || "all";
         const social = socialFilter?.value || "all";
         return (
@@ -636,6 +638,7 @@
             (!to || row.date <= to) &&
             (delivery === "all" || row.deliveryType === delivery) &&
             (productType === "all" || row.productType === productType) &&
+            (!sku || row.sku === sku) &&
             (size === "all" || row.size === size) &&
             (color === "all" || row.color === color) &&
             (social === "all" || row.socialNetwork === social)
@@ -1227,6 +1230,7 @@
     function updateFilterOptions() {
         const selectedSize = sizeFilter.value;
         const selectedProductType = productTypeFilter.value;
+        const selectedSku = skuFilter?.value || "";
         const selectedColor = colorFilter.value;
         const selectedSocial = socialFilter.value;
         const sizes = [
@@ -1235,6 +1239,9 @@
         const productTypes = [
             ...new Set(orderRows.map((row) => row.productType).filter(Boolean)),
         ].sort((a, b) => a.localeCompare(b));
+        const skus = [...new Set(orderRows.map((row) => row.sku)
+            .filter((sku) => sku && sku !== "—"))]
+            .sort((a, b) => a.localeCompare(b, "ru"));
         const colors = [
             ...new Map(
                 orderRows.map((row) => [row.color, row.colorLabel]),
@@ -1279,6 +1286,12 @@
                         `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`,
                 )
                 .join("");
+        if (skuFilter) {
+            skuFilter.innerHTML = '<option value="">Все SKU</option>' + skus
+                .map((sku) => `<option value="${escapeHtml(sku)}">${escapeHtml(sku)}</option>`)
+                .join("");
+            skuFilter.value = skus.includes(selectedSku) ? selectedSku : "";
+        }
         socialFilter.innerHTML =
             '<option value="all">Все соц. сети</option>' +
             socialNetworks
@@ -1306,6 +1319,7 @@
         if (deliveryFilter) deliveryFilter.value = "all";
         if (sizeFilter) sizeFilter.value = "all";
         if (productTypeFilter) productTypeFilter.value = "all";
+        if (skuFilter) skuFilter.value = "";
         if (colorFilter) colorFilter.value = "all";
         if (socialFilter) socialFilter.value = "all";
         document.dispatchEvent(new CustomEvent("tilda:filters-reset"));
@@ -1484,6 +1498,7 @@
         dateTo,
         deliveryFilter,
         productTypeFilter,
+        skuFilter,
         sizeFilter,
         colorFilter,
         socialFilter,

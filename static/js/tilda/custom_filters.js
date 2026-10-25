@@ -56,8 +56,11 @@
             return icons[name] || "";
         };
 
-        const optionLabelHtml = (option) =>
-            `${iconSvg(option.dataset.icon || "")}<span>${option.textContent || "Все"}</span>`;
+        const optionLabelHtml = (option) => {
+            const label = document.createElement("span");
+            label.textContent = option.textContent || "Все";
+            return `${iconSvg(option.dataset.icon || "")}${label.outerHTML}`;
+        };
 
         const sync = () => {
             const selected = select.selectedOptions[0];

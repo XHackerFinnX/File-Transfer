@@ -62,6 +62,12 @@
     transition: transform 140ms ease;
 }
 
+.custom-filter__button > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .custom-filter.is-open .custom-filter__button::after {
     transform: rotate(225deg) translate(-2px, -2px);
 }
@@ -114,6 +120,10 @@
 
 .custom-filter__option:hover {
     background: rgba(255, 255, 255, 0.06);
+}
+
+.custom-filter__option > span {
+    overflow-wrap: anywhere;
 }
 
 .custom-filter__option.is-selected {
