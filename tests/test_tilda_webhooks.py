@@ -12,6 +12,8 @@ import unittest
 import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -430,6 +432,60 @@ class WebhookTests(unittest.TestCase):
         _, _, body, _ = self.smtp.call_args.args
         self.assertIn("6 088,77 RUB", body)
         self.assertIn("размер: L", body)
+
+    def test_shop_names_reach_smtp_for_webhooks_and_both_manual_message_types(self):
+        projects = json.loads(shop.config.TILDA_PROJECTS_JSON)
+        projects["real_baby"] = {"secret": "test-only", "database_target": "test-db", "cdek_account": "test"}
+        with patch.object(shop.config, "TILDA_PROJECTS_JSON", json.dumps(projects)), \
+                patch.object(shop, "send_customer_email", tilda_cdek.send_customer_email), \
+                patch.object(tilda_cdek.smtplib, "SMTP") as smtp:
+            server = smtp.return_value.__enter__.return_value
+
+            def assert_sender(expected):
+                message = server.send_message.call_args.args[0]
+                parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
+                address, = parsed["From"].addresses
+                self.assertEqual(address.display_name, expected)
+                self.assertEqual(address.addr_spec, tilda_cdek.SMTP_FROM)
+                self.assertEqual(server.send_message.call_args.kwargs["from_addr"], tilda_cdek.SMTP_FROM)
+
+            for site, expected in (("apexf1", "APEX"), ("shelwear", "SHELWEAR"), ("real_baby", "REAL BABY")):
+                # The request body cannot choose the sender's shop name or mailbox.
+                raw = {**taplink_order(), "sender_name": "Other shop", "From": "other@example.test"}
+                response = self.client.post(f"/tilda/{site}/webhook", json=raw)
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()["auto_actions"]["email_sent"])
+                assert_sender(expected)
+                submission_id = response.json()["submission_id"]
+                for message_type in ("order_notification", "custom_message"):
+                    response = self.client.post(f"/tilda/{site}/form/email/send?secret=test-only", json={
+                        "submission_id": submission_id,
+                        "message_type": message_type, "to_email": raw["email"],
+                        "custom_subject": "Вопрос по заказу", "custom_body": "Здравствуйте!",
+                    })
+                    self.assertEqual(response.status_code, 200, response.text)
+                    assert_sender(expected)
+            self.assertEqual(server.send_message.call_count, 9)
+
+
+class MailHeaderTests(unittest.TestCase):
+    def test_unicode_sender_name_is_encoded_as_one_mailbox(self):
+        with patch.object(tilda_cdek.smtplib, "SMTP") as smtp:
+            tilda_cdek.send_customer_email("buyer@example.test", "Тема", "Текст", sender_name='Магазин "Дом", одежда')
+            server = smtp.return_value.__enter__.return_value
+            message = server.send_message.call_args.args[0]
+            parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes())
+            address, = parsed["From"].addresses
+            self.assertEqual(address.display_name, 'Магазин "Дом", одежда')
+            self.assertEqual(address.addr_spec, tilda_cdek.SMTP_FROM)
+            self.assertEqual(server.send_message.call_args.kwargs["from_addr"], tilda_cdek.SMTP_FROM)
+            self.assertEqual(parsed.get_content(), "Текст")
+
+    def test_sender_name_cannot_inject_headers(self):
+        with patch.object(tilda_cdek.smtplib, "SMTP") as smtp:
+            with self.assertRaises(ValueError):
+                tilda_cdek.send_customer_email("buyer@example.test", "Тема", "Текст", sender_name="Shop\r\nBcc: other@example.test")
+            smtp.assert_not_called()
 
 
 @unittest.skipUnless(os.environ.get("TEST_TILDA_DATABASE_DSN"), "Set TEST_TILDA_DATABASE_DSN for isolated PostgreSQL checks")

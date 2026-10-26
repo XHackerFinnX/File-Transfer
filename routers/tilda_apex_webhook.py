@@ -195,6 +195,13 @@ def _site_name_or_404(name: str) -> str:
     return normalized
 
 
+def _email_sender_name(name: str) -> str:
+    site_name = _site_name_or_404(name)
+    if site_name in {"apex", "apexf1"}:
+        return "APEX"
+    return site_name.replace("_", " ").replace("-", " ").upper()
+
+
 def _database_target_or_404(name: str) -> str:
     site_name = _site_name_or_404(name)
     _, database_targets, _ = _project_config_maps()
@@ -770,7 +777,8 @@ async def _send_order_notification_for_submission(
             action["status"] = "sending"
             await delivery.checkpoint()
         try:
-            await asyncio.to_thread(send_customer_email, email_payload.to_email, subject, body, body_html)
+            await asyncio.to_thread(send_customer_email, email_payload.to_email, subject, body, body_html,
+                                    sender_name=_email_sender_name(site_name))
         except Exception:
             if delivery:
                 action["status"] = "failed"
@@ -1135,7 +1143,8 @@ async def tilda_send_email(name: str, request: Request, payload: TildaEmailSendR
         )
 
     try:
-        await asyncio.to_thread(send_customer_email, to_email, subject, body, body_html)
+        await asyncio.to_thread(send_customer_email, to_email, subject, body, body_html,
+                                sender_name=_email_sender_name(site_name))
         message = await save_tilda_email_message(
             _database_target_or_404(site_name),
             {

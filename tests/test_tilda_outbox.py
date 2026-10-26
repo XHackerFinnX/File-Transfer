@@ -80,6 +80,7 @@ class OutboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await restarted.pending_submissions("test-db", "shelwear"), [])
         self.assertEqual(self.orders.rows[item_id]["payload"], raw["payload"])
         self.smtp.assert_called_once()
+        self.assertEqual(self.smtp.call_args.kwargs["sender_name"], "SHELWEAR")
         receipt = restarted._row(item_id)
         self.assertEqual(receipt["submission"], "")
         self.assertNotIn("buyer@example.test", receipt["result"])
@@ -91,7 +92,7 @@ class OutboxTests(unittest.IsolatedAsyncioTestCase):
         self.box.lease_seconds = 0.09
         another = self.new_box(lease_seconds=0.09)
 
-        def slow_smtp(*args):
+        def slow_smtp(*args, **kwargs):
             time.sleep(0.3)
 
         self.smtp.side_effect = slow_smtp

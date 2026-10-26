@@ -23,6 +23,7 @@ import smtplib
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from typing import Any
 
 from config import config
@@ -301,10 +302,14 @@ def send_customer_email(
     subject: str,
     body_text: str,
     body_html: str | None = None,
+    *,
+    sender_name: str | None = None,
 ) -> None:
     """Send a customer-facing email through the shop SMTP."""
     if not to_email:
         return
+    if sender_name is not None and any(ord(char) < 32 or ord(char) == 127 for char in sender_name):
+        raise ValueError("Invalid sender name")
 
     if body_html:
         message = MIMEMultipart("alternative")
@@ -313,13 +318,13 @@ def send_customer_email(
     else:
         message = MIMEText(body_text, _charset="utf-8")
     message["Subject"] = subject
-    message["From"] = SMTP_FROM
+    message["From"] = formataddr(((sender_name or "").strip(), SMTP_FROM), charset="utf-8")
     message["To"] = to_email
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(message)
+        server.send_message(message, from_addr=SMTP_FROM)
         
 
 def send_order_accepted_email(
