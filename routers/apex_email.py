@@ -10,7 +10,7 @@ from starlette.requests import ClientDisconnect
 
 from services.apex_email import EmailServiceNotConfigured, get_service
 from services.apex_email_contract import MAX_BODY, EmailRequestError, parse_mail, verify_signature
-from services.apex_email_queue import log_state
+from services.apex_email_queue import log_state, queue_error_code
 
 router = APIRouter()
 
@@ -49,7 +49,8 @@ def _error(status, code):
 async def accept_apex_email(request: Request):
     try:
         service = get_service()
-    except EmailServiceNotConfigured:
+    except EmailServiceNotConfigured as exc:
+        log_state("accept_failed", error=",".join(exc.issues) or "configuration_required", level=logging.ERROR)
         return _error(503, "email_service_not_configured")
     try:
         raw = await _read_raw(request)
@@ -63,9 +64,9 @@ async def accept_apex_email(request: Request):
         return _error(exc.status, exc.code)
     except ClientDisconnect:
         return _error(400, "incomplete_body")
-    except Exception:
+    except Exception as exc:
         # Fail closed, including commit/disk failures. Do not log exception text or inputs.
-        log_state("accept_failed", error="queue_unavailable", level=logging.ERROR)
+        log_state("accept_failed", error=queue_error_code(exc), level=logging.ERROR)
         return _error(503, "queue_unavailable")
     service.queue.wake()
     response = {"ok": True, "message_id": mail.message_id}

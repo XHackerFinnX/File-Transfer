@@ -5,6 +5,7 @@ updates coordinate workers. SMTP is at-least-once after an ambiguous disconnect.
 """
 
 import asyncio
+import errno
 import hashlib
 import hmac
 import logging
@@ -43,6 +44,35 @@ def log_state(state, message_id="", kind="", attempts=0, error="", level=logging
 
 class QueueUnavailable(Exception):
     pass
+
+
+def queue_error_code(exc):
+    """Classify failures without exposing SQLite SQL, filesystem paths or payloads."""
+    if isinstance(exc, QueueUnavailable):
+        code = exc.args[0] if exc.args else ""
+        if code in ("storage_key_changed", "persistent_path_required"):
+            return code
+    if isinstance(exc, OSError):
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return "queue_permission_denied"
+        if exc.errno == errno.EROFS:
+            return "queue_read_only"
+        if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+            return "queue_disk_full"
+        if exc.errno in (errno.ENOTDIR, errno.EISDIR, errno.EINVAL):
+            return "queue_path_invalid"
+        if exc.errno == errno.ENOENT:
+            return "queue_file_or_migration_missing"
+    if isinstance(exc, sqlite3.Error):
+        # Extended SQLite result codes have the primary error in their low byte.
+        code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+        return {
+            sqlite3.SQLITE_READONLY: "queue_read_only", sqlite3.SQLITE_CANTOPEN: "queue_cannot_open",
+            sqlite3.SQLITE_BUSY: "queue_busy", sqlite3.SQLITE_LOCKED: "queue_busy",
+            sqlite3.SQLITE_FULL: "queue_disk_full", sqlite3.SQLITE_IOERR: "queue_io_error",
+            sqlite3.SQLITE_CORRUPT: "queue_corrupt", sqlite3.SQLITE_NOTADB: "queue_not_database",
+        }.get(code, "queue_database_error")
+    return "queue_unavailable"
 
 
 class LeaseLost(Exception):
@@ -259,9 +289,9 @@ class ApexEmailQueue:
             self._wake.clear()
             try:
                 await self.run_once()
-            except Exception:
+            except Exception as exc:
                 # SQLite errors can include paths; SMTP errors can contain recipient/body.
-                log_state("worker_waiting", error="queue_unavailable", level=logging.ERROR)
+                log_state("worker_waiting", error=queue_error_code(exc), level=logging.ERROR)
             if not self._stopping:
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._wake.wait(), timeout=self.poll_seconds)

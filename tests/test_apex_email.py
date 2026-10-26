@@ -1,6 +1,7 @@
 """Signed APEX mail contract, durable multi-worker delivery; SMTP is always mocked."""
 
 import asyncio
+import errno
 import hashlib
 import hmac
 import json
@@ -270,6 +271,38 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {"ok": False, "error": "email_service_not_configured"})
         self.smtp.assert_not_called()
 
+    async def test_configuration_failure_logs_exact_issue_without_public_disclosure(self):
+        failure = runtime.EmailServiceNotConfigured(("missing_storage_key",))
+        with patch.object(endpoint, "get_service", side_effect=failure), self.assertLogs("apex.email", level="ERROR") as logs:
+            response = await self.post()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"ok": False, "error": "email_service_not_configured"})
+        self.assertIn("missing_storage_key", " ".join(logs.output))
+        self.assertNotIn(SECRET, " ".join(logs.output))
+
+    async def test_read_only_queue_failure_has_safe_server_reason(self):
+        with patch.object(self.box, "enqueue", side_effect=PermissionError(errno.EACCES, "private-path-and-secret")), \
+                self.assertLogs("apex.email", level="ERROR") as logs:
+            response = await self.post()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"ok": False, "error": "queue_unavailable"})
+        self.assertIn("queue_permission_denied", " ".join(logs.output))
+        self.assertNotIn("private-path-and-secret", " ".join(logs.output))
+        self.smtp.assert_not_called()
+
+    async def test_wrong_storage_key_is_identified_and_does_not_replace_pending_mail(self):
+        payload = mail_payload()
+        await self.post(payload)
+        wrong = ApexEmailQueue(self.path, Fernet.generate_key(), self.smtp)
+        with patch.object(endpoint, "get_service", return_value=runtime.ApexEmailService(SECRET, wrong)), \
+                self.assertLogs("apex.email", level="ERROR") as logs:
+            response = await self.post(mail_payload())
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("storage_key_changed", " ".join(logs.output))
+        await self.box.run_once()
+        self.smtp.assert_called_once()
+        self.assertEqual(self.smtp.call_args.args[0].message_id, payload["message_id"])
+
     async def test_persistence_restart_encryption_and_key_mismatch(self):
         payload = mail_payload()
         self.assertEqual((await self.post(payload)).status_code, 202)
@@ -447,15 +480,38 @@ class SmtpAndSettingsTests(unittest.TestCase):
                            "APEX_EMAIL_STORAGE_KEY": Fernet.generate_key().decode(), "SMTP_PASSWORD": "test-only-password",
                            "SMTP_HOST": "smtp.yandex.com", "SMTP_PORT": "587", "SMTP_USER": MAILBOX, "SMTP_FROM": MAILBOX,
                            "APEX_EMAIL_QUEUE_PATH": str(Path(directory) / "email.sqlite3")}
-            for command in ("migrate", "migrate", "status"):
+            for command in ("migrate", "migrate", "status", "doctor"):
                 result = subprocess.run([sys.executable, "-m", "scripts.apex_email_admin", command],
                                         cwd=Path(__file__).resolve().parents[1], env=environment,
                                         text=True, capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 status = json.loads(result.stdout)
-                self.assertEqual(status, {"counts": {}, "messages": []} if command == "status" else {"ok": True, "schema_version": 1})
+                expected = {"status": {"counts": {}, "messages": []},
+                            "migrate": {"ok": True, "schema_version": 1},
+                            "doctor": {"ok": True, "configuration": "ready", "queue": "ready", "smtp": "not_tested"}}
+                self.assertEqual(status, expected[command])
                 for secret in (SECRET, environment["APEX_EMAIL_STORAGE_KEY"], environment["SMTP_PASSWORD"]):
                     self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_doctor_names_missing_or_invalid_key_without_printing_any_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {**os.environ, **TEST_ENV, "APEX_EMAIL_SERVICE_SECRET": SECRET,
+                           "APEX_EMAIL_STORAGE_KEY": "", "SMTP_PASSWORD": "private-smtp-password",
+                           "SMTP_HOST": "smtp.yandex.com", "SMTP_PORT": "587", "SMTP_USER": MAILBOX, "SMTP_FROM": MAILBOX,
+                           "APEX_EMAIL_QUEUE_PATH": str(Path(directory) / "email.sqlite3")}
+            for key, expected in (("", "missing_storage_key"), ("a" * 64, "invalid_storage_key")):
+                environment["APEX_EMAIL_STORAGE_KEY"] = key
+                result = subprocess.run([sys.executable, "-m", "scripts.apex_email_admin", "doctor"],
+                                        cwd=Path(__file__).resolve().parents[1], env=environment,
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                diagnosis = json.loads(result.stdout)
+                self.assertFalse(diagnosis["ok"])
+                self.assertEqual(diagnosis["issues"][0]["code"], expected)
+                self.assertEqual(diagnosis["issues"][0]["setting"], "APEX_EMAIL_STORAGE_KEY")
+                for secret in (SECRET, environment["SMTP_PASSWORD"], "a" * 64):
+                    self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertFalse((Path(directory) / "email.sqlite3").exists())
 
     def test_full_application_lifecycle_serves_game_and_sends_signed_mail_without_redirect(self):
         from fastapi.testclient import TestClient
