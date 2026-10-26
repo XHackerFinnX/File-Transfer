@@ -16,6 +16,8 @@ from routers.tilda_apex_webhook import tilda_storage_lifespan
 from security import normalize_allowed_origins, extract_origin_from_url
 from routers.volleyball import router as volleyball_router
 from services.volleyball import volleyball_lifespan
+from routers.apex_email import router as apex_email_router
+from services.apex_email import apex_email_lifespan
 
 def ignore_windows_disconnect_noise(loop, context):
     exception = context.get("exception")
@@ -31,8 +33,9 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(ignore_windows_disconnect_noise)
     async with tilda_storage_lifespan():
-        async with volleyball_lifespan():
-            yield
+        async with apex_email_lifespan():
+            async with volleyball_lifespan():
+                yield
 
 app = FastAPI(
     title="P2P Chat & File Transfer",
@@ -91,4 +94,5 @@ app.include_router(main_router)
 app.include_router(launcher_router, prefix="/launcher")
 app.include_router(launcher_feedback_router)
 app.include_router(tilda_apex_webhook_router)
+app.include_router(apex_email_router)
 app.include_router(volleyball_router)

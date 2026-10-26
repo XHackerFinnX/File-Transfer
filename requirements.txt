@@ -7,3 +7,5 @@ python-multipart
 Jinja2
 psycopg[binary,pool]
 requests
+cryptography>=44,<47
+email-validator>=2.2,<3

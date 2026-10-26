@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     TILDA_QUEUE_PATH: str = "var/tilda-outbox.sqlite3"
     
     SMTP_PASSWORD: SecretStr
+    SMTP_HOST: str = "smtp.yandex.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = "sewingnn.notification@2p2p.ru"
+    SMTP_FROM: str = "sewingnn.notification@2p2p.ru"
+    APEX_EMAIL_SERVICE_SECRET: SecretStr | None = None
+    APEX_EMAIL_STORAGE_KEY: SecretStr | None = None
+    APEX_EMAIL_QUEUE_PATH: str = "var/apex-email.sqlite3"
     
     POSTGRESQL_DATABASES_JSON: str = ""
     CDEK_ACCOUNTS_JSON: str = ""
