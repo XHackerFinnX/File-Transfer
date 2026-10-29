@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Mapping
 from threading import RLock
@@ -63,6 +64,7 @@ DATABASE_TARGETS: Mapping[str, DatabaseTarget] = _configured_database_targets()
 
 _pools: dict[str, ConnectionPool] = {}
 _pools_lock = RLock()
+LOGGER = logging.getLogger("tilda.outbox")
 
 
 def get_database_target(name: str) -> DatabaseTarget:
@@ -84,14 +86,41 @@ def get_pool(name: str = "default") -> ConnectionPool:
             pool = ConnectionPool(
                 target.dsn, open=True, min_size=0, max_size=4, max_waiting=20,
                 timeout=config.POSTGRESQL_POOL_TIMEOUT_SECONDS,
+                reconnect_timeout=config.POSTGRESQL_RECONNECT_TIMEOUT_SECONDS,
                 kwargs={
                     "connect_timeout": config.POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
                     "options": f"-c statement_timeout={config.POSTGRESQL_STATEMENT_TIMEOUT_MS} -c lock_timeout=3000",
+                    # Detect silent TCP failures instead of retaining dead sockets for hours.
+                    "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10,
+                    "keepalives_count": 3, "tcp_user_timeout": 15000,
                 },
                 check=ConnectionPool.check_connection,
             )
             _pools[target.name] = pool
         return pool
+
+
+def recover_database_pool(name: str) -> bool:
+    """Retire an empty pool stuck reconnecting; the next checkout creates a fresh pool.
+
+    Do not reset healthy idle connections or a fully occupied pool just because a
+    request timed out. Closing a pool does not interrupt borrowed transactions.
+    """
+    target = get_database_target(name)
+    with _pools_lock:
+        pool = _pools.get(target.name)
+        if pool is None:
+            return False
+        if not pool.closed:
+            stats = pool.get_stats()
+            if (stats.get("pool_available", 0) > 0 or not stats.get("connections_errors", 0)
+                    or stats.get("pool_size", 0) >= pool.max_size):
+                return False
+        del _pools[target.name]
+    # Joining workers under the registry lock would block all other projects.
+    pool.close(timeout=0.1)
+    LOGGER.warning("database_target=%s event=failed_pool_retired", target.name)
+    return True
 
 
 def open_database_pools(*names: str, wait: bool = False) -> None:

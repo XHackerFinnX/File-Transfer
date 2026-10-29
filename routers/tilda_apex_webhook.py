@@ -19,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from config import config
-from db.connections import close_database_pools, open_database_pools
+from db.connections import close_database_pools, open_database_pools, recover_database_pool
 from db.errors import DATABASE_ERRORS, database_error_code
 from db.schemas import create_tilda_submissions_schema
 from db.tilda_orders import (
@@ -398,9 +398,7 @@ async def _read_submission_state(name):
             submissions = await read_tilda_submissions(target, site)
         except DATABASE_ERRORS as exc:
             available = False
-            outbox.blocked_until[target] = time.time() + outbox.retry_seconds
-            outbox.ready.discard(target)
-            outbox._wake.set()
+            outbox.database_unavailable(target)
             _log_webhook(logging.WARNING, site, "", "БД недоступна: показываем локальную очередь",
                          error=_short_webhook_error(exc))
     pending = await outbox.pending_submissions(target, site)
@@ -860,11 +858,15 @@ def _build_custom_email(payload: TildaEmailSendRequest) -> tuple[str, str, str]:
 _tilda_outbox: TildaOutbox | None = None
 
 
+async def _recover_tilda_database(target):
+    await asyncio.to_thread(recover_database_pool, target)
+
+
 def _get_tilda_outbox() -> TildaOutbox:
     global _tilda_outbox
     if _tilda_outbox is None:
         _tilda_outbox = TildaOutbox(config.TILDA_QUEUE_PATH, _deliver_queued_submission,
-                                  prepare=create_tilda_submissions_schema)
+                                  prepare=create_tilda_submissions_schema, recover=_recover_tilda_database)
     return _tilda_outbox
 
 

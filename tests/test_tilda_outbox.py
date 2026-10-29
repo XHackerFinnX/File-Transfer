@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -16,6 +18,7 @@ from psycopg_pool import PoolTimeout
 
 from tests.test_tilda_webhooks import MemoryOrders, shop, taplink_order
 from services.tilda_outbox import TildaOutbox
+from scripts.tilda_outbox_admin import backup_queue, queue_status
 
 
 class OutboxTests(unittest.IsolatedAsyncioTestCase):
@@ -215,6 +218,81 @@ class OutboxTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(wait_for_delivery(), timeout=2)
         self.assertGreaterEqual(attempts, 2)
         self.smtp.assert_called_once()
+
+    async def test_failed_pool_recovery_runs_on_the_timer_before_retrying_schema(self):
+        available = False
+        recovery = AsyncMock()
+
+        async def prepare(target):
+            if not available:
+                raise PoolTimeout("private connection string")
+
+        self.box.prepare = prepare
+        self.box.recover = recovery
+        self.box.retry_seconds = 0.05
+        item_id, _ = await self.accept()
+        await self.box.start(["test-db"])
+        await asyncio.sleep(0.07)
+        available = True
+
+        async def completed():
+            while self.box._row(item_id)["status"] != "done":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(completed(), timeout=2)
+        recovery.assert_awaited_with("test-db")
+        self.smtp.assert_called_once()
+
+    async def test_online_backup_includes_wal_and_resumes_checkpoint_after_redeploy(self):
+        # Keep the source connection alive so committed changes can remain in WAL.
+        with self.box._connect() as held:
+            held.execute("SELECT count(*) FROM webhook_outbox").fetchone()
+            await self.accept()
+            self.assertGreater(Path(str(self.path) + "-wal").stat().st_size, 0)
+            backup = self.path.parent / "snapshot.sqlite3"
+            summary = backup_queue(self.path, backup)
+        self.assertEqual(summary["counts"], {"pending": 1})
+        self.assertEqual(summary["queue_id"], self.box.queue_id)
+        self.assertEqual(os.stat(backup).st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            backup_queue(self.path, backup)
+        restored = TildaOutbox(backup, shop._deliver_queued_submission)
+        await restored.initialize()
+        self.assertEqual(restored.queue_id, self.box.queue_id)
+        await restored.run_once()
+        self.assertEqual(queue_status(backup)["counts"], {"done": 1})
+        self.smtp.assert_called_once()
+        # Inspecting/processing the backup never changes the original queue.
+        self.assertEqual(queue_status(self.path)["counts"], {"pending": 1})
+
+    async def test_queue_identity_survives_restart_but_new_disk_has_different_identity(self):
+        await self.accept()
+        original = self.box.queue_id
+        restarted = self.new_box()
+        await restarted.initialize()
+        self.assertEqual(restarted.queue_id, original)
+        other = TildaOutbox(self.path.parent / "new-deploy.sqlite3", shop._deliver_queued_submission)
+        await other.initialize()
+        self.assertNotEqual(other.queue_id, original)
+        self.assertEqual(queue_status(other.path)["counts"], {})
+        self.assertEqual(queue_status(self.path)["counts"], {"pending": 1})
+
+    async def test_status_never_creates_missing_queue_or_prints_order_payload(self):
+        missing = self.path.parent / "missing.sqlite3"
+        with self.assertRaises(FileNotFoundError):
+            queue_status(missing)
+        self.assertFalse(missing.exists())
+        await self.accept()
+        summary = json.dumps(queue_status(self.path))
+        self.assertNotIn("buyer@example.test", summary)
+        self.assertNotIn("payload", summary)
+        self.assertNotIn("Тестовый Покупатель", summary)
+        result = await asyncio.to_thread(subprocess.run,
+            [sys.executable, "-m", "scripts.tilda_outbox_admin", "status", "--path", str(self.path)],
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["counts"], {"pending": 1})
+        self.assertNotIn("buyer@example.test", result.stdout)
 
     async def test_a_failed_database_does_not_block_another_project(self):
         async def prepare(target):

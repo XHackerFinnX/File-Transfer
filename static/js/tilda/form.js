@@ -1378,7 +1378,7 @@
         visibleCount.textContent = `${fmtInt(visibleSubmissions.length)} заявок / ${fmtInt(visibleRows.length)} строк товаров`;
         status.textContent = `Показано: ${fmtInt(visibleSubmissions.length)} заявок, ${fmtInt(visibleRows.length)} товарных строк`;
         if (!databaseAvailable) status.textContent += ". БД недоступна: показаны заказы из локальной очереди.";
-        if (pendingCount) status.textContent += ` Ожидают записи в БД: ${fmtInt(pendingCount)}. Повторная попытка каждую минуту.`;
+        if (pendingCount) status.textContent += ` Ожидают записи в БД: ${fmtInt(pendingCount)}. Повторная попытка каждую минуту. До переноса заказов в БД передеплой безопасен только при хранении очереди на постоянном диске.`;
         list.innerHTML = paginatedSubmissions.length
             ? paginatedSubmissions.map(renderSubmission).join("")
             : '<div class="empty-state">Заявок пока нет или ничего не найдено.</div>';

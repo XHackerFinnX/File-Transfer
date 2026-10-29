@@ -48,10 +48,12 @@ class Delivery:
 class TildaOutbox:
     def __init__(self, path: str | Path, deliver: Callable[[Delivery], Awaitable[dict]],
                  prepare: Callable[[str], Awaitable[None]] | None = None,
-                 retry_seconds: float = 60, lease_seconds: float = 120, batch_size: int = 50):
+                 retry_seconds: float = 60, lease_seconds: float = 120, batch_size: int = 50,
+                 recover: Callable[[str], Awaitable[None]] | None = None):
         self.path = Path(path).resolve()
         self.deliver = deliver
         self.prepare = prepare
+        self.recover = recover
         self.retry_seconds = retry_seconds
         self.lease_seconds = lease_seconds
         self.batch_size = batch_size
@@ -59,6 +61,8 @@ class TildaOutbox:
         self.ready: set[str] = set()
         self.blocked_until: dict[str, float] = {}
         self._prepare_locks: dict[str, asyncio.Lock] = {}
+        self._recover_targets: set[str] = set()
+        self.queue_id = ""
         self._wake = asyncio.Event()
         self._stopping = False
         self._worker: asyncio.Task | None = None
@@ -77,6 +81,7 @@ class TildaOutbox:
             conn.close()
 
     def _initialize(self):
+        existed = self.path.is_file()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -96,7 +101,17 @@ class TildaOutbox:
                 );
                 CREATE INDEX IF NOT EXISTS webhook_outbox_pending
                     ON webhook_outbox(status, retry_at);
+                CREATE TABLE IF NOT EXISTS webhook_outbox_meta (
+                    name TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
             """)
+            conn.execute("INSERT OR IGNORE INTO webhook_outbox_meta(name,value) VALUES ('queue_id',?)", (uuid.uuid4().hex,))
+            self.queue_id = conn.execute("SELECT value FROM webhook_outbox_meta WHERE name='queue_id'").fetchone()[0]
+            pending = conn.execute("SELECT count(*) FROM webhook_outbox WHERE status<>'done'").fetchone()[0]
+        self._log(logging.INFO if existed else logging.WARNING,
+                  "Открыта существующая локальная очередь" if existed else
+                  "Создан новый файл очереди: для сохранности при передеплое нужен постоянный диск")
+        LOGGER.info("queue_id=%s pending_count=%s", self.queue_id, pending)
 
     async def initialize(self):
         async with self._initialize_lock:
@@ -174,7 +189,7 @@ class TildaOutbox:
 
     def _log(self, level, step, item=None, target="", error=""):
         data = {"шаг": step, "database_target": target, "retry_seconds": self.retry_seconds,
-                "queue_path": str(self.path)}
+                "queue_path": str(self.path), "queue_id": self.queue_id}
         if item:
             data.update(site=item.submission["site"], submission_id=item.id,
                         order_id=order_number(item.submission["payload"]), attempts=item.attempts)
@@ -186,12 +201,21 @@ class TildaOutbox:
         lock = self._prepare_locks.setdefault(target, asyncio.Lock())
         async with lock:
             if target not in self.ready:
+                if target in self._recover_targets and self.recover:
+                    await self.recover(target)
+                    self._recover_targets.discard(target)
                 if self.prepare:
                     await self.prepare(target)
                 self.ready.add(target)
                 if target in self.blocked_until:
                     self.blocked_until.pop(target, None)
                     self._log(logging.INFO, "Связь с БД восстановлена, переносим локальную очередь", target=target)
+
+    def database_unavailable(self, target):
+        self.ready.discard(target)
+        self._recover_targets.add(target)
+        self.blocked_until[target] = time.time() + self.retry_seconds
+        self._wake.set()
 
     async def _heartbeat(self, item):
         while True:
@@ -230,8 +254,7 @@ class TildaOutbox:
         except Exception as exc:
             # Do not log exception text: connection strings and payloads can contain secrets.
             error = type(exc).__name__
-            self.ready.discard(item.target)
-            self.blocked_until[item.target] = time.time() + self.retry_seconds
+            self.database_unavailable(item.target)
             await asyncio.to_thread(self._retry, item, error)
             self._log(logging.ERROR, "Заказ остаётся локально: запись в БД не завершена, будет повтор", item, item.target, error)
             self._wake.set()
@@ -270,7 +293,7 @@ class TildaOutbox:
             try:
                 await self._ensure_ready(target)
             except Exception as exc:
-                self.blocked_until[target] = time.time() + self.retry_seconds
+                self.database_unavailable(target)
                 self._log(logging.WARNING, "БД недоступна, приложение продолжает принимать заказы локально",
                           target=target, error=type(exc).__name__)
                 return
