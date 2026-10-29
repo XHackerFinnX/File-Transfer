@@ -219,11 +219,15 @@ class MemoryOrders:
         if key in self.keys:
             return self.keys[key], False
         self.keys[key] = record["id"]
-        self.rows[record["id"]] = {**copy.deepcopy(record), "im_number": order_number(record["payload"]), "email_messages": []}
+        self.rows[record["id"]] = {**copy.deepcopy(record), "im_number": record.get("im_number", order_number(record["payload"])), "email_messages": []}
         return record["id"], True
 
     async def read(self, target, site):
         return copy.deepcopy([row for row in self.rows.values() if row["site"] == site])
+
+    async def identity(self, target, submission_id):
+        row = self.rows.get(submission_id)
+        return (row["site"], storage._webhook_key(row["payload"])) if row else None
 
     async def email(self, target, message):
         messages = self.rows[message["submission_id"]]["email_messages"]
@@ -248,6 +252,7 @@ class WebhookTests(unittest.TestCase):
         self.stack.enter_context(patch.object(shop.config, "TILDA_PROJECTS_JSON", json.dumps(projects)))
         for name, replacement in {
             "save_tilda_submission": self.orders.save, "read_tilda_submissions": self.orders.read,
+            "read_tilda_submission_identity": self.orders.identity,
             "save_tilda_email_message": self.orders.email, "update_tilda_submission_im_number": self.orders.update,
         }.items():
             self.stack.enter_context(patch.object(shop, name, replacement))
@@ -467,6 +472,60 @@ class WebhookTests(unittest.TestCase):
                     assert_sender(expected)
             self.assertEqual(server.send_message.call_count, 9)
 
+    def test_manual_restore_preserves_fields_and_does_not_repeat_email_or_cdek(self):
+        record = {"id": "restored-order", "site": "shelwear", "created_at": "2026-10-28T18:00:00+03:00",
+                  "payload_type": "json", "payload": taplink_order(), "im_number": "shelwear_27",
+                  "cookies": {"source": "shop"}, "client": {"host": "192.0.2.1", "port": 10},
+                  "headers": {"content-type": "application/json"}, "webhook_key": "order:27956212"}
+        response = self.client.post("/tilda/shelwear/form/submissions?secret=test-only", json=record)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["restored"])
+        stored = self.orders.rows["restored-order"]
+        for key in record:
+            self.assertEqual(stored[key], record[key])
+        self.smtp.assert_not_called()
+        self.token.assert_not_called()
+        again = self.client.post("/tilda/shelwear/form/submissions?secret=test-only", json=record)
+        self.assertTrue(again.json()["duplicate"])
+        self.assertEqual(len(self.orders.rows), 1)
+
+    def test_manual_restore_requires_auth_and_validates_shop_key_id_and_json(self):
+        record = {"id": "restored", "payload": taplink_order()}
+        self.assertEqual(self.client.post("/tilda/shelwear/form/submissions", json=record).status_code, 403)
+        for change in ({"site": "apexf1"}, {"webhook_key": "order:wrong"}, {"payload": []},
+                       {"created_at": "2026-10-29T12:00:00"}, {"payload": {}}, {"id": "bad\nheader"}):
+            response = self.client.post("/tilda/shelwear/form/submissions?secret=test-only", json={**record, **change})
+            self.assertEqual(response.status_code, 422, response.text)
+        self.client.post("/tilda/shelwear/form/submissions?secret=test-only", json=record)
+        wrong = {**record, "payload": {**taplink_order(), "order_id": "different-order"}}
+        self.assertEqual(self.client.post("/tilda/shelwear/form/submissions?secret=test-only", json=wrong).status_code, 409)
+        self.assertEqual(len(self.orders.rows), 1)
+        self.smtp.assert_not_called()
+
+    def test_google_confirmation_is_required_for_http_success_when_database_is_down(self):
+        from psycopg_pool import PoolTimeout
+        from services.tilda_sheets import SheetsBackupError
+        google = AsyncMock(side_effect=SheetsBackupError("sheets_connection_error"))
+        self.outbox.backup.send = google
+        with patch.object(shop, "save_tilda_submission", side_effect=PoolTimeout("private DSN")):
+            response = self.client.post("/tilda/shelwear/webhook", json=taplink_order())
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["ok"])
+        self.assertTrue(response.json()["queued"])
+        self.assertEqual(response.json()["error"], "external_backup_pending")
+        self.assertEqual(len(self.client.get("/tilda/shelwear/form/submissions?secret=test-only").json()["submissions"]), 1)
+        google.side_effect = None
+        google.return_value = {"status": "saved", "url": "https://docs.google.com/spreadsheets/d/test/edit"}
+        with self.outbox._connect() as conn:
+            conn.execute("UPDATE webhook_sheet_backups SET retry_at=0")
+        again = self.client.post("/tilda/shelwear/webhook", json=taplink_order())
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertTrue(again.json()["duplicate"])
+        self.assertEqual(again.json()["external_backup"]["status"], "saved")
+        summary = self.client.get("/tilda/shelwear/form/submissions?secret=test-only").json()["submissions"][0]
+        self.assertEqual(summary["external_backup"]["status"], "saved")
+        self.smtp.assert_not_called()
+
 
 class MailHeaderTests(unittest.TestCase):
     def test_unicode_sender_name_is_encoded_as_one_mailbox(self):
@@ -553,6 +612,18 @@ class DatabaseTests(unittest.TestCase):
         rows = {row["id"]: row for row in storage._read_tilda_submissions("test-db", "shelwear", None)}
         self.assertEqual(rows["two"]["im_number"], "by-external-id")
         self.assertEqual(storage._read_tilda_submissions("test-db", "another", None)[0]["im_number"], "27")
+
+    def test_manual_database_fields_are_preserved_in_postgresql(self):
+        record = {"id": "restored", "site": "shelwear", "created_at": "2026-10-29T12:00:00+03:00", "payload_type": "json",
+                  "payload": taplink_order(), "im_number": "shelwear_27", "cookies": {"source": "test"},
+                  "client": {"host": "192.0.2.1"}, "headers": {"content-type": "application/json"}}
+        self.assertEqual(storage._save_tilda_submission("test-db", record), ("restored", True))
+        saved, = storage._read_tilda_submissions("test-db", "shelwear", None)
+        for key in ("id", "site", "payload_type", "payload", "im_number", "cookies", "client", "headers"):
+            self.assertEqual(saved[key], record[key])
+        self.assertEqual(datetime.fromisoformat(saved["created_at"]), datetime.fromisoformat(record["created_at"]))
+        import asyncio
+        self.assertEqual(asyncio.run(storage.read_tilda_submission_identity("test-db", "restored")), ("shelwear", "order:27956212"))
 
     def test_local_queue_replays_into_real_postgresql_with_email_history(self):
         import asyncio

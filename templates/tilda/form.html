@@ -23,6 +23,10 @@
                     </p>
                 </div>
                 <div class="hero-actions">
+                    <button class="action-button" type="button" data-add-submission>Добавить запись</button>
+                    {% if backup_url %}
+                    <a class="ghost-button" href="{{ backup_url }}" target="_blank" rel="noopener noreferrer">Резервная таблица</a>
+                    {% endif %}
                     <button
                         class="refresh-button"
                         type="button"

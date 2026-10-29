@@ -9,3 +9,4 @@ psycopg[binary,pool]
 requests
 cryptography>=44,<47
 email-validator>=2.2,<3
+google-auth>=2.40,<3

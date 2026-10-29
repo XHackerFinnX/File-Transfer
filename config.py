@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     POSTGRESQL_RECONNECT_TIMEOUT_SECONDS: float = Field(default=60, gt=0, le=300)
     POSTGRESQL_STATEMENT_TIMEOUT_MS: int = Field(default=10000, ge=100, le=120000)
     TILDA_QUEUE_PATH: str = "var/tilda-outbox.sqlite3"
+    TILDA_SHEETS_SPREADSHEET_ID: str = ""
+    TILDA_SHEETS_TAB: str = "Webhook backup"
+    TILDA_SHEETS_SERVICE_ACCOUNT_JSON: SecretStr | None = None
     
     SMTP_PASSWORD: SecretStr
     SMTP_HOST: str = "smtp.yandex.com"
@@ -55,6 +58,7 @@ class Settings(BaseSettings):
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
+        hide_input_in_errors=True,
         extra='ignore'
     )
     

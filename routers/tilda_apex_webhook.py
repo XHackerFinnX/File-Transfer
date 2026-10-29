@@ -16,7 +16,7 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from config import config
 from db.connections import close_database_pools, open_database_pools, recover_database_pool
@@ -24,6 +24,7 @@ from db.errors import DATABASE_ERRORS, database_error_code
 from db.schemas import create_tilda_submissions_schema
 from db.tilda_orders import (
     read_tilda_submissions,
+    read_tilda_submission_identity,
     save_tilda_email_message,
     save_tilda_submission,
     update_tilda_submission_im_number,
@@ -47,6 +48,7 @@ from services.tilda_payload import (
     webhook_key,
 )
 from services.tilda_outbox import Delivery, LeaseLost, TildaOutbox
+from services.tilda_sheets import GoogleSheetsBackup
 
 router = APIRouter()
 
@@ -143,6 +145,28 @@ class TildaEmailSendRequest(BaseModel):
     delivery_text: str | None = None
     custom_subject: str | None = None
     custom_body: str | None = None
+
+
+class TildaSubmissionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    site: str | None = None
+    created_at: str = Field(default_factory=lambda: _now_utc().isoformat(), max_length=64)
+    payload_type: str = Field(default="json", pattern=r"^(json|form|multipart|raw)$")
+    payload: dict[str, Any]
+    cookies: dict[str, Any] = Field(default_factory=dict)
+    client: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, Any] = Field(default_factory=dict)
+    im_number: str | None = Field(default=None, max_length=512)
+    webhook_key: str | None = Field(default=None, max_length=1024)
+
+    @field_validator("created_at")
+    @classmethod
+    def aware_timestamp(cls, value):
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("created_at requires timezone")
+        return parsed.isoformat()
     
 
 def _project_config_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
@@ -295,6 +319,7 @@ def _submission_summary(submission: dict[str, Any]) -> dict[str, Any]:
         "storage_status": submission.get("storage_status", "database"),
         "queue_attempts": submission.get("queue_attempts", 0),
         "queue_error": submission.get("queue_error", ""),
+        "external_backup": submission.get("external_backup", {"status": "disabled"}),
     }
     if order_payload is not payload:
         summary.update({
@@ -407,7 +432,8 @@ async def _read_submission_state(name):
         key = webhook_key(row.get("payload", {}))
         if key in indexed:
             indexed[key] = {**indexed[key], "storage_status": "queued",
-                            "queue_attempts": row["queue_attempts"], "queue_error": row["queue_error"]}
+                            "queue_attempts": row["queue_attempts"], "queue_error": row["queue_error"],
+                            "external_backup": row["external_backup"]}
         else:
             indexed[key] = row
     result = sorted(indexed.values(), key=lambda row: str(row.get("created_at", "")), reverse=True)
@@ -862,11 +888,29 @@ async def _recover_tilda_database(target):
     await asyncio.to_thread(recover_database_pool, target)
 
 
+def _sheets_backup_client():
+    secret = config.TILDA_SHEETS_SERVICE_ACCOUNT_JSON
+    return GoogleSheetsBackup(config.TILDA_SHEETS_SPREADSHEET_ID,
+                              secret.get_secret_value() if secret else "", config.TILDA_SHEETS_TAB)
+
+
+async def _send_sheets_backup(document):
+    return await asyncio.to_thread(_sheets_backup_client().send, document)
+
+
+def _submission_response(result):
+    if result.get("queued") and _get_tilda_outbox().backup.enabled and result.get("external_backup", {}).get("status") != "saved":
+        return JSONResponse({**result, "ok": False, "error": "external_backup_pending"},
+                            status_code=503, headers={"Retry-After": "60", **PRIVATE_FORM_HEADERS})
+    return JSONResponse(result, headers=PRIVATE_FORM_HEADERS)
+
+
 def _get_tilda_outbox() -> TildaOutbox:
     global _tilda_outbox
     if _tilda_outbox is None:
         _tilda_outbox = TildaOutbox(config.TILDA_QUEUE_PATH, _deliver_queued_submission,
-                                  prepare=create_tilda_submissions_schema, recover=_recover_tilda_database)
+                                  prepare=create_tilda_submissions_schema, recover=_recover_tilda_database,
+                                  backup=_send_sheets_backup if (config.TILDA_SHEETS_SPREADSHEET_ID or config.TILDA_SHEETS_SERVICE_ACCOUNT_JSON) else None)
     return _tilda_outbox
 
 
@@ -960,7 +1004,7 @@ async def tilda_webhook(name: str, request: Request):
         _log_webhook(logging.WARNING, name, trace_id,
                      "Заказ принят и сохранён локально, ожидает записи в БД; повторная попытка через 60 секунд",
                      order_id=order_id, submission_id=submission_id)
-    return JSONResponse(result)
+    return _submission_response(result)
 
 
 async def _deliver_queued_submission(item: Delivery) -> dict[str, Any]:
@@ -979,6 +1023,9 @@ async def _deliver_queued_submission(item: Delivery) -> dict[str, Any]:
     if not item.state["owned"]:
         return {"ok": True, "site": site_name, "submission_id": submission_id,
                 "duplicate": True, "queued": False, "storage": "database"}
+    if item.submission.get("restored"):
+        return {"ok": True, "site": site_name, "submission_id": submission_id,
+                "restored": True, "queued": False, "storage": "database"}
     _log_webhook(logging.INFO, name, trace_id, "Заказ подтверждён в БД",
                  order_id=order_id, submission_id=submission_id)
 
@@ -1076,7 +1123,8 @@ async def tilda_form_page(name: str, request: Request):
     return templates.TemplateResponse(
         request=request,
         name="tilda/form.html",
-        context={"site_name": site_name, "assets_version": FORM_ASSETS_VERSION},
+        context={"site_name": site_name, "assets_version": FORM_ASSETS_VERSION,
+                 "backup_url": _sheets_backup_client().url},
         headers=PRIVATE_FORM_HEADERS,
     )
 
@@ -1101,6 +1149,57 @@ async def tilda_form_submissions(name: str, request: Request):
         },
         headers=PRIVATE_FORM_HEADERS,
     )
+
+
+@router.post("/tilda/{name}/form/submissions")
+async def tilda_create_submission(name: str, request: Request):
+    site = _site_name_or_404(name)
+    _form_secret_or_403(site, request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 2 * MAX_BODY_BYTES:
+            return JSONResponse({"ok": False, "error": "body_too_large"}, status_code=413)
+        body.extend(chunk)
+    try:
+        raw = json.loads(body.decode("utf-8"))
+        json.dumps(raw, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        value = TildaSubmissionCreate.model_validate(raw)
+        if not value.payload:
+            raise ValueError()
+    except (ValueError, TypeError, RecursionError, ValidationError):
+        return JSONResponse({"ok": False, "error": "invalid_record"}, status_code=422, headers=PRIVATE_FORM_HEADERS)
+    if value.site is not None and value.site != site:
+        return JSONResponse({"ok": False, "error": "record_site_mismatch"}, status_code=422)
+    key = webhook_key(value.payload)
+    if value.webhook_key and value.webhook_key != key:
+        return JSONResponse({"ok": False, "error": "record_webhook_key_mismatch"}, status_code=422)
+    record = value.model_dump(exclude_none=True)
+    record.update(id=value.id or f"{_now_utc().strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}",
+                  site=site, restored=True)
+    outbox = _get_tilda_outbox()
+    try:
+        await outbox.initialize()
+        previous = await asyncio.to_thread(outbox._row, record["id"])
+        if previous and (previous["site"] != site or previous["webhook_key"] != key):
+            return JSONResponse({"ok": False, "error": "record_id_conflict"}, status_code=409)
+        target = _database_target_or_404(site)
+        if outbox.blocked_until.get(target, 0) <= time.time():
+            try:
+                identity = await read_tilda_submission_identity(target, record["id"])
+                if identity is not None and identity != (site, key):
+                    return JSONResponse({"ok": False, "error": "record_id_conflict"}, status_code=409)
+            except DATABASE_ERRORS:
+                outbox.database_unavailable(target)
+        item_id, created = await outbox.enqueue(target, record)
+        result = await outbox.process(item_id)
+        if not created:
+            result = {**result, "duplicate": True}
+        return _submission_response(result)
+    except sqlite3.IntegrityError:
+        return JSONResponse({"ok": False, "error": "record_id_conflict"}, status_code=409)
+    except (OSError, sqlite3.Error):
+        return JSONResponse({"ok": False, "error": "local_storage_unavailable"}, status_code=503,
+                            headers={"Retry-After": "60", **PRIVATE_FORM_HEADERS})
 
 
 @router.post("/tilda/{name}/form/email/send")

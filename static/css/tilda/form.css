@@ -941,6 +941,8 @@ td {
     position: relative;
     width: min(680px, 100%);
     overflow: auto;
+    max-height: calc(100vh - 40px);
+    max-height: calc(100dvh - 40px);
     border: 1px solid var(--border-strong);
     border-radius: 24px;
     background: var(--bg);
@@ -1028,6 +1030,7 @@ td {
 }
 
 .custom-email-fields input,
+.record-fields select,
 .custom-email-fields textarea {
     width: 100%;
     border: 1px solid var(--border);

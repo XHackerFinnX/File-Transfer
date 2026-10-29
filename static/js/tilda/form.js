@@ -40,6 +40,7 @@
     };
     const exportCsv = document.querySelector("[data-export-csv]");
     const exportJson = document.querySelector("[data-export-json]");
+    const addSubmission = document.querySelector("[data-add-submission]");
     const resetFiltersButton = document.querySelector("[data-reset-filters]");
     const summaryEls = {
         orders: document.querySelector("[data-total-orders]"),
@@ -995,6 +996,107 @@
         </details>`;
     }
 
+    function openRecordModal() {
+        const modal = document.createElement("div");
+        modal.className = "email-modal-backdrop";
+        const fields = [
+            ["id", "ID записи (пустой — создать автоматически)", "text"],
+            ["site", "Магазин", "text"],
+            ["created_at", "Дата создания с часовым поясом (ISO 8601)", "text"],
+            ["payload_type", "Тип данных", "select"],
+            ["im_number", "Номер ИМ / СДЭК (im_number)", "text"],
+            ["webhook_key", "Ключ заказа (пустой — определить из JSON)", "text"],
+            ["payload", "Данные заказа (payload, JSON)", "json"],
+            ["cookies", "Cookies (JSON)", "json"],
+            ["client", "Данные клиента соединения (client, JSON)", "json"],
+            ["headers", "Заголовки (headers, JSON)", "json"],
+        ];
+        modal.innerHTML = `<div class="email-modal" role="dialog" aria-modal="true" aria-labelledby="record-modal-title">
+            <button class="email-modal-close" type="button" data-record-close aria-label="Закрыть">×</button>
+            <div class="email-modal-hero"><h2 id="record-modal-title">Добавить запись</h2>
+                <p>Восстановление заказа в магазине ${escapeHtml(siteName)}. Письмо клиенту можно отправить отдельно из карточки.</p></div>
+            <form class="email-modal-content" data-record-form>
+                <div class="custom-email-fields record-fields">
+                    <label>Полная запись из Google Таблицы или исходный JSON заказа<textarea data-record-import rows="5" placeholder="Вставьте submission_json или JSON заказа"></textarea></label>
+                    <button class="ghost-button" type="button" data-record-fill>Заполнить поля из JSON</button>
+                    ${fields.map(([key, label, kind]) => `<label>${label}${kind === "json"
+                        ? `<textarea data-record-field="${key}" rows="${key === "payload" ? 8 : 3}" spellcheck="false">{}</textarea>`
+                        : kind === "select" ? `<select data-record-field="${key}"><option>json</option><option>form</option><option>multipart</option><option>raw</option></select>`
+                        : `<input data-record-field="${key}" type="text" ${key === "site" ? "readonly" : ""} ${key === "created_at" ? "required" : ""}>`}</label>`).join("")}
+                </div>
+                <p data-record-status role="status" aria-live="polite"></p>
+                <div class="email-modal-actions"><button class="ghost-button" type="button" data-record-close>Отмена</button>
+                    <button class="action-button" type="submit" data-record-save>Добавить запись</button></div>
+            </form></div>`;
+        document.body.append(modal);
+        const field = (key) => modal.querySelector(`[data-record-field="${key}"]`);
+        const message = modal.querySelector("[data-record-status]");
+        field("site").value = siteName;
+        field("created_at").value = new Date().toISOString();
+        const close = () => { modal.remove(); addSubmission?.focus(); };
+        modal.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") { event.preventDefault(); close(); }
+            if (event.key === "Tab") {
+                const focusable = [...modal.querySelectorAll("button:not(:disabled), input, textarea, select")];
+                const first = focusable[0], last = focusable.at(-1);
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+                if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            }
+        });
+        modal.addEventListener("click", (event) => {
+            if (event.target.closest("[data-record-close]") || event.target === modal) { close(); return; }
+            if (event.target.closest("[data-record-fill]")) {
+                try {
+                    const imported = JSON.parse(modal.querySelector("[data-record-import]").value);
+                    const record = imported.submission || imported;
+                    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("Нужен JSON-объект.");
+                    if (record.site && record.site !== siteName) throw new Error("Эта запись относится к другому магазину.");
+                    if (record.payload) {
+                        for (const [key, , kind] of fields) {
+                            if (key !== "site" && record[key] !== undefined) field(key).value = kind === "json"
+                                ? JSON.stringify(record[key], null, 2) : String(record[key]);
+                        }
+                    } else field("payload").value = JSON.stringify(record, null, 2);
+                    message.textContent = "Поля заполнены. Проверьте данные перед добавлением.";
+                } catch (error) { message.textContent = `Не удалось заполнить поля: ${error.message}`; }
+            }
+        });
+        modal.querySelector("[data-record-form]").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const button = modal.querySelector("[data-record-save]");
+            if (button.disabled) return;
+            try {
+                const record = {};
+                for (const [key, , kind] of fields) {
+                    const text = field(key).value.trim();
+                    if (kind === "json") {
+                        record[key] = JSON.parse(text || "{}");
+                        if (!record[key] || typeof record[key] !== "object" || Array.isArray(record[key])) throw new Error(`${key}: нужен JSON-объект.`);
+                    } else if (text) record[key] = text;
+                }
+                button.disabled = true;
+                button.textContent = "Сохраняем…";
+                const params = new URLSearchParams();
+                if (secret) params.set("secret", secret);
+                const response = await fetch(`/tilda/${encodeURIComponent(siteName)}/form/submissions?${params}`, {
+                    method: "POST", headers: {"Content-Type": "application/json", Accept: "application/json"}, body: JSON.stringify(record),
+                });
+                const data = await response.json();
+                if (data.queued && !data.ok) {
+                    message.textContent = "Запись сохранена локально, подтверждение резервной копии ещё ожидается. Сохраните исходный JSON до восстановления БД.";
+                    return;
+                }
+                if (!response.ok || !data.ok) throw new Error({record_id_conflict: "Этот ID уже занят другой записью.",
+                    record_site_mismatch: "Запись относится к другому магазину.", record_webhook_key_mismatch: "Ключ заказа не соответствует JSON. Очистите поле webhook_key.",
+                    invalid_record: "Проверьте JSON, дату с часовым поясом и обязательные поля."}[data.error] || data.error || `HTTP ${response.status}`);
+                close();
+                await loadSubmissions();
+            } catch (error) { message.textContent = `Не удалось добавить запись: ${error.message}`; }
+            finally { button.disabled = false; button.textContent = "Добавить запись"; }
+        });
+        modal.querySelector("[data-record-import]").focus();
+    }
+
     function openEmailModal(button) {
         const submission = submissions.find(
             (item) => item.id === button.dataset.submissionId,
@@ -1199,6 +1301,8 @@
                                 ${first.socialNetworkLabel ? `<span class="badge social-badge" data-social-icon="${escapeHtml(first.socialNetworkIcon)}">${escapeHtml(first.socialNetworkLabel)}</span>` : ""}
                                 ${renderEmailBadges(submission)}
                                 ${queued ? '<span class="badge warning">Сохранён локально · ожидает БД</span>' : ""}
+                                ${queued && submission.external_backup?.status === "saved" ? '<span class="badge">Копия в Google Таблице</span>' : ""}
+                                ${queued && ["pending", "processing"].includes(submission.external_backup?.status) ? '<span class="badge warning">Копия в Google ожидается</span>' : ""}
                                 ${imNumber ? `<span class="badge ${isCustomImNumber ? "im-custom" : ""}">${escapeHtml(`Номер ИМ ${imNumber}`)}</span>` : ""}
                             </div>
                         </div>
@@ -1379,6 +1483,8 @@
         status.textContent = `Показано: ${fmtInt(visibleSubmissions.length)} заявок, ${fmtInt(visibleRows.length)} товарных строк`;
         if (!databaseAvailable) status.textContent += ". БД недоступна: показаны заказы из локальной очереди.";
         if (pendingCount) status.textContent += ` Ожидают записи в БД: ${fmtInt(pendingCount)}. Повторная попытка каждую минуту. До переноса заказов в БД передеплой безопасен только при хранении очереди на постоянном диске.`;
+        if (pendingCount && submissions.some((item) => item.storage_status === "queued" && item.external_backup?.status === "disabled"))
+            status.textContent += " Google Таблица для резервных копий ещё не настроена.";
         list.innerHTML = paginatedSubmissions.length
             ? paginatedSubmissions.map(renderSubmission).join("")
             : '<div class="empty-state">Заявок пока нет или ничего не найдено.</div>';
@@ -1529,6 +1635,7 @@
         });
     });
     refresh?.addEventListener("click", loadSubmissions);
+    addSubmission?.addEventListener("click", openRecordModal);
     list?.addEventListener("click", (event) => {
         const actionButton = event.target.closest(".action-button");
         if (!actionButton) return;

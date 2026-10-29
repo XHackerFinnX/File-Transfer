@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from services.tilda_payload import order_number, webhook_key
+from services.tilda_backup_outbox import TildaBackupOutbox
 
 LOGGER = logging.getLogger("tilda.outbox")
 LOGGER.setLevel(logging.INFO)
@@ -49,11 +50,13 @@ class TildaOutbox:
     def __init__(self, path: str | Path, deliver: Callable[[Delivery], Awaitable[dict]],
                  prepare: Callable[[str], Awaitable[None]] | None = None,
                  retry_seconds: float = 60, lease_seconds: float = 120, batch_size: int = 50,
-                 recover: Callable[[str], Awaitable[None]] | None = None):
+                 recover: Callable[[str], Awaitable[None]] | None = None,
+                 backup: Callable[[dict], Awaitable[dict]] | None = None):
         self.path = Path(path).resolve()
         self.deliver = deliver
         self.prepare = prepare
         self.recover = recover
+        self.backup = TildaBackupOutbox(self, backup)
         self.retry_seconds = retry_seconds
         self.lease_seconds = lease_seconds
         self.batch_size = batch_size
@@ -112,6 +115,7 @@ class TildaOutbox:
                   "Открыта существующая локальная очередь" if existed else
                   "Создан новый файл очереди: для сохранности при передеплое нужен постоянный диск")
         LOGGER.info("queue_id=%s pending_count=%s", self.queue_id, pending)
+        self.backup.initialize()
 
     async def initialize(self):
         async with self._initialize_lock:
@@ -234,11 +238,16 @@ class TildaOutbox:
         if row["status"] == "done":
             return json.loads(row["result"])
         if self.blocked_until.get(row["target"], 0) > time.time():
-            return self._queued(row)
+            return await self._fallback(row)
         item = await asyncio.to_thread(self._claim, item_id)
         if not item:
             row = await asyncio.to_thread(self._row, item_id)
-            return json.loads(row["result"]) if row["status"] == "done" else self._queued(row)
+            if row["status"] == "done":
+                return json.loads(row["result"])
+            result = self._queued(row)
+            if self.backup.enabled:
+                result["external_backup"] = await asyncio.to_thread(self.backup.status, item_id)
+            return result
         heartbeat = asyncio.create_task(self._heartbeat(item))
         try:
             await self._ensure_ready(item.target)
@@ -250,7 +259,7 @@ class TildaOutbox:
             await asyncio.to_thread(self._retry, item, "shutdown")
             raise
         except LeaseLost:
-            return self._queued(row)
+            return await self._fallback(row)
         except Exception as exc:
             # Do not log exception text: connection strings and payloads can contain secrets.
             error = type(exc).__name__
@@ -258,11 +267,18 @@ class TildaOutbox:
             await asyncio.to_thread(self._retry, item, error)
             self._log(logging.ERROR, "Заказ остаётся локально: запись в БД не завершена, будет повтор", item, item.target, error)
             self._wake.set()
-            return self._queued(row)
+            row = await asyncio.to_thread(self._row, item_id)
+            return await self._fallback(row)
         finally:
             heartbeat.cancel()
             with suppress(asyncio.CancelledError, LeaseLost):
                 await heartbeat
+
+    async def _fallback(self, row):
+        result = self._queued(row)
+        if self.backup.enabled:
+            result["external_backup"] = await self.backup.ensure(row["id"], row.get("last_error") or "database_unavailable")
+        return result
 
     def _pending_rows(self, target=None, site=None):
         with self._connect() as conn:
@@ -279,7 +295,8 @@ class TildaOutbox:
         for row in rows:
             submission, state = json.loads(row["submission"]), json.loads(row["state"])
             submission.update(storage_status="queued", queue_attempts=row["attempts"],
-                              queue_error=row["last_error"], im_number=state.get("im_number", ""))
+                              queue_error=row["last_error"], im_number=state.get("im_number", submission.get("im_number", "")))
+            submission["external_backup"] = await asyncio.to_thread(self.backup.status, row["id"])
             result.append(submission)
         return result
 
@@ -294,6 +311,10 @@ class TildaOutbox:
                 await self._ensure_ready(target)
             except Exception as exc:
                 self.database_unavailable(target)
+                for row in rows:
+                    if row["target"] == target:
+                        await asyncio.to_thread(self.backup.schedule, row["id"], type(exc).__name__)
+                self.backup._wake.set()
                 self._log(logging.WARNING, "БД недоступна, приложение продолжает принимать заказы локально",
                           target=target, error=type(exc).__name__)
                 return
@@ -310,7 +331,9 @@ class TildaOutbox:
 
     def _cleanup(self):
         with self._connect() as conn:
-            conn.execute("DELETE FROM webhook_outbox WHERE status='done' AND completed_at<?", (time.time() - 86400,))
+            conn.execute("""DELETE FROM webhook_outbox WHERE status='done' AND completed_at<? AND NOT EXISTS (
+                SELECT 1 FROM webhook_sheet_backups b WHERE b.id=webhook_outbox.id AND b.status<>'done')""", (time.time() - 86400,))
+            conn.execute("DELETE FROM webhook_sheet_backups WHERE status='done' AND completed_at<?", (time.time() - 7 * 86400,))
 
     async def _loop(self):
         while not self._stopping:
@@ -334,8 +357,10 @@ class TildaOutbox:
         self._stopping = False
         self._log(logging.INFO, "Локальная очередь готова, фоновая доставка включена")
         self._worker = asyncio.create_task(self._loop(), name="tilda-outbox")
+        self.backup.start()
 
     async def stop(self):
+        await self.backup.stop()
         self._stopping = True
         self._wake.set()
         if self._worker:

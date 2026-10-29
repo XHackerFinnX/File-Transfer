@@ -54,7 +54,7 @@ def _save_tilda_submission(
         "cookies": Jsonb(submission.get("cookies", {})),
         "client": Jsonb(submission.get("client", {})),
         "headers": Jsonb(submission.get("headers", {})),
-        "im_number": order_number(submission.get("payload", {})),
+        "im_number": submission.get("im_number", order_number(submission.get("payload", {}))),
         "webhook_key": _webhook_key(submission.get("payload", {})),
     }
     
@@ -78,6 +78,15 @@ async def save_tilda_submission(
     database_name: str, submission: dict[str, Any]
 ) -> tuple[str, bool]:
     return await asyncio.to_thread(_save_tilda_submission, database_name, submission)
+
+
+async def read_tilda_submission_identity(database_name: str, submission_id: str):
+    """Check a supplied restore ID without returning another project's order data."""
+    def lookup():
+        row = _with_database_retry(database_name, lambda conn: conn.execute(
+            f"SELECT site,webhook_key,payload FROM {TILDA_SUBMISSIONS_TABLE} WHERE id=%s", (submission_id,)).fetchone())
+        return (row[0], row[1] or _webhook_key(row[2])) if row else None
+    return await asyncio.to_thread(lookup)
 
 
 def _read_tilda_submissions(

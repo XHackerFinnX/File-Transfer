@@ -37,9 +37,12 @@ def queue_status(path):
             SELECT id,target,site,attempts,completed_at FROM webhook_outbox
             WHERE status='done' ORDER BY completed_at DESC LIMIT 20
         """).fetchall()
+        backup_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='webhook_sheet_backups'").fetchone()
+        backups = {row["status"]: row["n"] for row in conn.execute(
+            "SELECT status,count(*) AS n FROM webhook_sheet_backups GROUP BY status")} if backup_exists else {}
         return {"ok": True, "queue_path": str(path), "queue_id": meta[0] if meta else None,
                 "counts": counts, "pending": [dict(row) for row in rows],
-                "recent_completed": [dict(row) for row in completed]}
+                "recent_completed": [dict(row) for row in completed], "google_backup_counts": backups}
 
 
 def backup_queue(source, output):
