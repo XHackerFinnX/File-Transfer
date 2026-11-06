@@ -919,7 +919,8 @@ async def tilda_storage_lifespan():
     global _tilda_outbox
     targets = {config.TILDA_APEX_DATABASE_TARGET, config.TILDA_REAL_BABY_DATABASE_TARGET,
                config.TILDA_AMA_LIVING_DATABASE_TARGET, config.TILDA_WAYFS_DATABASE_TARGET,
-               config.TILDA_FERALRU_DATABASE_TARGET, config.TILDA_SHELWEAR_DATABASE_TARGET}
+               config.TILDA_FERALRU_DATABASE_TARGET, config.TILDA_SHELWEAR_DATABASE_TARGET,
+               config.TILDA_SHAI_DATABASE_TARGET}
     if config.TILDA_PROJECTS_JSON.strip():
         targets.update(_project_config_maps()[1].values())
     outbox = _get_tilda_outbox()
