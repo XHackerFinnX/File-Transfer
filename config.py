@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     POSTGRESQL_DATABASE_FERALRU: str
     POSTGRESQL_DATABASE_SHELWEAR: str
     POSTGRESQL_DATABASE_SHAI: str
+    POSTGRESQL_DATABASE_ANGEL_AGENT: str
     TILDA_APEX_DATABASE_TARGET: str = "apex"
     TILDA_REAL_BABY_DATABASE_TARGET: str = "real_baby"
     TILDA_AMA_LIVING_DATABASE_TARGET: str = "ama_living"
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     TILDA_FERALRU_DATABASE_TARGET: str = "feralru"
     TILDA_SHELWEAR_DATABASE_TARGET: str = "shelwear"
     TILDA_SHAI_DATABASE_TARGET: str = "shai"
+    TILDA_ANGEL_AGENT_DATABASE_TARGET: str = "angel_agent"
     POSTGRESQL_SSLMODE: str = "disable"
     POSTGRESQL_POOL_TIMEOUT_SECONDS: float = Field(default=3, gt=0, le=30)
     POSTGRESQL_CONNECT_TIMEOUT_SECONDS: int = Field(default=5, ge=1, le=30)
